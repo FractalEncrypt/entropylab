@@ -6,7 +6,7 @@ Release notes for EntropyLab. Each release is a single self-contained
 ## v1.0.0rc3 — unreleased
 
 Third release candidate for 1.0.0. Source commit
-`108becadc6824b08b59a34a721a33d7fcc6540c6`.
+`c1037ba3a20d0c6db1b3265a7385b2944ce827e6`.
 
 ### Behaviour changes from rc2
 
@@ -53,6 +53,11 @@ Third release candidate for 1.0.0. Source commit
 - `SECURITY.md` describes the clipboard copies Edge keeps and recommends fully
   quitting the browser (#827).
 - The messaging stories clarify where computers must stay offline (#823).
+
+### Translations
+
+- Automated catalog updates for DE, ES, FR, and PT cover the strings added
+  since rc2, including the Edge warning and the new copy labels (#836–#840).
 
 ## v1.0.0rc2 — 2026-10-07
 
