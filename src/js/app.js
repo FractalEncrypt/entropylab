@@ -10301,13 +10301,21 @@ function hodlCompareNonces(rValues) {
   // A consolidation PSBT can carry thousands of signatures; an all-pairs
   // scan of them froze the inspector (audit C3-3). Buckets only ever form
   // between records sharing one r value, so group by r first and compare
-  // within groups — same pairs, same verdicts.
+  // within groups — same pairs and verdicts within the comparison budget.
   let byR = new Map();
   for (let record of rValues) {
     let tag = hodlHex.encode(record.r);
     let group = byR.get(tag);
     if (!group) byR.set(tag, (group = []));
     group.push(record);
+  }
+  // Identical attacker-supplied r values collapse into one quadratic bucket.
+  // Bound total candidate pairs before allocating any result pairs; refusing
+  // the inspection must never be mistaken for a completed clean comparison.
+  let comparisons = 0;
+  for (let group of byR.values()) {
+    comparisons += group.length * (group.length - 1) / 2;
+    if (comparisons > 32768) throw new Error("Nonce comparison limit exceeded: too many signatures share the same r value.");
   }
   for (let group of byR.values()) {
     if (group.length < 2) continue;

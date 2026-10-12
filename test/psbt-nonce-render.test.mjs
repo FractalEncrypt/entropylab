@@ -55,3 +55,41 @@ for (const kind of ["psbt", "transaction"]) test(`${kind} nonce report cannot co
   assert.doesNotMatch(repeated, /No repeated ECDSA nonce/);
 });
 
+test("both inspectors clear prior output and report collision-budget refusal without recording a verdict", async () => {
+  // Coverage of the existing error contract: real renderers/comparator with
+  // only input acquisition and unrelated UI/session services substituted.
+  const fields = new Map();
+  const element = (id) => {
+    if (!fields.has(id)) fields.set(id, { value: "", innerHTML: "" });
+    return fields.get(id);
+  };
+  const errors = [], events = [];
+  let kind = "psbt";
+  const { tx, psbt } = fixture(Array(257).fill(1));
+  const handlers = await loadAppFunctions(["hodlRunPsbt", "hodlRunNonce"], { stubs: {
+    document: { getElementById: element },
+    hodlSetPsbtError: (error) => errors.push(error),
+    hodlSetNonceError: (error) => errors.push(error),
+    hodlPsbtResetNonceInspection: () => {},
+    hodlPaintPsbtSession: () => {},
+    hodlLoadPsbtKey: () => {},
+    hodlStationPassphraseBytes: () => null,
+    hodlClearStationPassphrase: () => {},
+    hodlPsbtBytes: () => new Uint8Array(),
+    isPsbtMagic: () => kind === "psbt",
+    hodlParsePsbt: () => psbt,
+    parseRawTx: () => tx,
+    hodlRenderPsbt: app.hodlRenderPsbt,
+    hodlRenderRawTx: app.hodlRenderRawTx,
+    hodlJournalLog: (event) => events.push(event),
+  } });
+  for (kind of ["psbt", "transaction"]) for (const station of ["psbt", "nonce"]) {
+    element(`${station}-out`).innerHTML = "prior result";
+    const recordsBefore = recorded.length;
+    handlers[station === "psbt" ? "hodlRunPsbt" : "hodlRunNonce"]();
+    assert.equal(element(`${station}-out`).innerHTML, "");
+    assert.match(errors.at(-1).raw, /nonce comparison limit/i);
+    assert.equal(events.at(-1), "inspect-error");
+    assert.equal(recorded.length, recordsBefore);
+  }
+});
