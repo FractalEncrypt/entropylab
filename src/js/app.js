@@ -2130,6 +2130,19 @@ function hodlMsigCoreImportCodec() {
     encode: (bytes) => hodlBase58Check.encode(bytes)
   };
 }
+// The deepest address index the result displays on the two branches the Core
+// exports watch (receive/change): the importdescriptors JSON must see past
+// it, exactly as the wallet.dat writer does (wallet-export.js
+// branchRangeFromRows). Reads the same rows that lookup reads.
+function hodlMsigDisplayedAddressEnd(wallet) {
+  let end = null;
+  for (const branch of [0, 1]) {
+    const branchRows = wallet?.addressBranches?.find((entry) => entry?.branch === branch)?.rows;
+    const rows = Array.isArray(branchRows) ? branchRows : branch === 0 ? wallet?.receive : wallet?.change;
+    for (const row of rows ?? []) if (Number.isSafeInteger(row?.index) && row.index >= 0) end = end === null ? row.index : Math.max(end, row.index);
+  }
+  return end;
+}
 function hodlMsigCoreImportDescriptorsJson() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
   if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor) return "";
@@ -2139,22 +2152,44 @@ function hodlMsigCoreImportDescriptorsJson() {
     changeDescriptor: hodlWalletResult.changeDescriptor,
     timestamp: hodlWalletDatBirthday === "now" ? "now" : 0,
     decode: codec.decode,
-    encode: codec.encode
+    encode: codec.encode,
+    rangeEnd: hodlMsigDisplayedAddressEnd(hodlWalletResult)
   });
 }
 function hodlMsigCoreImportDescriptorsMarkup() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
   if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor) return "";
+  // A fresh Core wallet's first getnewaddress is this wallet's receive index
+  // 0. When the displayed window starts deeper, that index is not in the
+  // table — say so rather than pointing at a table that cannot show it.
+  const receiveRows = hodlWalletResult.addressBranches?.find((entry) => entry?.branch === 0)?.rows ?? hodlWalletResult.receive ?? [];
+  const showsIndexZero = (receiveRows ?? []).some((row) => row?.index === 0);
+  const coreNote = showsIndexZero
+    ? hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress must match receive index 0 here.")
+    : hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress is this wallet's receive index 0, which is not in the address window shown above — display from index 0 or verify it on a signer before funding.");
   // The footer the key view uses: the Downloads title, what the export is, the
   // birthday titled the way a field is, then the two saves splitting the row.
   // The ids stay msig’s own, so both views wear the same shape without two
   // elements answering to one label.
   return `<div class="wallet-data-actions msig-data-actions no-print" id="msig-core-importdescriptors">
     <div class="msig-downloads-head"><p class="label">${hodlT("Downloads")}</p><p class="muted label-description">${hodlT("Import the watch-only wallet descriptor into Sparrow or another wallet.")}</p></div>
-    <p class="edge-note is-public" id="msig-core-importdescriptors-help">${hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress must match receive index 0 here.")}</p>
+    <p class="edge-note is-public" id="msig-core-importdescriptors-help">${coreNote}</p>
     <div class="wallet-birthday-field"><p class="label" id="msig-birthday-label">${hodlT("Wallet birthday")}</p><p class="muted label-description wallet-dat-birthday-help" id="msig-birthday-help">${hodlT("Bitcoin Core only auto-scans history back to the birthday. Choose “New keys” only for entropy created right now; recovering older keys with today's birthday can look empty until you run <code>rescanblockchain 0</code> in Bitcoin Core.")}</p><select data-wallet-dat-birthday aria-labelledby="msig-birthday-label" aria-describedby="msig-birthday-help msig-core-importdescriptors-help"><option value="genesis"${hodlWalletDatBirthday === "genesis" ? " selected" : ""}>${hodlT("Recovering keys · scan from genesis")}</option><option value="now"${hodlWalletDatBirthday === "now" ? " selected" : ""}>${hodlT("New keys · created today")}</option></select></div>
     <button class="btn secondary green" id="msig-save-importdescriptors" type="button">${hodlT("Save Core Watch-only JSON")}</button>
     <button class="btn secondary" id="msig-copy-importdescriptors" type="button">${hodlT("Copy Core importdescriptors")}</button>
+    <button class="btn secondary green save-wallet-dat" id="msig-download-wallet-dat" type="button" aria-describedby="msig-core-importdescriptors-help msig-birthday-help">${hodlWalletExport.walletDatButtonLabel(false)}</button>
+  </div>`;
+}
+// The BIP 388 wallet policy export (template + co-signer xpubs), one block
+// shaped like the policy-sheet block. Registration-capable wallets and
+// signers read it; the policy semantics check happens in bip388-policy.js.
+function hodlMsigBip388Markup() {
+  if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
+  if (!hodlWalletResult.receiveDescriptor) return "";
+  return `<div class="wallet-data-actions no-print" id="msig-bip388">
+    <button class="btn secondary green" id="msig-save-bip388" type="button">${hodlT("Save BIP 388 wallet policy")}</button>
+    <button class="btn secondary" id="msig-copy-bip388" type="button">${hodlT("Copy BIP 388 wallet policy")}</button>
+    <p class="muted" id="msig-bip388-help">${hodlT("BIP 388 wallet policy (template and co-signer xpubs) for wallets that register policies. Watch-only; no private keys.")}</p>
   </div>`;
 }
 function hodlCopyMsigCoreImportDescriptors() {
@@ -9774,6 +9809,8 @@ function hodlShowMsig() {
         ${hodlAddressMatchMarkup()}
       `, "account-address-section")}
       ${hodlMsigCoreImportDescriptorsMarkup()}
+      ${hodlMsigPolicySheetMarkup()}
+      ${hodlMsigBip388Markup()}
     </section>`;
   hodlBindAddressVirtualization(hodlAddressBranchVirtualConfigs(branches, false, "msig"));
   hodlWatchMsigGroups();
