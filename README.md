@@ -482,6 +482,15 @@ check. A host clang build is not those bytes. Rebuilds on other machines that
 matched the published hashes, the page and the modules alike, are recorded in
 [docs/Reproductions.md](docs/Reproductions.md), with how to add one.
 
+The boundary is the image. The page and the WASM modules are reproducible
+inside it: same commit, same digest. The image itself is a binary seed —
+pinned Node, pinned Rust, pinned clang on a pinned Ubuntu snapshot. This is
+not a full-source bootstrap. The chain from a few hundred bytes of hex
+assembler up to a modern compiler (hex0, GNU Mes, Guix) ends at a C compiler
+and does not produce the Rust compiler or the WASM target these modules need.
+EntropyLab claims byte-identical builds inside the pinned image, not that the
+compiler was built from an inspectable seed.
+
 The checksum detects accidental corruption. The attestation (Sigstore) says
 this repository's CI built those bytes. OpenTimestamps says the digest
 existed as of a Bitcoin block, independently of GitHub. A newly committed
