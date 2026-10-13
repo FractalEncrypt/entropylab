@@ -1,4 +1,4 @@
-import { sha256 as hodlSha256 } from "./hashes.js";
+import { sha256 as hodlSha256, hash160 as hodlHash160 } from "./hashes.js";
 // secp256k1 operations run in the libsecp256k1 WebAssembly module; the facade
 // is a drop-in for the noble/curves surface this file uses (see
 // src/js/secp256k1.js). App boot waits for the module to be ready.
@@ -12061,6 +12061,67 @@ function hodlSessionOwnership(network) {
   if (hodlPsbtPriv) return indexSingleKey(hodlPsbtPriv, network, (key, compressed) => hodlSecp256k1.getPublicKey(key, compressed));
   return new Map();
 }
+// Raw byte scan: any script that a key can spend from embeds that key (or its
+// hash160 in key-hash constructions) literally, whatever template wraps it.
+function hodlBytesContain(haystack, needle) {
+  if (!needle.length || needle.length > haystack.length) return false;
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    let match = true;
+    for (let j = 0; j < needle.length; j++) if (haystack[i + j] !== needle[j]) { match = false; break; }
+    if (match) return true;
+  }
+  return false;
+}
+// PSBT_OUT_REDEEM_SCRIPT (0x00) / PSBT_OUT_WITNESS_SCRIPT (0x01) carry the
+// construction script of a script-hash output — multisig coordinators attach
+// them to change along with the per-cosigner derivation records. Only a
+// script that hashes to the output script itself is this output's
+// construction; anything else is an unattached claim and proves nothing.
+function hodlScriptMembership(entries, script, pubkey) {
+  let keyHash = hodlHash160(pubkey), member = false;
+  let scan = (construction) => {
+    if (hodlBytesContain(construction, pubkey) || hodlBytesContain(construction, keyHash)) member = true;
+  };
+  for (let entry of hodlFind(entries, 1)) {
+    if (entry.keydata.length || !entry.val.length) continue;
+    try {
+      if (hodlEq(script, p2wshScript(entry.val)) || hodlEq(script, p2shScript(p2wshScript(entry.val)))) scan(entry.val);
+    } catch {
+    }
+  }
+  for (let entry of hodlFind(entries, 0)) {
+    if (entry.keydata.length || !entry.val.length) continue;
+    try {
+      if (hodlEq(script, p2shScript(entry.val))) scan(entry.val);
+    } catch {
+    }
+  }
+  return member;
+}
+// A record is a lie only when it is provably false: the output pays one key
+// and it is not the verified one (destination-swap). The P2PKH/P2WPKH/P2TR
+// scriptPubKeys are the whole template, so their shape alone proves the
+// construction; P2SH is ambiguous — it may wrap a multisig — until its
+// redeem script reveals a single-key program. Reaching this helper at all
+// means the output is not one of the verified key's own templates (that was
+// checked first), so a matched shape is a matched *other* key.
+function hodlForeignSingleKeyScript(entries, script) {
+  if (script.length === 25 && script[0] === 0x76 && script[1] === 0xa9 && script[2] === 0x14 && script[23] === 0x88 && script[24] === 0xac) return true;
+  if (script.length === 22 && script[0] === 0x00 && script[1] === 0x14) return true;
+  if (script.length === 34 && script[0] === 0x51 && script[1] === 0x20) return true;
+  if (script.length === 23 && script[0] === 0xa9 && script[1] === 0x14 && script[22] === 0x87) {
+    for (let entry of hodlFind(entries, 0)) {
+      if (entry.keydata.length || !entry.val.length) continue;
+      let linked = false;
+      try {
+        linked = hodlEq(script, p2shScript(entry.val));
+      } catch {
+      }
+      if (linked && entry.val.length === 22 && entry.val[0] === 0x00 && entry.val[1] === 0x14) return true;
+    }
+  }
+  return false;
+}
 function hodlDeclaredOutput(entries, script, network) {
   if (!hodlPsbtHd || !entries || !script) return null;
   let fingerprint = hodlFingerprintHex(hodlPsbtHd.fingerprint), declared = null;
@@ -12091,9 +12152,21 @@ function hodlDeclaredOutput(entries, script, network) {
         } catch {
         }
       }
-      if (!encoded) return { state: "lie", path: label };
-      let chain = path.length >= 2 ? path[path.length - 2] : null;
-      declared = { state: "ours", path: label, role: chain === 1 ? "change" : chain === 0 ? "receive" : "key" };
+      if (encoded) {
+        let chain = path.length >= 2 ? path[path.length - 2] : null;
+        declared = { state: "ours", path: label, role: chain === 1 ? "change" : chain === 0 ? "receive" : "key" };
+        continue;
+      }
+      // A script-hash output (multisig change; audit B8) pays a script, not a
+      // key, so the verified key can only be looked up inside it.
+      if (hodlScriptMembership(entries, script, node.publicKey)) {
+        declared = { state: "ours", path: label, role: "script" };
+        continue;
+      }
+      if (hodlForeignSingleKeyScript(entries, script)) return { state: "lie", path: label };
+      // Otherwise the claim is unverifiable from this map — which is not a
+      // lie. A later record may still prove ownership.
+      if (!declared || declared.state !== "ours") declared = { state: "unknown", path: label };
     } catch {
       return { state: "lie", path: label };
     }
@@ -12135,8 +12208,11 @@ function hodlRenderOutputHtml(output, index, network, map, entries) {
     extra = "<br>" + hodlEscapeHtml(label + " \xB7 " + scan.path);
     className = scan.role === "change" || scan.role === "key" ? "psbt-ok" : "psbt-kv";
   } else if (declared && declared.state === "ours") {
-    extra = "<br>" + hodlEscapeHtml((declared.role === "change" ? "change" : "this wallet") + " \xB7 " + declared.path + " (verified)");
+    let label = declared.role === "change" ? "change" : declared.role === "script" ? "key participates in this output's script" : "this wallet";
+    extra = "<br>" + hodlEscapeHtml(label + " \xB7 " + declared.path + " (verified)");
     className = "psbt-ok";
+  } else if (declared && declared.state === "unknown") {
+    extra = "<br><span class='muted'>claims " + hodlEscapeHtml(declared.path) + " \xB7 cannot be verified for this script type</span>";
   } else if (scan.state === "external") {
     extra = "<br>not in this wallet (accounts 0\u20132, 50 receive + 50 change, four script types)";
   } else if (scan.state === "no-session") {
