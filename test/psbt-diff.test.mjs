@@ -198,6 +198,45 @@ test("sighash type is classified as a signing change", () => {
   assert.equal(result.changes[0].name, "PSBT_IN_SIGHASH_TYPE");
 });
 
+test("MuSig2 (BIP-327) input pairs are named and classified as signing changes (audit B3)", () => {
+  // Real round-trips through the decoder on both sides, so the pair names
+  // come from psbtInspectDoc. Shapes follow BIP-327: keydata is the
+  // participant pubkey (33 bytes) plus the aggregate pubkey (33 bytes); the
+  // value is a participant-pubkey list, a 66-byte public nonce, or a
+  // 32-byte partial signature. A swapped nonce is the key-extraction class.
+  const participant = "02" + "11".repeat(32);
+  const aggregate = "03" + "22".repeat(32);
+  const otherParticipant = "02" + "44".repeat(32);
+  const cases = [
+    { name: "PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS", key: "1a" + aggregate, before: "01" + participant, after: "02" + participant + otherParticipant },
+    { name: "PSBT_IN_MUSIG2_PUB_NONCE", key: "1b" + participant + aggregate, before: "02" + "55".repeat(32) + "02" + "66".repeat(32), after: "02" + "77".repeat(32) + "02" + "88".repeat(32) },
+    { name: "PSBT_IN_MUSIG2_PARTIAL_SIG", key: "1c" + participant + aggregate, before: "99".repeat(32), after: "aa".repeat(32) },
+  ];
+  for (const { name, key, before: valueBefore, after: valueAfter } of cases) {
+    const withPair = (value) => {
+      const draft = fixtureDoc();
+      draft.inputs[0].push({ key, value });
+      return rebuild(draft);
+    };
+    const before = withPair(valueBefore);
+    const after = withPair(valueAfter);
+    const inspected = after.inputs[0].find((pair) => pair.key === key);
+    assert.equal(inspected.name, name, `${name} must not surface as PSBT_IN_UNKNOWN`);
+    const result = comparePsbtDocs(before, after);
+    assert.equal(result.equal, false);
+    assert.equal(result.transactionChanged, false);
+    assert.equal(result.metadataChanged, false, `${name} change must not read as metadata`);
+    assert.equal(result.signingChanged, true, `${name} change must read as signing`);
+    assert.deepEqual(
+      result.changes.map(({ kind, category, name: changedName }) => ({ kind, category, name: changedName })),
+      [{ kind: "changed", category: "signing", name }],
+    );
+    const html = psbtDiffHtml(result, before, after, "mainnet");
+    assert.match(html, /Signing state changed/);
+    assert.doesNotMatch(html, /Signing state unchanged/);
+  }
+});
+
 test("metadata changes are distinguished from signing changes", () => {
   const after = doc({ globals: [doc().globals[0], { key: "01", value: "changed", name: "PSBT_GLOBAL_XPUB" }] });
   const result = comparePsbtDocs(doc(), after);
