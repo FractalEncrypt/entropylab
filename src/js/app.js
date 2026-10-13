@@ -9992,9 +9992,20 @@ function hodlPsbtReferenceVerdict(psbt) {
       problems = [];
     if (doc.rustBitcoinError) problems.push("rust-bitcoin: " + doc.rustBitcoinError);
     for (let problem of doc.problems || []) if (problem.severity === "error") problems.push(problem.scope + ": " + problem.message);
-    // The document's error count is taken before its list truncation.
-    let unlisted = Math.max(0, (doc.errorCount ?? problems.length) - problems.length);
-    verdict = problems.length ? { state: "problem", problems, unlisted } : { state: "complete", problems: [], unlisted: 0 };
+    // The document's error count is taken before its list truncation: a
+    // crafted file can pad the capped (64-entry) problem list with earlier
+    // warnings so every error drops out of view, and the cross-check must
+    // still fail (audit C2-C).
+    let errorTotal = doc.errorCount ?? problems.length,
+      unlisted = Math.max(0, errorTotal - problems.length);
+    // No listed error to show: name what the cap hid, else the banner's
+    // entry list would be empty (the row is counted, not repeated, so it is
+    // not added to `unlisted` a second time).
+    if (unlisted && !problems.length) {
+      problems.push("rust-bitcoin: " + unlisted + " error-severity problem(s) hidden by the 64-problem display cap");
+      unlisted = 0;
+    }
+    verdict = errorTotal || problems.length ? { state: "problem", problems, unlisted } : { state: "complete", problems: [], unlisted: 0 };
   } catch (exception) {
     let message = exception instanceof Error ? exception.message : String(exception);
     verdict = /not initialized/.test(message)
