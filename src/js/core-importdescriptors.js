@@ -129,10 +129,18 @@ function resolveTimestamp(timestamp) {
 // 1000 is still watched (audit B7b). A caller that cannot say which indexes
 // it displays gets Core's default lookahead. Anything the descriptor cannot
 // climb to is refused outright, never silently clipped.
+//
+// Core's import bound: ParseDescriptorRange refuses a range whose span
+// reaches 1,000,000 ("Range is too large"). With the start pinned at 0 that
+// bound bites at a displayed end of 999,000 — deeper JSON would fail loudly
+// on the online node, so refuse at export instead (#861 review).
 function resolveRangeEnd(displayedEnd) {
   if (displayedEnd === undefined || displayedEnd === null) return CORE_IMPORT_RANGE_END;
   if (!Number.isSafeInteger(displayedEnd) || displayedEnd < 0 || displayedEnd > CORE_IMPORT_MAX_INDEX) {
     throw new Error("Address range end must be a whole number from 0 to 2,147,483,647.");
+  }
+  if (displayedEnd + CORE_IMPORT_RANGE_END >= 1000000) {
+    throw new Error("Bitcoin Core importdescriptors refuses a range span of 1,000,000 or more, so an address window ending at 999,000 or deeper cannot be exported. Show a shallower window and export again.");
   }
   return Math.min(displayedEnd + CORE_IMPORT_RANGE_END, CORE_IMPORT_MAX_INDEX);
 }

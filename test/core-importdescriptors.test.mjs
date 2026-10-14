@@ -79,13 +79,11 @@ test("the import range runs past the displayed address window like the wallet.da
   // A window ending at 0 is exactly Core's default range.
   const [zero] = parse(buildImportDescriptorsJson({ receiveDescriptor: receive, rangeEnd: 0 }));
   assert.deepEqual(zero.range, [0, CORE_IMPORT_RANGE_END]);
-  // The range never runs past the last unhardened BIP32 child index.
-  const [brim] = parse(buildImportDescriptorsJson({ receiveDescriptor: receive, rangeEnd: 2147483647 }));
-  assert.deepEqual(brim.range, [0, 2147483647]);
-  const [oneShy] = parse(buildImportDescriptorsJson({ receiveDescriptor: receive, rangeEnd: 2147482647 }));
-  assert.deepEqual(oneShy.range, [0, 2147483647]);
-  const [noClamp] = parse(buildImportDescriptorsJson({ receiveDescriptor: receive, rangeEnd: 2147482646 }));
-  assert.deepEqual(noClamp.range, [0, 2147483646]);
+  // The deepest windows (up to the last unhardened BIP32 child index) are
+  // refused outright: Core's own import bound — a range span under
+  // 1,000,000 — is tighter than the index bound, so [0, 2^31-1] would be
+  // JSON the online node rejects. The Core-bound test below pins the exact
+  // refusal boundary (999,000) against a port of ParseDescriptorRange.
 });
 
 test("a displayed window the export cannot cover is refused (audit B7b)", () => {
@@ -95,6 +93,32 @@ test("a displayed window the export cannot cover is refused (audit B7b)", () => 
     assert.throws(
       () => buildImportDescriptorsJson({ receiveDescriptor: receive, changeDescriptor: change, rangeEnd }),
       /a whole number from 0 to 2,147,483,647/,
+    );
+  }
+});
+
+// Bitcoin Core's own import bound (ParseDescriptorRange, src/rpc/util.cpp,
+// applied by importdescriptors): a range whose span reaches 1,000,000 is
+// refused at import with "Range is too large". The range start is pinned at
+// 0, so a displayed end of 999,000 would export [0, 1000000] — JSON Core
+// rejects on the online node. Refuse those ends at build time (#861 review).
+// coreRangeError is a port of Core's check, the independent oracle.
+const coreRangeError = ([low, high]) =>
+  low < 0 ? "Range should be greater or equal than 0"
+  : Math.floor(high / 2 ** 31) !== 0 ? "End of range is too high"
+  : low > high ? "Range specified as [begin,end] must not have begin after end"
+  : high - low >= 1000000 ? "Range is too large"
+  : null;
+test("a window Core's importdescriptors would refuse at import is refused at export (audit B7b)", () => {
+  for (const rangeEnd of [5002, 998998, 998999]) {
+    const [entry] = parse(buildImportDescriptorsJson({ receiveDescriptor: receive, rangeEnd }));
+    assert.equal(coreRangeError(entry.range), null, `shown end ${rangeEnd} produces a range Core accepts`);
+  }
+  for (const rangeEnd of [999000, 5000000, 2147482647, 2147483647]) {
+    assert.throws(
+      () => buildImportDescriptorsJson({ receiveDescriptor: receive, changeDescriptor: change, rangeEnd }),
+      /importdescriptors refuses a range span/,
+      `shown end ${rangeEnd} must be refused, not exported as JSON Core rejects`,
     );
   }
 });
