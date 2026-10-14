@@ -15253,6 +15253,10 @@ function hodlInitJournalToolTabs() {
     await hodlKeyManagerImportFile(keyManagerFile.files?.[0]);
     keyManagerFile.value = "";
   };
+  // The snapshot must follow the box on every change, not only when the tab
+  // opens: otherwise the conceal sweep's untick (or a manual one) leaves the
+  // private recovery texts rendered (security.md B4).
+  document.getElementById("journal-state-private")?.addEventListener("change", () => hodlJournalRefreshSessionState());
   let stateDownload = document.getElementById("journal-state-download");
   if (stateDownload) stateDownload.onclick = async () => {
     hodlJournalRefreshSessionState();
