@@ -19,6 +19,12 @@ const SIGNING_FIELDS = new Set([
   "PSBT_IN_TAP_KEY_SIG",
   "PSBT_IN_TAP_SCRIPT_SIG",
   "PSBT_IN_SIGHASH_TYPE",
+  // BIP-327 MuSig2 signing-session material (audit B3): nonce substitution
+  // is the key-extraction class, a swapped participant key re-targets the
+  // aggregate key, and a partial signature is a signature share.
+  "PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS",
+  "PSBT_IN_MUSIG2_PUB_NONCE",
+  "PSBT_IN_MUSIG2_PARTIAL_SIG",
 ]);
 
 // The unsigned transaction rides in the global map as key 00
