@@ -4425,7 +4425,7 @@ function hodlStoredPassphraseBytes(value) {
   return value ? new TextEncoder().encode(String(value)) : "";
 }
 function hodlPassphraseText(value) {
-  return ArrayBuffer.isView(value) ? new TextDecoder().decode(value) : String(value ?? "");
+  return ArrayBuffer.isView(value) ? hodlTypedText(value) : String(value ?? "");
 }
 function hodlStorePassphrase(state) {
   if (!state?.fields) return;
