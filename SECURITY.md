@@ -73,10 +73,13 @@ material. Its security posture rests on the following model:
    hosts without the image. [docs/Reproductions.md](docs/Reproductions.md)
    records each rebuild by commit. Build-host paths are remapped out of the
    binary. The image is the boundary: the page and the modules are
-   reproducible inside it, and the image itself is a binary seed. This is
-   not a full-source bootstrap. The hex0-to-GCC chain ends at a C compiler
-   and does not produce the Rust compiler or the WASM target these modules
-   need.
+   reproducible inside it. Its Dockerfile pins the base image, the package
+   snapshot and the tool versions, but the compilers in it are prebuilt
+   binaries, trusted as a seed, and the built image is not itself
+   bit-for-bit reproducible. This is not a full-source bootstrap:
+   EntropyLab's Rust, clang and WASM toolchain has not been built from
+   source, and no one has checked that such a build would give the same
+   modules.
   iOS/macOS Lockdown Mode disables WebAssembly. Exclude the site in Safari
   or use a host that can compile WASM. There is no JavaScript secp256k1
   fallback; a host that cannot run the module is treated as broken.
