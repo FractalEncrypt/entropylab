@@ -10450,15 +10450,19 @@ function hodlPsbtRecordNonceInspection(kind, rValues, sourceTag, verdict, checke
   }
 }
 
+// Both private-key resolvers return { key, owned } or null. `owned: true`
+// marks the canonical WIF/hex session buffer: the session owns it and
+// hodlPsbtWipeMem clears it, so the caller must never zero it. `owned: false`
+// marks a fresh HDKey getter copy, which the caller must zero when done.
 function hodlPrivForPub(pubkey) {
   if (hodlPsbtPriv) {
     let compressed = hodlSecp256k1.getPublicKey(hodlPsbtPriv, true), uncompressed = hodlSecp256k1.getPublicKey(hodlPsbtPriv, false);
-    if (hodlEq(compressed, pubkey) || hodlEq(uncompressed, pubkey)) return hodlPsbtPriv;
+    if (hodlEq(compressed, pubkey) || hodlEq(uncompressed, pubkey)) return { key: hodlPsbtPriv, owned: true };
   }
   if (hodlPsbtHd) {
     try {
-      let rootPubkey = hodlPsbtHd.publicKey;
-      if (rootPubkey && hodlEq(rootPubkey, pubkey)) return hodlPsbtHd.privateKey;
+      let rootPubkey = hodlPsbtHd.publicKey, key = rootPubkey && hodlEq(rootPubkey, pubkey) ? hodlPsbtHd.privateKey : null;
+      if (key) return { key, owned: false };
     } catch {
     }
   }
@@ -10477,9 +10481,9 @@ function hodlPrivFromPath(entries, pubkey) {
         node = next;
       }
       if (node.publicKey && hodlEq(node.publicKey, pubkey)) {
-        let privateKey = node.privateKey; // a copy; the caller signs with it
+        let privateKey = node.privateKey; // a getter copy; the caller signs with it and zeroes it
         if (node !== hodlPsbtHd) node.wipePrivateData();
-        return privateKey;
+        if (privateKey) return { key: privateKey, owned: false };
       }
       if (node !== hodlPsbtHd) node.wipePrivateData();
     } catch {
@@ -12325,88 +12329,97 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
           format: "der",
           lowS: !1
         }) : null,
-        privateKey = hodlPrivForPub(signature.pubkey) || hodlPrivFromPath(entries, signature.pubkey),
-        masterFingerprint = hodlPsbtMasterFingerprint(entries, signature.pubkey, Boolean(privateKey && hodlPsbtHd)),
         message = hodlT("Need the matching key in this session to check RFC 6979 and low-r grind."),
         className = "muted";
       let suffixForPolicy = signature.raw.length >= 2 ? signature.sighash : null,
         sighashProblems = hodlSighashProblems(declaredSighash, suffixForPolicy);
       if (sighashProblems.length) policyProblems++;
-      if (!parts && !looseR) {
-        uninspected += 1;
-        policyIncomplete += 1;
-        message = hodlT("Signature is not DER and its nonce cannot be inspected.");
-        className = "psbt-warn";
-        if (sighashProblems.length) {
-          message = hodlT("Signature policy problem: {problems}", { problems: sighashProblems.join(" ") });
-          className = "psbt-bad";
-        }
-      } else {
-        rValues.push({
-          input: index,
-          r: looseR,
-          hex: hodlHex.encode(looseR),
-          pubkey: hodlCompressedPubkey(signature.pubkey),
-          masterFingerprint,
-          sighash,
-          valid: parts ? signatureValid : null
-        });
-        if (sighashProblems.length) {
-          // An unsafe or conflicting sighash policy blocks every other check.
-          message = hodlT("Signature policy problem: {problems}", { problems: sighashProblems.join(" ") });
-          className = "psbt-bad";
-        } else if (overBudget) {
-          message = hodlT("Signature not inspected: this file carries more SIGHASH_ALL signatures than the per-file check budget covers.");
+      // Resolve the matching session key only for a row with a readable r.
+      // Whatever else happens on the row — compare, refusal, or the budget
+      // exit — a getter copy held in `privateKey` is zeroed in the finally
+      // below; the canonical session buffer (owned) is left to
+      // hodlPsbtWipeMem.
+      let privateKey = null;
+      try {
+        if (!parts && !looseR) {
+          uninspected += 1;
+          policyIncomplete += 1;
+          message = hodlT("Signature is not DER and its nonce cannot be inspected.");
           className = "psbt-warn";
-          unsupportedNonceChecks += 1;
-        } else if (!parts) {
-          message = hodlT("Signature is not strict DER. Its r value is still compared for nonce reuse.");
-          className = "psbt-warn"
-        } else if (signatureValid === !1) {
-          message = hodlT("This signature does not verify against the reconstructed input digest.");
-          className = "psbt-warn";
-        } else if (transcript) {
-          let opening = transcript.openings.length === 1 ? transcript.openings[0] : transcript.openings[ecdsaIndex];
-          if (!opening) {
-            message = hodlT("No Jade opening R was provided for this signature.");
-            className = "psbt-warn";
-          } else try {
-            if (hodlAntiExfilCommitOk(parts.r, opening, transcript.host)) {
-              message = hodlT("Matches Jade anti-exfil (sign-to-contract). Host entropy mixed into the nonce. Not a leak.");
-              className = "psbt-ok";
-            } else {
-              message = hodlT("Does not match this Jade anti-exfil transcript. Signature r is not R + H(R||ρ)G.");
-              className = "psbt-warn";
-              if (privateKey && sighash) try {
-                let cmp = hodlRfc6979Compare(sighash, privateKey, parts.r);
-                if (cmp.ok) {
-                  message += " " + cmp.message;
-                  className = cmp.className;
-                } else message += " " + hodlT("Also does not match RFC 6979 or low-r grind.");
-              } catch (exception) {
-                message += " " + (exception.message || String(exception));
-              }
-            }
-          } catch (exception) {
-            message = hodlT("Could not verify Jade anti-exfil: {error}", { error: exception.message || String(exception) });
-            className = "psbt-warn";
+          if (sighashProblems.length) {
+            message = hodlT("Signature policy problem: {problems}", { problems: sighashProblems.join(" ") });
+            className = "psbt-bad";
           }
-        } else if (privateKey && sighash) try {
-          let cmp = hodlRfc6979Compare(sighash, privateKey, parts.r);
-          message = cmp.message;
-          className = cmp.className;
-        } catch (exception) {
-          message = hodlT("Could not recompute this signature: {error}", { error: exception.message || String(exception) });
-          className = "psbt-warn";
-          unsupportedNonceChecks += 1;
+        } else {
+          privateKey = hodlPrivForPub(signature.pubkey) || hodlPrivFromPath(entries, signature.pubkey);
+          rValues.push({
+            input: index,
+            r: looseR,
+            hex: hodlHex.encode(looseR),
+            pubkey: hodlCompressedPubkey(signature.pubkey),
+            masterFingerprint: hodlPsbtMasterFingerprint(entries, signature.pubkey, Boolean(privateKey && hodlPsbtHd)),
+            sighash,
+            valid: parts ? signatureValid : null
+          });
+          if (sighashProblems.length) {
+            // An unsafe or conflicting sighash policy blocks every other check.
+            message = hodlT("Signature policy problem: {problems}", { problems: sighashProblems.join(" ") });
+            className = "psbt-bad";
+          } else if (overBudget) {
+            message = hodlT("Signature not inspected: this file carries more SIGHASH_ALL signatures than the per-file check budget covers.");
+            className = "psbt-warn";
+            unsupportedNonceChecks += 1;
+          } else if (!parts) {
+            message = hodlT("Signature is not strict DER. Its r value is still compared for nonce reuse.");
+            className = "psbt-warn"
+          } else if (signatureValid === !1) {
+            message = hodlT("This signature does not verify against the reconstructed input digest.");
+            className = "psbt-warn";
+          } else if (transcript) {
+            let opening = transcript.openings.length === 1 ? transcript.openings[0] : transcript.openings[ecdsaIndex];
+            if (!opening) {
+              message = hodlT("No Jade opening R was provided for this signature.");
+              className = "psbt-warn";
+            } else try {
+              if (hodlAntiExfilCommitOk(parts.r, opening, transcript.host)) {
+                message = hodlT("Matches Jade anti-exfil (sign-to-contract). Host entropy mixed into the nonce. Not a leak.");
+                className = "psbt-ok";
+              } else {
+                message = hodlT("Does not match this Jade anti-exfil transcript. Signature r is not R + H(R||ρ)G.");
+                className = "psbt-warn";
+                if (privateKey && sighash) try {
+                  let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+                  if (cmp.ok) {
+                    message += " " + cmp.message;
+                    className = cmp.className;
+                  } else message += " " + hodlT("Also does not match RFC 6979 or low-r grind.");
+                } catch (exception) {
+                  message += " " + (exception.message || String(exception));
+                }
+              }
+            } catch (exception) {
+              message = hodlT("Could not verify Jade anti-exfil: {error}", { error: exception.message || String(exception) });
+              className = "psbt-warn";
+            }
+          } else if (privateKey && sighash) try {
+            let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+            message = cmp.message;
+            className = cmp.className;
+          } catch (exception) {
+            message = hodlT("Could not recompute this signature: {error}", { error: exception.message || String(exception) });
+            className = "psbt-warn";
+            unsupportedNonceChecks += 1;
+          }
+          else if (privateKey && !scriptCode) {
+            message = hodlT("Matching key found, but this input script is not yet supported for RFC 6979 comparison.");
+            className = "psbt-warn";
+            unsupportedNonceChecks += 1;
+          } else if (!privateKey || !sighash) {
+            unsupportedNonceChecks += 1;
+          }
         }
-        else if (privateKey && !scriptCode) {
-          message = hodlT("Matching key found, but this input script is not yet supported for RFC 6979 comparison.");
-          className = "psbt-warn";
-          unsupportedNonceChecks += 1;
-        } else if (!privateKey || !sighash) {
-          unsupportedNonceChecks += 1;
-        }
+      } finally {
+        if (privateKey && !privateKey.owned) privateKey.key.fill(0);
       }
       ecdsaIndex += 1;
       rows.push({ input: index, message, className, pubkey: hodlHex.encode(signature.pubkey) });
