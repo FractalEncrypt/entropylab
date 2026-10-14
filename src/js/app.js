@@ -524,7 +524,9 @@ function hodlResultSecretBytes(result) {
 // (#546 B2): the BIP39 passphrase and a Casascius mini key, which nothing can
 // rebuild from the keys they make. The text is built only to show or export
 // it, exactly as typed: a leading U+FEFF is part of a passphrase (BIP39 hashes
-// it), not a byte-order mark to drop.
+// it), not a byte-order mark to drop — this decoder and the salt decode in
+// bip39.js both keep it, so the bytes, their text and external NFKD
+// implementers all derive the same wallet.
 function hodlTypedText(bytes) {
   return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
 }

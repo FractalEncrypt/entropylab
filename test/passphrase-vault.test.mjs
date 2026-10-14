@@ -236,3 +236,18 @@ test("the seed from passphrase bytes equals the seed from its text", () => {
   assert.equal(hex(mnemonicToSeedSync(MNEMONIC, utf8(composed))), expected);
   assert.equal(hex(mnemonicToSeedSync(MNEMONIC, utf8(decomposed))), expected);
 });
+
+// A leading U+FEFF is passphrase content, not a byte-order mark: NFKD keeps
+// it, so the salt built from the passphrase's UTF-8 bytes must be the salt
+// built from its text, and both must match the reference implementation,
+// which hashes the BOM (audit C2-E). The byte path decodes the stored bytes
+// once to normalize them; a default TextDecoder would strip the leading
+// EF BB BF and derive a different wallet than the text path (and than
+// Electrum and other NFKD keepers) for the same typed passphrase.
+test("a leading U+FEFF in a passphrase is hashed, by bytes and by text alike", () => {
+  const passphrase = "\uFEFFcorrect horse battery staple";
+  const expected = hex(scureSeed(MNEMONIC, passphrase));
+  assert.equal(hex(mnemonicToSeedSync(MNEMONIC, passphrase)), expected, "the text path keeps U+FEFF");
+  assert.equal(hex(mnemonicToSeedSync(MNEMONIC, utf8(passphrase))), expected, "the byte path keeps U+FEFF");
+  assert.notEqual(expected, hex(scureSeed(MNEMONIC, passphrase.slice(1))), "U+FEFF is hashed, not silently dropped");
+});
