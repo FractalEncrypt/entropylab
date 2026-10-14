@@ -12157,16 +12157,19 @@ function hodlDeclaredOutput(entries, script, network) {
         declared = { state: "ours", path: label, role: chain === 1 ? "change" : chain === 0 ? "receive" : "key" };
         continue;
       }
-      // A script-hash output (multisig change; audit B8) pays a script, not a
-      // key, so the verified key can only be looked up inside it.
-      if (hodlScriptMembership(entries, script, node.publicKey)) {
-        declared = { state: "ours", path: label, role: "script" };
-        continue;
-      }
+      // A script-hash output (multisig change; audit B8) pays a script, not
+      // a key. Finding the key in its script is membership, not control —
+      // <user> OP_DROP <attacker> OP_CHECKSIG contains the key and the
+      // attacker spends alone (#851 review) — so membership only rides the
+      // unverifiable verdict as a muted note; it never verifies.
+      let member = hodlScriptMembership(entries, script, node.publicKey);
       if (hodlForeignSingleKeyScript(entries, script)) return { state: "lie", path: label };
       // Otherwise the claim is unverifiable from this map — which is not a
       // lie. A later record may still prove ownership.
-      if (!declared || declared.state !== "ours") declared = { state: "unknown", path: label };
+      if (!declared || declared.state !== "ours") {
+        let noted = member || Boolean(declared && declared.state === "unknown" && declared.member);
+        declared = { state: "unknown", path: label, member: noted };
+      }
     } catch {
       return { state: "lie", path: label };
     }
@@ -12208,11 +12211,12 @@ function hodlRenderOutputHtml(output, index, network, map, entries) {
     extra = "<br>" + hodlEscapeHtml(label + " \xB7 " + scan.path);
     className = scan.role === "change" || scan.role === "key" ? "psbt-ok" : "psbt-kv";
   } else if (declared && declared.state === "ours") {
-    let label = declared.role === "change" ? "change" : declared.role === "script" ? "key participates in this output's script" : "this wallet";
-    extra = "<br>" + hodlEscapeHtml(label + " \xB7 " + declared.path + " (verified)");
+    extra = "<br>" + hodlEscapeHtml((declared.role === "change" ? "change" : "this wallet") + " \xB7 " + declared.path + " (verified)");
     className = "psbt-ok";
   } else if (declared && declared.state === "unknown") {
-    extra = "<br><span class='muted'>claims " + hodlEscapeHtml(declared.path) + " \xB7 cannot be verified for this script type</span>";
+    extra = "<br><span class='muted'>claims " + hodlEscapeHtml(declared.path) + (declared.member
+      ? " \xB7 your key appears in this output's script; its other keys are not verified"
+      : " \xB7 cannot be verified for this script type") + "</span>";
   } else if (scan.state === "external") {
     extra = "<br>not in this wallet (accounts 0\u20132, 50 receive + 50 change, four script types)";
   } else if (scan.state === "no-session") {

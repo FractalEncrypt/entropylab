@@ -5,10 +5,14 @@
 // "other-wallet" and the "PSBT lies ... Do not sign" warning never appeared.
 // The verdict must depend on the set of derivation records, not their order.
 // Also guards audit finding B8 (security.md): a verified record on a
-// script-hash output is judged by key membership in the attached
-// witness/redeem script ("ours" via the script), is an unverifiable claim
-// ("unknown") when no construction script is attached, and is a "lie" only
-// when the key mismatches or the output provably pays one other key.
+// script-hash output is an unverifiable claim ("unknown") — never a red
+// banner for honest multisig change — and key membership in the attached
+// witness/redeem script is reported with it only as information: appearing
+// in a script is not controlling the output (#851 review: a 1-of-N
+// multisig, a quorum the attacker reaches without the user, or a
+// "<user> OP_DROP <attacker> OP_CHECKSIG" are all attacker-spendable while
+// containing the session key). A record is a "lie" only when the key
+// mismatches or the output provably pays one other key.
 // Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -182,21 +186,49 @@ test("multisig cosigner records give the same verdict in every permutation", () 
   assert.deepEqual([...verdicts], ["unknown"]);
 });
 
-test("a multisig change output the session key participates in verifies as ours/script", () => {
+test("a multisig change output the session key participates in is unverifiable, with the membership noted", () => {
+  // Honest 2-of-2 change: no red banner (B8), but no green either — the app
+  // cannot prove the wallet's policy from one key, so the membership fact
+  // rides the muted "cannot be verified" line (#851 review).
   const wshChange = p2wshScript(msigWitness);
   for (const records of permutations([msigRecord, cosignerRecord])) {
     const declared = hodlDeclaredOutput([...records, witnessField], wshChange, "mainnet");
-    assert.equal(declared.state, "ours");
-    assert.equal(declared.role, "script");
+    assert.equal(declared.state, "unknown");
+    assert.equal(declared.member, true);
     assert.equal(declared.path, "m/48h/0h/0h/2h/0/0");
   }
 });
 
-test("a P2SH-wrapped multisig change output verifies the same way", () => {
+test("a P2SH-wrapped multisig change output is unverifiable the same way", () => {
   const declared = hodlDeclaredOutput([msigRecord, redeemField], p2shScript(msigWitness), "mainnet");
-  assert.equal(declared.state, "ours");
-  assert.equal(declared.role, "script");
+  assert.equal(declared.state, "unknown");
+  assert.equal(declared.member, true);
   assert.equal(declared.path, "m/48h/0h/0h/2h/0/0");
+});
+
+// #851 review: scripts the session key appears in but cannot spend from.
+// Each is attacker-spendable while containing the key (or its bytes): a
+// 1-of-2 multisig the attacker signs alone, a 2-of-3 the two attacker keys
+// reach quorum on, and <user> OP_DROP <attacker> OP_CHECKSIG, where the
+// dropped key never signs. Membership verdicts for these were green
+// "(verified)" on the unreviewed head; rock said "lie" via !encoded. They
+// must be unknown, never ours.
+const attackerRoot = HDKey.fromMasterSeed(new Uint8Array(32).fill(0x66));
+const attackerKey1 = attackerRoot.derive("m/0/1").publicKey;
+const attackerKey2 = attackerRoot.derive("m/0/2").publicKey;
+const attackScripts = {
+  "a 1-of-2 multisig the attacker signs alone": multisigScript(1, [msigNode.publicKey, attackerKey1]),
+  "a 2-of-3 multisig the two attacker keys reach quorum on": multisigScript(2, [msigNode.publicKey, attackerKey1, attackerKey2]),
+  "<user> OP_DROP <attacker> OP_CHECKSIG": concat(Uint8Array.of(0x21), msigNode.publicKey, Uint8Array.of(0x75, 0x21), attackerKey1, Uint8Array.of(0xac)),
+};
+test("a script the session key appears in but does not control is never ours (#851 review)", () => {
+  for (const [label, attackWitness] of Object.entries(attackScripts)) {
+    const declared = hodlDeclaredOutput(
+      [msigRecord, { type: 1, keydata: new Uint8Array(), val: attackWitness }],
+      p2wshScript(attackWitness), "mainnet");
+    assert.equal(declared.state, "unknown", label);
+    assert.notEqual(declared.state, "ours", label);
+  }
 });
 
 test("an attached script that does not prove membership changes nothing", () => {
@@ -207,6 +239,7 @@ test("an attached script that does not prove membership changes nothing", () => 
     [msigRecord, { type: 1, keydata: new Uint8Array(), val: foreignWitness }],
     p2wshScript(foreignWitness), "mainnet");
   assert.equal(linkedForeign.state, "unknown");
+  assert.ok(!linkedForeign.member, "no key membership — the informational note must stay off");
   // Unlinked script containing the key: the attached script must hash to the
   // output script, otherwise any stray script carrying our key could claim
   // the output.
@@ -215,6 +248,7 @@ test("an attached script that does not prove membership changes nothing", () => 
     [msigRecord, { type: 1, keydata: new Uint8Array(), val: stray }],
     p2wshScript(msigWitness), "mainnet");
   assert.equal(unlinked.state, "unknown");
+  assert.ok(!unlinked.member, "a stray script against another output proves nothing");
 });
 
 test("a claim on a foreign wrapped single-key output is a lie once its redeem script proves it", () => {
