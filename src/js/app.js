@@ -16928,6 +16928,9 @@ async function hodlVanityApplyMatch(index) {
     if (!active || active.isLab || !active.result) throw new Error(active?.error || "Deriving the updated key failed.");
     let updated = hodlKeys[hodlActiveKey];
     match.savedTo = hodlVanityKeyLabel(updated);
+    // The key now carries the identity this run just wrote; later matches
+    // from the same run are still checked against it (audit B5).
+    run.sourceFingerprint = updated.result?.masterFingerprint || run.sourceFingerprint;
     // A tool that had this key loaded is holding the old seed: reload it so
     // its chip, fingerprint, and LifeHash follow the key.
     if (hodlSpSource === "key:" + updated.id) hodlPickSpSessionKey(updated);

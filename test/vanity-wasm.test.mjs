@@ -956,3 +956,36 @@ test("Vanity Update Key refuses once the source key has changed since the grind 
     assert.equal(source.result.masterIdentity, "before", `${where} replaced the key's wallet`);
   }
 });
+// Companion to the B5 anchor: a passphrase grind's first Update key writes a
+// new passphrase, so the key's master fingerprint changes to the identity the
+// run just wrote — the run must re-anchor to it, or every further honest
+// match from the same run is refused (#859 review). An edit made after the
+// apply moves the fingerprint again and must still be refused.
+test("Vanity Update Key applies a second honest match from the same run, and still refuses a later edit (B5)", async () => {
+  for (const method of ["passphrase", "derivation"]) {
+    const { context, elements, match, source } = await vanityApplyHarness({ method, script: "p2wpkh" });
+    const secondPass = PASSPHRASE + "b";
+    const second = method === "passphrase"
+      ? { passphrase: secondPass, index: null, address: expectedAddress(secondPass, "p2wpkh", "m/84'/0'/0'/0/0"), savedTo: "" }
+      : { passphrase: PASSPHRASE, index: 4, address: expectedAddress(PASSPHRASE, "p2wpkh", "m/84'/0'/4'/0/0"), savedTo: "" };
+    context.hodlVanityMatches.push(second);
+    await context.hodlVanityApplyMatch(0);
+    const first = `${method}: the first match`;
+    assert.equal(elements["vanity-error"].textContent, "", first);
+    assert.ok(match.savedTo, `${first} was not saved`);
+    elements["vanity-error"].textContent = "";
+    await context.hodlVanityApplyMatch(1);
+    assert.equal(elements["vanity-error"].textContent, "", `${method}: the second honest match`);
+    assert.ok(second.savedTo, `${method}: the second honest match was refused`);
+    if (method === "passphrase") {
+      // An edit after the apply moves the key off the re-anchored identity.
+      source.result.masterFingerprint = "00000000";
+      const third = { passphrase: secondPass, index: null, address: second.address, savedTo: "" };
+      context.hodlVanityMatches.push(third);
+      elements["vanity-error"].textContent = "";
+      await context.hodlVanityApplyMatch(2);
+      assert.notEqual(elements["vanity-error"].textContent, "", `${method}: a match applied onto a re-keyed key after the re-anchor raised no refusal`);
+      assert.equal(third.savedTo, "", `${method}: the post-edit match was reported saved`);
+    }
+  }
+});
