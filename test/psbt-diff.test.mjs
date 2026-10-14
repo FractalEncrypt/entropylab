@@ -288,3 +288,128 @@ test("the report escapes pair names and values from an untrusted PSBT", () => {
   assert.ok(html.includes("&lt;img src=x"), "escaped name missing");
   assert.ok(html.includes("&lt;script&gt;"), "escaped value missing");
 });
+
+// --- Duplicate keys (audit B2) ---------------------------------------------
+// The inspect decoder accepts duplicate keys in a map (psbt-wasm read_map
+// caps the count but keeps every pair), so a pasted PSBT can carry a second
+// PSBT_IN_SIGHASH_TYPE behind a matching first record. The comparison must
+// treat each key's pairs as a multiset: every occurrence counts.
+
+test("a hidden duplicate signing key is reported, not collapsed onto the first occurrence (audit B2)", () => {
+  // Real sighash values are 4-byte little-endian: 01000000 = ALL,
+  // 02000000 = NONE. The first records match; only the hidden one differs.
+  const witnessUtxo = { key: "01", value: "cc", name: "PSBT_IN_WITNESS_UTXO" };
+  const sighash = (value) => ({ key: "03", value, name: "PSBT_IN_SIGHASH_TYPE" });
+  const before = doc({ inputs: [[witnessUtxo, sighash("01000000")]] });
+  const after = doc({ inputs: [[witnessUtxo, sighash("01000000"), sighash("02000000")]] });
+  const result = comparePsbtDocs(before, after);
+  assert.equal(result.equal, false, "a document carrying a hidden extra record must not compare equal");
+  assert.equal(result.signingChanged, true);
+  const hidden = result.changes.find((change) => change.key === "03");
+  assert.equal(hidden.kind, "added");
+  assert.equal(hidden.category, "signing");
+  assert.equal(hidden.name, "PSBT_IN_SIGHASH_TYPE");
+  assert.equal(hidden.after, "02000000");
+  // And mirrored: an extra record only on the editor's side is a removal.
+  const reverse = comparePsbtDocs(after, before);
+  assert.equal(reverse.equal, false);
+  assert.equal(reverse.signingChanged, true);
+  const removed = reverse.changes.find((change) => change.key === "03");
+  assert.equal(removed.kind, "removed");
+  assert.equal(removed.category, "signing");
+  assert.equal(removed.before, "02000000");
+});
+
+test("duplicate-key order within a map is still a non-difference (multiset, not sequence)", () => {
+  // The same multiset of values under one key, listed in a different order,
+  // is the same PSBT content — map ordering is not a semantic difference.
+  const pair = (value) => ({ key: "fc01", value, name: null });
+  const before = doc({ globals: [...doc().globals, pair("aa"), pair("bb")] });
+  const after = doc({ globals: [...doc().globals, pair("bb"), pair("aa")] });
+  const result = comparePsbtDocs(before, after);
+  assert.equal(result.equal, true);
+  assert.deepEqual(result.changes, []);
+});
+
+test("a value change inside a duplicated key is reported instead of disappearing", () => {
+  const pair = (value) => ({ key: "fc01", value, name: null });
+  const before = doc({ globals: [...doc().globals, pair("aa"), pair("bb")] });
+  const after = doc({ globals: [...doc().globals, pair("aa"), pair("cc")] });
+  const result = comparePsbtDocs(before, after);
+  assert.equal(result.equal, false);
+  assert.equal(result.metadataChanged, true);
+  const changed = result.changes.find((change) => change.key === "fc01");
+  assert.equal(changed.kind, "changed");
+  assert.equal(changed.before, "bb");
+  assert.equal(changed.after, "cc");
+});
+
+// The verdict gate: neither the identity headline nor the signing-unchanged
+// line may print while a compared document is one equality cannot be claimed
+// for — rust-bitcoin rejected it, its unsigned transaction is
+// consensus-invalid, or its duplicate-key sanitize family is in problem
+// state. The mocks below attach those fields exactly as psbtInspectDoc sets
+// them (rustBitcoinError / txSanityError strings, sanitize family states).
+
+// A joint sighash pair shared by the gated-document tests.
+const sighashPair = { key: "03", value: "01000000", name: "PSBT_IN_SIGHASH_TYPE" };
+const dupProblemSanitize = {
+  duplicateKeys: { state: "problem", findings: [{ code: "duplicate_key", scope: "input", index: 0, name: "PSBT_IN_SIGHASH_TYPE" }], truncated: false },
+  xpubDerivesChild: { state: "complete", findings: [], truncated: false },
+};
+
+test("the report never claims identity for a document with a problem-state duplicate-key finding (audit B2)", () => {
+  // The decoder produces exactly this for a PSBT carrying duplicate keys:
+  // both sides decode to the same multiset, the sanitize family is in
+  // problem state, and equality still cannot be claimed.
+  const base = doc({ inputs: [[sighashPair, { ...sighashPair, value: "02000000" }]] });
+  const before = { ...base, sanitize: dupProblemSanitize };
+  const after = { ...doc({ inputs: [[sighashPair, { ...sighashPair, value: "02000000" }]] }), sanitize: dupProblemSanitize };
+  const diff = comparePsbtDocs(before, after);
+  assert.equal(diff.equal, true, "identical multisets compare equal; the report layer must still withhold the verdict");
+  const html = psbtDiffHtml(diff, before, after, "mainnet");
+  assert.doesNotMatch(html, /Semantically identical/);
+  assert.doesNotMatch(html, /Signing state unchanged\./);
+  assert.match(html, /equality cannot be claimed for an invalid document/);
+});
+
+test("the gate triggers on either compared document, and on rustBitcoinError or txSanityError", () => {
+  const clean = doc();
+  for (const flagged of [
+    { ...doc(), sanitize: dupProblemSanitize },
+    { ...doc(), rustBitcoinError: "duplicate key" },
+    { ...doc(), txSanityError: "bad-txns-inputs-duplicate" },
+  ]) {
+    for (const [before, after] of [[clean, flagged], [flagged, clean]]) {
+      const html = psbtDiffHtml(comparePsbtDocs(before, after), before, after, "mainnet");
+      assert.doesNotMatch(html, /Semantically identical/);
+      assert.doesNotMatch(html, /Signing state unchanged\./);
+      assert.match(html, /equality cannot be claimed for an invalid document/);
+    }
+  }
+});
+
+test("a pasted PSBT hiding a duplicate sighash behind a matching first record reports the hidden pair (audit B2, end to end)", () => {
+  // as rust-bitcoin's serialize-layer decode of a v0 duplicate-key PSBT plus
+  // this crate's sanitize analysis would report it.
+  const before = doc({ inputs: [[{ key: "01", value: "cc", name: "PSBT_IN_WITNESS_UTXO" }, sighashPair]] });
+  const after = {
+    ...doc({ inputs: [[{ key: "01", value: "cc", name: "PSBT_IN_WITNESS_UTXO" }, sighashPair, { ...sighashPair, value: "02000000" }]] }),
+    rustBitcoinError: "duplicate key",
+    sanitize: dupProblemSanitize,
+  };
+  const html = psbtDiffHtml(comparePsbtDocs(before, after), before, after, "mainnet");
+  assert.doesNotMatch(html, /Semantically identical/);
+  assert.doesNotMatch(html, /Signing state unchanged\./);
+  assert.match(html, /Signing state changed/);
+  assert.match(html, /PSBT_IN_SIGHASH_TYPE/);
+  assert.match(html, /02000000/, "the hidden record's value must appear in the report");
+  assert.match(html, /equality cannot be claimed for an invalid document/);
+});
+
+test("a clean pair of documents still earns the identity headline", () => {
+  const before = doc();
+  const html = psbtDiffHtml(comparePsbtDocs(before, doc()), before, doc(), "mainnet");
+  assert.match(html, /Semantically identical/);
+  assert.doesNotMatch(html, /equality cannot be claimed for an invalid document/);
+});
