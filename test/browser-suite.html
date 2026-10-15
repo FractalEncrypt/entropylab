@@ -5246,7 +5246,7 @@
     addressRange.selectNodeContents(overlayAddress);
     equal(addressRange.getClientRects().length, 1, "The native SegWit address wraps in the overlay");
     assert(overlay.querySelector("#addr-qr-image svg"), "The overlay did not render a QR code");
-    // The address text and the copy icon beside it both copy the address.
+    // The address text and the copy button both copy the address.
     const copyButton = overlay.querySelector("#addr-qr-copy");
     let copied = null;
     const clipboard = navigator.clipboard;
@@ -5257,7 +5257,7 @@
       await until(() => copied === address && copyButton.classList.contains("is-copied"), "address copied from the overlay text");
       copied = null;
       copyButton.click();
-      await until(() => copied === address, "address copied from the overlay copy icon");
+      await until(() => copied === address, "address copied from the overlay copy button");
     } finally {
       clipboard.writeText = writeText;
     }
