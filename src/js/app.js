@@ -10565,8 +10565,8 @@ function hodlPrivFromPath(entries, pubkey) {
   let rootFingerprint = hodlFingerprintHex(hodlPsbtHd.fingerprint);
   for (let derivation of hodlBip32(entries, pubkey)) {
     if (hodlHex.encode(derivation.fingerprint) !== rootFingerprint) continue;
+    let node = hodlPsbtHd;
     try {
-      let node = hodlPsbtHd;
       for (let index of derivation.path) {
         let next = node.deriveChild(index);
         if (node !== hodlPsbtHd) node.wipePrivateData(); // dead intermediate
@@ -10579,6 +10579,12 @@ function hodlPrivFromPath(entries, pubkey) {
       }
       if (node !== hodlPsbtHd) node.wipePrivateData();
     } catch {
+      // A child derivation that throws partway down leaves the node reached
+      // so far; it is ours, so wipe it, as HDKey.derive does (#843, #867).
+      if (node !== hodlPsbtHd) try {
+        node.wipePrivateData();
+      } catch {
+      }
     }
   }
   return null;
