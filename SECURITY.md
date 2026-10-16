@@ -118,10 +118,11 @@ material. Its security posture rests on the following model:
   including temporary BIP32 serialized key/chain-code views after master
   derivation, child derivation, and extended-key import (also on failure).
   Returned HDKey nodes keep independent copies; this cleanup does not wipe
-  caller-owned seed buffers. The separately reviewed PR841 code changes, once
-  merged, make rejected HD derivation paths also wipe the last
-  intermediate private child created before the error; the caller-owned root
-  remains usable. A derived wallet, a BIP-85 child, and each
+  caller-owned seed buffers. With the fixes merged in
+  [PR #843](https://github.com/OogaBoogaX/entropylab/pull/843), rejected HD
+  derivation paths also wipe the last intermediate private child created
+  before the error; the caller-owned root remains usable. A derived wallet,
+  a BIP-85 child, and each
   station's copy of a key hold their secrets only as byte arrays and HDKey
   nodes; words, WIF, xprv and hex text are built only where a secret is
   shown, copied or exported, or where a tool takes it as text. The layer also
@@ -184,8 +185,9 @@ material. Its security posture rests on the following model:
   The report marks these cases
   incomplete; a completed individual check is not a security conclusion for
   the transaction.
-- The separately reviewed PR841 code changes, once merged, make PSBT and
-  raw-transaction nonce analysis refuse an inspection requiring
+- With the fixes merged in
+  [PR #843](https://github.com/OogaBoogaX/entropylab/pull/843), PSBT and
+  raw-transaction nonce analysis refuses an inspection requiring
   more than 32,768 same-r candidate-pair comparisons across all nonce groups.
   This bounds collision-driven pair allocation; it is separate from the
   digest-reconstruction budget. Even benign repeated signatures can exceed

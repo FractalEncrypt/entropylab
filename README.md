@@ -28,11 +28,10 @@ import from restoring cleared secrets. Locking the journal also invalidates
 pending notebook and Key Manager imports. See [SECURITY.md](SECURITY.md) for
 the limits of browser-memory cleanup.
 
-The separately reviewed [PR841 code fixes](https://github.com/OogaBoogaX/entropylab/pull/841)
-provide the following behavior once merged (this documentation alone does not
-implement it). Rejected HD derivation paths wipe any intermediate private child already
-created, while preserving the caller's root. The sequential PSBT UR decoder API
-deduplicates identical fragments and allocates only for supplied fragments;
+The code fixes merged in [PR #843](https://github.com/OogaBoogaX/entropylab/pull/843)
+provide the following behavior. Rejected HD derivation paths wipe any intermediate
+private child already created, while preserving the caller's root. The sequential
+PSBT UR decoder API deduplicates identical fragments and allocates only for supplied fragments;
 invalid sequence numbers are refused. Large transaction scripts serialize
 without depending on the browser's function-argument limit.
 Nonce reports never pair a repeated-nonce warning with a no-repeat claim.
