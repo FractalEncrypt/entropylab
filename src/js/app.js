@@ -10034,9 +10034,12 @@ function hodlPsbtReferenceVerdict(psbt) {
     // The document's error count is taken before its list truncation: a
     // crafted file can pad the capped (64-entry) problem list with earlier
     // warnings so every error drops out of view, and the cross-check must
-    // still fail (audit C2-C).
-    let errorTotal = doc.errorCount ?? problems.length,
-      unlisted = Math.max(0, errorTotal - problems.length);
+    // still fail (audit C2-C). The rust-bitcoin line is not one of the
+    // crate's own problems, so only listed crate errors are subtracted from
+    // that count (#867).
+    let listedErrors = problems.length - (doc.rustBitcoinError ? 1 : 0),
+      errorTotal = doc.errorCount ?? listedErrors,
+      unlisted = Math.max(0, errorTotal - listedErrors);
     // No listed error to show: name what the cap hid, else the banner's
     // entry list would be empty (the row is counted, not repeated, so it is
     // not added to `unlisted` a second time).
@@ -10562,8 +10565,8 @@ function hodlPrivFromPath(entries, pubkey) {
   let rootFingerprint = hodlFingerprintHex(hodlPsbtHd.fingerprint);
   for (let derivation of hodlBip32(entries, pubkey)) {
     if (hodlHex.encode(derivation.fingerprint) !== rootFingerprint) continue;
+    let node = hodlPsbtHd;
     try {
-      let node = hodlPsbtHd;
       for (let index of derivation.path) {
         let next = node.deriveChild(index);
         if (node !== hodlPsbtHd) node.wipePrivateData(); // dead intermediate
@@ -10576,6 +10579,12 @@ function hodlPrivFromPath(entries, pubkey) {
       }
       if (node !== hodlPsbtHd) node.wipePrivateData();
     } catch {
+      // A child derivation that throws partway down leaves the node reached
+      // so far; it is ours, so wipe it, as HDKey.derive does (#843, #867).
+      if (node !== hodlPsbtHd) try {
+        node.wipePrivateData();
+      } catch {
+      }
     }
   }
   return null;
