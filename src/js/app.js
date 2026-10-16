@@ -10034,9 +10034,12 @@ function hodlPsbtReferenceVerdict(psbt) {
     // The document's error count is taken before its list truncation: a
     // crafted file can pad the capped (64-entry) problem list with earlier
     // warnings so every error drops out of view, and the cross-check must
-    // still fail (audit C2-C).
-    let errorTotal = doc.errorCount ?? problems.length,
-      unlisted = Math.max(0, errorTotal - problems.length);
+    // still fail (audit C2-C). The rust-bitcoin line is not one of the
+    // crate's own problems, so only listed crate errors are subtracted from
+    // that count (#867).
+    let listedErrors = problems.length - (doc.rustBitcoinError ? 1 : 0),
+      errorTotal = doc.errorCount ?? listedErrors,
+      unlisted = Math.max(0, errorTotal - listedErrors);
     // No listed error to show: name what the cap hid, else the banner's
     // entry list would be empty (the row is counted, not repeated, so it is
     // not added to `unlisted` a second time).
