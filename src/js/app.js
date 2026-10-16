@@ -15852,6 +15852,11 @@ function hodlJournalReadEntryVariants(entry) {
 // async unlock/create that completes against an older generation must discard
 // its decrypted material, not install it over a wiped session (issue #389).
 var hodlJournalGeneration = 0;
+// The chosen file's pending read, settling to { text } or { error }. Unlock
+// awaits the newest one instead of racing it, and only the latest choice may
+// fill hodlJournalFileText: a slower earlier read, or one a reset discarded,
+// finds itself replaced and drops its text (#889).
+var hodlJournalFileRead = null;
 function hodlJournalError(message) {
   let error = document.getElementById("journal-error");
   if (error) error.textContent = message || "";
@@ -15865,6 +15870,7 @@ function hodlJournalWipeNotebook() {
   if (hodlJournalKeys) hodlJournalWipeBytes(hodlJournalKeys.verify);
   hodlJournalKeys = null;
   hodlJournalFileText = "";
+  hodlJournalFileRead = null;
   hodlJournalDirty = false;
   hodlJournalReveal = false;
   hodlJournalEditingId = null;
@@ -16204,10 +16210,27 @@ async function hodlJournalCreate() {
     hodlJournalError(exception.message || String(exception));
   }
 }
+function hodlJournalChooseFile(file) {
+  hodlJournalError("");
+  hodlJournalFileText = "";
+  let read = (hodlJournalFileRead = file ? file.text().then((text) => ({ text }), (error) => ({ error })) : null);
+  read?.then((result) => {
+    if (hodlJournalFileRead === read && !result.error) hodlJournalFileText = result.text;
+  });
+}
 async function hodlJournalUnlock() {
   hodlJournalError("");
   let generation = hodlJournalGeneration;
   try {
+    // Wait for the newest choice: a file chosen while this waits replaces
+    // the read, and a reset cancels this attempt without a late error.
+    for (let read; (read = hodlJournalFileRead); ) {
+      let result = await read;
+      if (generation !== hodlJournalGeneration) return;
+      if (read !== hodlJournalFileRead) continue;
+      if (result.error) throw result.error;
+      break;
+    }
     if (!hodlJournalFileText) throw new Error("Choose a journal file first.");
     let opened = await hodlJournalOpenDocument(hodlJournalFileText, document.getElementById("journal-open-password")?.value || "");
     if (generation !== hodlJournalGeneration) return hodlJournalDiscardOpened(opened);
@@ -16220,6 +16243,7 @@ async function hodlJournalUnlock() {
     document.getElementById("journal-open-password").value = "";
     document.getElementById("journal-file").value = "";
     hodlJournalFileText = "";
+    hodlJournalFileRead = null;
     hodlJournalHideEditor();
     hodlJournalShowWork();
     hodlShowJournalTool("book");
@@ -16316,11 +16340,7 @@ function hodlInitJournalNotebook() {
   });
   document.getElementById("journal-create")?.addEventListener("click", hodlJournalCreate);
   document.getElementById("journal-unlock")?.addEventListener("click", hodlJournalUnlock);
-  document.getElementById("journal-file")?.addEventListener("change", async (event) => {
-    hodlJournalError("");
-    let file = event.target.files?.[0];
-    hodlJournalFileText = file ? await file.text() : "";
-  });
+  document.getElementById("journal-file")?.addEventListener("change", (event) => hodlJournalChooseFile(event.target.files?.[0]));
   document.getElementById("journal-add")?.addEventListener("click", () => {
     hodlJournalError("");
     try { hodlJournalShowEditor(null); } catch (exception) { hodlJournalError(exception.message || String(exception)); }
