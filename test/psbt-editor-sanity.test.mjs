@@ -11,6 +11,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { Transaction, p2pk, p2sh, p2wpkh, p2wsh } from "@scure/btc-signer";
 import { psbtBuildBytes, psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { psbtEditorBuildDoc, psbtProblemsHtml } from "../src/js/psbt-editor.js";
 
@@ -185,4 +187,73 @@ test("psbtProblemsHtml reads the untruncated severity totals (audit C3-4)", () =
   assert.match(legacy, /truncated/);
   // Untruncated legacy docs keep the old headings.
   assert.match(psbtProblemsHtml({ problems: warnings.slice(0, 3), problemsTruncated: false }, false), /3 warning\(s\), no consensus violations/);
+});
+
+// #866: BIP-174's Input Finalizer clears PSBT_IN_REDEEM_SCRIPT (0x04), so a
+// finalized P2SH-wrapped segwit input carries only its final scriptSig, a
+// single push of the redeem script that BIP-16 binds to the P2SH output, and
+// its final witness. Contract: that input is checked against the redeem
+// script its scriptSig pushes, as when 0x04 is present. An honest spend stays
+// clean; a final witness that does not bind to the redeem script's program,
+// or whose signature does not verify, is a final_witness_bad error; and a
+// scriptSig push that does not hash to the P2SH output is a
+// redeem_script_mismatch error. Each PSBT is built, signed and finalized by
+// @scure/btc-signer (the independent finalizer), then one byte is changed.
+const wrappedSigner = new Uint8Array(32).fill(7);
+const wrappedKey = secp256k1.getPublicKey(wrappedSigner, true);
+const finalizedSpend = (payment) => {
+  const tx = new Transaction();
+  tx.addInput({ txid: "11".repeat(32), index: 0, witnessUtxo: { script: payment.script, amount: 50_000n }, redeemScript: payment.redeemScript, witnessScript: payment.witnessScript });
+  tx.addOutputAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 40_000n);
+  tx.signIdx(wrappedSigner, 0);
+  tx.finalize();
+  return tx.toPSBT();
+};
+const lastAt = (bytes, needle) => {
+  const at = Buffer.from(bytes).lastIndexOf(Buffer.from(needle));
+  assert.ok(at >= 0, "the bytes to change are in the PSBT");
+  return at;
+};
+const flipped = (bytes, at) => {
+  const copy = Uint8Array.from(bytes);
+  copy[at] ^= 0x01;
+  return copy;
+};
+const wrappedP2wpkh = p2sh(p2wpkh(wrappedKey));
+const wrappedP2wsh = p2sh(p2wsh(p2pk(wrappedKey)));
+const nativeP2wsh = p2wsh(p2pk(wrappedKey));
+
+test("a finalized wrapped-segwit input without its redeemScript stays clean when honest (#866)", () => {
+  for (const [label, payment] of [["P2SH-P2WPKH", wrappedP2wpkh], ["P2SH-P2WSH", wrappedP2wsh]]) {
+    const doc = psbtInspectDoc(finalizedSpend(payment));
+    assert.deepEqual(doc.inputs[0].map((pair) => pair.name), ["PSBT_IN_WITNESS_UTXO", "PSBT_IN_FINAL_SCRIPTSIG", "PSBT_IN_FINAL_SCRIPTWITNESS"], `${label}: the finalizer cleared 0x04`);
+    assert.deepEqual(codes(doc), [], label);
+  }
+});
+
+test("a finalized wrapped-segwit input's final witness is checked without 0x04 (#866)", () => {
+  // P2SH-P2WSH: one byte of the witness script in the final witness.
+  const wsh = finalizedSpend(wrappedP2wsh);
+  assert.deepEqual(codes(psbtInspectDoc(flipped(wsh, lastAt(wsh, wrappedP2wsh.witnessScript) + 5))), ["error:final_witness_bad"], "P2SH-P2WSH witness script altered");
+  // P2SH-P2WPKH: the witness public key swapped for another valid key.
+  const wpkh = finalizedSpend(wrappedP2wpkh);
+  const swapped = Uint8Array.from(wpkh);
+  swapped.set(secp256k1.getPublicKey(new Uint8Array(32).fill(9), true), lastAt(wpkh, wrappedKey));
+  assert.deepEqual(codes(psbtInspectDoc(swapped)), ["error:final_witness_bad"], "P2SH-P2WPKH witness key swapped");
+  // P2SH-P2WPKH: one byte of the DER signature's s value (key and program
+  // still bind, so only the signature check can catch it).
+  const witness = psbtInspectDoc(wpkh).inputs[0].find((pair) => pair.name === "PSBT_IN_FINAL_SCRIPTWITNESS").value;
+  const signature = hexToBytes(witness.slice(4, 4 + parseInt(witness.slice(2, 4), 16) * 2));
+  assert.deepEqual(codes(psbtInspectDoc(flipped(wpkh, lastAt(wpkh, signature) + signature.length - 4))), ["error:final_witness_bad"], "P2SH-P2WPKH signature altered");
+  // Control: the same witness-script change on a native P2WSH input was
+  // already caught.
+  const native = finalizedSpend(nativeP2wsh);
+  assert.deepEqual(codes(psbtInspectDoc(flipped(native, lastAt(native, nativeP2wsh.witnessScript) + 5))), ["error:final_witness_bad"], "native P2WSH control");
+});
+
+test("a finalized P2SH input whose scriptSig redeem push does not hash to the output is an error (#866)", () => {
+  for (const [label, payment] of [["P2SH-P2WPKH", wrappedP2wpkh], ["P2SH-P2WSH", wrappedP2wsh]]) {
+    const bytes = finalizedSpend(payment);
+    assert.deepEqual(codes(psbtInspectDoc(flipped(bytes, lastAt(bytes, payment.redeemScript) + 5))), ["error:redeem_script_mismatch"], label);
+  }
 });

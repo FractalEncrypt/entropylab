@@ -214,22 +214,43 @@ fn classify(index: usize, map: &[RawPair], claim: &TxOut, problems: &mut Vec<Pro
         return Spend::UnknownWitness; // a future witness version
     }
     if script.is_p2sh() {
-        let Some(redeem) = input_field(map, 0x04) else { return Spend::Unknown };
-        if hash160::Hash::hash(redeem).to_byte_array()[..] != script.as_bytes()[2..22] {
+        // A finalized input normally has no 0x04: BIP-174's Input Finalizer
+        // clears it. Its redeem script is then the final scriptSig's last
+        // push, which BIP-16 hash-binds to this output, so a finalized
+        // wrapped-segwit spend is still checked against it (#866).
+        let (redeem, from_script_sig) = match input_field(map, 0x04) {
+            Some(redeem) => (redeem.to_vec(), false),
+            None => match input_field(map, 0x07).and_then(|value| script_pushes(Script::from_bytes(value))).and_then(|mut pushes| pushes.pop()) {
+                Some(last) => (last, true),
+                None => return Spend::Unknown,
+            },
+        };
+        if hash160::Hash::hash(&redeem).to_byte_array()[..] != script.as_bytes()[2..22] {
             problems.push(Problem::error(
                 scope,
                 "redeem_script_mismatch",
-                "redeemScript does not hash to the claimed output's P2SH scriptPubKey",
+                if from_script_sig {
+                    "final scriptSig's redeem script push does not hash to the claimed output's P2SH scriptPubKey"
+                } else {
+                    "redeemScript does not hash to the claimed output's P2SH scriptPubKey"
+                },
             ));
             return Spend::Unknown;
         }
-        let redeem = ScriptBuf::from_bytes(redeem.to_vec());
+        let redeem = ScriptBuf::from_bytes(redeem);
         if redeem.is_p2wpkh() {
             return Spend::WrappedP2wpkh(redeem);
         }
         if redeem.is_p2wsh() {
             let ws = checked_witness_script(map, &redeem.as_bytes()[2..], &scope, problems);
             return Spend::WrappedP2wsh(redeem, ws);
+        }
+        if from_script_sig {
+            // A legacy redeem script recovered from the scriptSig stays
+            // unclassified, as before: a legacy classification would start
+            // the non-witness UTXO checks on finalized legacy inputs, which
+            // is a separate question from the wrapped-segwit gap.
+            return Spend::Unknown;
         }
         return Spend::LegacyP2sh(redeem);
     }
