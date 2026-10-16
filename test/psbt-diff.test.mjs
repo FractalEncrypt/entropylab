@@ -200,9 +200,9 @@ test("sighash type is classified as a signing change", () => {
   assert.equal(result.changes[0].name, "PSBT_IN_SIGHASH_TYPE");
 });
 
-test("MuSig2 (BIP-327) input pairs are named and classified as signing changes (audit B3)", () => {
+test("MuSig2 (BIP-373) input pairs are named and classified as signing changes (audit B3)", () => {
   // Real round-trips through the decoder on both sides, so the pair names
-  // come from psbtInspectDoc. Shapes follow BIP-327: keydata is the
+  // come from psbtInspectDoc. Shapes follow BIP-373: keydata is the
   // participant pubkey (33 bytes) plus the aggregate pubkey (33 bytes); the
   // value is a participant-pubkey list, a 66-byte public nonce, or a
   // 32-byte partial signature. A swapped nonce is the key-extraction class.
