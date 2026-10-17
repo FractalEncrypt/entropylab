@@ -55,14 +55,24 @@
     }
   },
   "Pick a key to grind. {station} settings come along as set there; BIP-85 children use an empty passphrase and the default account path. A key with seed words supports both methods, a root-xprv key the derivation grind only.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
     "noteByLanguage": {
-      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Choisissez une clé pour la recherche. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement l'essai par dérivation.",
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Wählen Sie einen Schlüssel zum Durchmustern aus. Die {station}-Einstellungen werden wie dort festgelegt übernommen; BIP-85-Kinder verwenden eine leere Passphrase und den Standard-Account-Pfad. Ein Schlüssel mit Seed-Wörtern unterstützt beide Methoden, ein Root-xprv-Schlüssel nur die Derivations-Durchmusterung.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: Elige una clave para la búsqueda. La configuración de {station} se mantiene como se estableció allí; los hijos BIP-85 usan una frase de contraseña vacía y la ruta de cuenta predeterminada. Una clave con palabras semilla admite ambos métodos, una clave raíz xprv solo la prueba por derivación.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Escolha uma chave para a busca. As configurações de {station} vêm como definidas lá; os filhos BIP-85 usam uma frase secreta vazia e o caminho da conta padrão. Uma chave com palavras semente suporta ambos os métodos, uma chave raiz xprv apenas o teste por derivação."
     },
     "retranslate": {
-      "fr": "Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase secrète vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+      "fr": "Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation.",
+      "de": "Wählen Sie einen Schlüssel zum Mahlen aus. Die {station}-Einstellungen werden wie dort festgelegt übernommen; BIP-85-Kinder verwenden eine leere Passphrase und den Standard-Account-Pfad. Ein Schlüssel mit Seed-Wörtern unterstützt beide Methoden, ein Root-xprv-Schlüssel nur das Ableitungs-Mahlen.",
+      "es": "Elige una clave para moler. La configuración de {station} se mantiene como se estableció allí; los hijos BIP-85 usan una frase de contraseña vacía y la ruta de cuenta predeterminada. Una clave con palabras semilla admite ambos métodos, una clave raíz xprv solo la molienda de derivación.",
+      "pt": "Escolha uma chave para moer. As configurações de {station} vêm como definidas lá; os filhos BIP-85 usam uma frase secreta vazia e o caminho da conta padrão. Uma chave com palavras semente suporta ambos os métodos, uma chave raiz xprv apenas a moagem de derivação."
     },
     "exact": {
-      "fr": "Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+      "fr": "Choisissez une clé pour la recherche. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement l'essai par dérivation.",
+      "de": "Wählen Sie einen Schlüssel zum Durchmustern aus. Die {station}-Einstellungen werden wie dort festgelegt übernommen; BIP-85-Kinder verwenden eine leere Passphrase und den Standard-Account-Pfad. Ein Schlüssel mit Seed-Wörtern unterstützt beide Methoden, ein Root-xprv-Schlüssel nur die Derivations-Durchmusterung.",
+      "es": "Elige una clave para la búsqueda. La configuración de {station} se mantiene como se estableció allí; los hijos BIP-85 usan una frase de contraseña vacía y la ruta de cuenta predeterminada. Una clave con palabras semilla admite ambos métodos, una clave raíz xprv solo la prueba por derivación.",
+      "pt": "Escolha uma chave para a busca. As configurações de {station} vêm como definidas lá; os filhos BIP-85 usam uma frase secreta vazia e o caminho da conta padrão. Uma chave com palavras semente suporta ambos os métodos, uma chave raiz xprv apenas o teste por derivação."
     }
   },
   "The passphrase stays as it is; each candidate is the next BIP32 account index. A BIP-85 child stays unchanged; copy any match you need.": {
@@ -321,6 +331,195 @@
     },
     "exact": {
       "de": "Schlüssel"
+    }
+  },
+  "Derive a key in {station} or BIP-85 Station first. Seed words support both grind methods; a root xprv supports the derivation grind only.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Leiten Sie zuerst einen Schlüssel in {station} oder BIP-85 Station ab. Seed-Wörter unterstützen beide Durchmusterungsmethoden; ein Root-xprv unterstützt nur die Derivations-Durchmusterung.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: Deriva una clave primero en {station} o en la Estación BIP-85. Las palabras semilla admiten ambos métodos de búsqueda; una raíz xprv solo admite la prueba por derivación.",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Dérivez d'abord une clé dans {station} ou la Station BIP-85. Les mots de départ prennent en charge les deux méthodes de recherche ; une racine xprv prend en charge uniquement l'essai par dérivation.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Derive uma chave em {station} ou na Estação BIP-85 primeiro. Palavras semente suportam ambos os métodos de busca; uma raiz xprv suporta apenas o teste por derivação."
+    },
+    "retranslate": {
+      "de": "Leiten Sie zuerst einen Schlüssel in {station} oder BIP-85 Station ab. Seed-Wörter unterstützen beide Mahlmethoden; ein Root-xprv unterstützt nur das Ableitungs-Mahlen.",
+      "es": "Deriva una clave primero en {station} o en la Estación BIP-85. Las palabras semilla admiten ambos métodos de molienda; una raíz xprv solo admite la molienda de derivación.",
+      "fr": "Dérivez d'abord une clé dans {station} ou la Station BIP-85. Les mots de départ prennent en charge les deux méthodes de broyage ; une racine xprv prend en charge uniquement le broyage par dérivation.",
+      "pt": "Derive uma chave em {station} ou na Estação BIP-85 primeiro. Palavras semente suportam ambos os métodos de moagem; uma raiz xprv suporta apenas a moagem de derivação."
+    },
+    "exact": {
+      "de": "Leiten Sie zuerst einen Schlüssel in {station} oder BIP-85 Station ab. Seed-Wörter unterstützen beide Durchmusterungsmethoden; ein Root-xprv unterstützt nur die Derivations-Durchmusterung.",
+      "es": "Deriva una clave primero en {station} o en la Estación BIP-85. Las palabras semilla admiten ambos métodos de búsqueda; una raíz xprv solo admite la prueba por derivación.",
+      "fr": "Dérivez d'abord une clé dans {station} ou la Station BIP-85. Les mots de départ prennent en charge les deux méthodes de recherche ; une racine xprv prend en charge uniquement l'essai par dérivation.",
+      "pt": "Derive uma chave em {station} ou na Estação BIP-85 primeiro. Palavras semente suportam ambos os métodos de busca; uma raiz xprv suporta apenas o teste por derivação."
+    }
+  },
+  "Choose your settings above, then click Start Grinding. Matches appear here.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Wählen Sie Ihre Einstellungen oben aus und klicken Sie dann auf \"Durchmusterung starten\". Übereinstimmungen erscheinen hier.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: Elige tu configuración arriba, luego haz clic en Iniciar búsqueda. Las coincidencias aparecen aquí.",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Choisissez vos paramètres ci-dessus, puis cliquez sur Démarrer la recherche. Les correspondances apparaissent ici.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Escolha suas configurações acima e clique em Iniciar Busca. As correspondências aparecem aqui."
+    },
+    "retranslate": {
+      "de": "Wählen Sie Ihre Einstellungen oben aus und klicken Sie dann auf \"Mahlen starten\". Übereinstimmungen erscheinen hier.",
+      "es": "Elige tu configuración arriba, luego haz clic en Iniciar Molienda. Las coincidencias aparecen aquí.",
+      "fr": "Choisissez vos paramètres ci-dessus, puis cliquez sur Démarrer le broyage. Les correspondances apparaissent ici.",
+      "pt": "Escolha suas configurações acima e clique em Iniciar Moagem. As correspondências aparecem aqui."
+    },
+    "exact": {
+      "de": "Wählen Sie Ihre Einstellungen oben aus und klicken Sie dann auf \"Durchmusterung starten\". Übereinstimmungen erscheinen hier.",
+      "es": "Elige tu configuración arriba, luego haz clic en Iniciar búsqueda. Las coincidencias aparecen aquí.",
+      "fr": "Choisissez vos paramètres ci-dessus, puis cliquez sur Démarrer la recherche. Les correspondances apparaissent ici.",
+      "pt": "Escolha suas configurações acima e clique em Iniciar Busca. As correspondências aparecem aqui."
+    }
+  },
+  "Stop grinding": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Durchmusterung stoppen",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: Detener la búsqueda",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Arrêter la recherche",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Parar busca"
+    },
+    "retranslate": {
+      "de": "Schleifen stoppen",
+      "es": "Detener la molienda",
+      "fr": "Arrêter le broyage",
+      "pt": "Parar moagem"
+    },
+    "exact": {
+      "de": "Durchmusterung stoppen",
+      "es": "Detener la búsqueda",
+      "fr": "Arrêter la recherche",
+      "pt": "Parar busca"
+    }
+  },
+  "Start Grinding": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Durchmusterung starten",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: Iniciar búsqueda",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Démarrer la recherche",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Iniciar Busca"
+    },
+    "retranslate": {
+      "de": "Schleifen starten",
+      "es": "Iniciar molienda",
+      "fr": "Démarrer le broyage",
+      "pt": "Iniciar Moagem"
+    },
+    "exact": {
+      "de": "Durchmusterung starten",
+      "es": "Iniciar búsqueda",
+      "fr": "Démarrer la recherche",
+      "pt": "Iniciar Busca"
+    }
+  },
+  "Key {key} now derives at {now}, but this match was ground at {then}. Set the path back on the Keys tab, or grind again.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. The Keys tab is \"Schlüssel\". Return exactly: Schlüssel {key} wird jetzt unter {now} abgeleitet, aber dieser Treffer wurde unter {then} gefunden. Setzen Sie den Pfad auf der Registerkarte „Schlüssel“ zurück oder starten Sie die Durchmusterung erneut.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: La clave {key} ahora se deriva en {now}, pero esta coincidencia se encontró en {then}. Establece la ruta de regreso en la pestaña Claves o busca de nuevo.",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: La clé {key} dérive maintenant à {now}, mais cette correspondance a été trouvée à {then}. Rétablissez le chemin dans l'onglet Clés, ou recommencez la recherche.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: A chave {key} agora deriva em {now}, mas esta correspondência foi encontrada em {then}. Defina o caminho de volta na guia Chaves ou busque novamente."
+    },
+    "retranslate": {
+      "de": "Schlüssel {key} wird jetzt unter {now} abgeleitet, aber dieser Treffer wurde unter {then} geschliffen. Setzen Sie den Pfad auf der Registerkarte „Keys“ zurück oder schleifen Sie erneut.",
+      "es": "La clave {key} ahora se deriva en {now}, pero esta coincidencia se molió en {then}. Establece la ruta de regreso en la pestaña Claves o muele de nuevo.",
+      "fr": "La clé {key} dérive maintenant à {now}, mais cette correspondance a été broyée à {then}. Rétablissez le chemin dans l'onglet Clés, ou broyez à nouveau.",
+      "pt": "A chave {key} agora deriva em {now}, mas esta correspondência foi moída em {then}. Defina o caminho de volta na guia Chaves ou moa novamente."
+    },
+    "exact": {
+      "de": "Schlüssel {key} wird jetzt unter {now} abgeleitet, aber dieser Treffer wurde unter {then} gefunden. Setzen Sie den Pfad auf der Registerkarte „Schlüssel“ zurück oder starten Sie die Durchmusterung erneut.",
+      "es": "La clave {key} ahora se deriva en {now}, pero esta coincidencia se encontró en {then}. Establece la ruta de regreso en la pestaña Claves o busca de nuevo.",
+      "fr": "La clé {key} dérive maintenant à {now}, mais cette correspondance a été trouvée à {then}. Rétablissez le chemin dans l'onglet Clés, ou recommencez la recherche.",
+      "pt": "A chave {key} agora deriva em {now}, mas esta correspondência foi encontrada em {then}. Defina o caminho de volta na guia Chaves ou busque novamente."
+    }
+  },
+  "EntropyLab wiped every key, seed and field this page held. A Vanity grind cut short mid-run is the one exception: its workers are stopped, not wiped — closing the tab covers them.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: EntropyLab hat jeden Schlüssel, Seed und jedes Feld auf dieser Seite gelöscht. Eine mittendrin abgebrochene Vanity-Durchmusterung ist die einzige Ausnahme: ihre Worker werden gestoppt, nicht gelöscht — das Schließen des Tabs deckt sie ab."
+    },
+    "retranslate": {
+      "de": "EntropyLab hat jeden Schlüssel, Seed und jedes Feld auf dieser Seite gelöscht. Ein mittendrin abgebrochener Vanity-Grind ist die einzige Ausnahme: seine Worker werden gestoppt, nicht gelöscht — das Schließen des Tabs deckt sie ab."
+    },
+    "exact": {
+      "de": "EntropyLab hat jeden Schlüssel, Seed und jedes Feld auf dieser Seite gelöscht. Eine mittendrin abgebrochene Vanity-Durchmusterung ist die einzige Ausnahme: ihre Worker werden gestoppt, nicht gelöscht — das Schließen des Tabs deckt sie ab."
+    }
+  },
+  "Key {key} changed since this grind started — its matches belong to the key it was. Grind again.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Der Schlüssel {key} hat sich seit Beginn dieser Durchmusterung geändert — seine Übereinstimmungen gehören zu dem Schlüssel, der er war. Starten Sie die Durchmusterung erneut.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: La clave {key} cambió desde que comenzó esta búsqueda — sus coincidencias pertenecen a la clave que era. Vuelve a buscar.",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: La clé {key} a changé depuis le début de cette recherche — ses correspondances appartiennent à la clé qu'elle était. Recommencez la recherche.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: A chave {key} mudou desde que esta busca começou — suas correspondências pertencem à chave que era. Busque novamente."
+    },
+    "retranslate": {
+      "de": "Der Schlüssel {key} hat sich seit Beginn dieses Grinds geändert — seine Übereinstimmungen gehören zu dem Schlüssel, der er war. Grind erneut.",
+      "es": "La clave {key} cambió desde que comenzó este grind — sus coincidencias pertenecen a la clave que era. Vuelve a hacer el grind.",
+      "fr": "La clé {key} a changé depuis le début de ce grind — ses correspondances appartiennent à la clé qu'elle était. Recommencez le grind.",
+      "pt": "A chave {key} mudou desde que esta moagem começou — suas correspondências pertencem à chave que era. Moa novamente."
+    },
+    "exact": {
+      "de": "Der Schlüssel {key} hat sich seit Beginn dieser Durchmusterung geändert — seine Übereinstimmungen gehören zu dem Schlüssel, der er war. Starten Sie die Durchmusterung erneut.",
+      "es": "La clave {key} cambió desde que comenzó esta búsqueda — sus coincidencias pertenecen a la clave que era. Vuelve a buscar.",
+      "fr": "La clé {key} a changé depuis le début de cette recherche — ses correspondances appartiennent à la clé qu'elle était. Recommencez la recherche.",
+      "pt": "A chave {key} mudou desde que esta busca começou — suas correspondências pertencem à chave que era. Busque novamente."
+    }
+  },
+  "Key {key} derives {found} at this match's path, not the recorded address {expected} — the match record is inconsistent. Nothing was changed; grind again.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\" (as in \"Derivations-Durchmusterung\"); \"Mahlen\" and \"Schleifen\" mean milling and sanding. Return exactly: Der Schlüssel {key} leitet {found} auf dem Pfad dieser Übereinstimmung ab, nicht die aufgezeichnete Adresse {expected} — der Übereinstimmungsdatensatz ist inkonsistent. Es wurde nichts geändert; starten Sie die Durchmusterung erneut.",
+      "es": "Spanish calls the vanity search \"búsqueda\" (as in \"Progreso de búsqueda vanity\") and the derivation method \"prueba por derivación\"; \"moler\" and \"molienda\" mean milling. Return exactly: La clave {key} deriva {found} en la ruta de esta coincidencia, no la dirección registrada {expected} — el registro de coincidencia es inconsistente. No se cambió nada; vuelve a buscar.",
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: La clé {key} dérive {found} au chemin de cette correspondance, pas à l'adresse enregistrée {expected} — l'enregistrement de la correspondance est incohérent. Rien n'a été modifié ; recommencez la recherche.",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: A chave {key} deriva {found} no caminho desta correspondência, não o endereço registrado {expected} — o registro da correspondência é inconsistente. Nada foi alterado; busque novamente."
+    },
+    "retranslate": {
+      "de": "Der Schlüssel {key} leitet {found} auf dem Pfad dieser Übereinstimmung ab, nicht die aufgezeichnete Adresse {expected} — der Übereinstimmungsdatensatz ist inkonsistent. Es wurde nichts geändert; grind erneut.",
+      "es": "La clave {key} deriva {found} en la ruta de esta coincidencia, no la dirección registrada {expected} — el registro de coincidencia es inconsistente. No se cambió nada; vuelve a hacer el grind.",
+      "fr": "La clé {key} dérive {found} au chemin de cette correspondance, pas à l'adresse enregistrée {expected} — l'enregistrement de la correspondance est incohérent. Rien n'a été modifié ; recommencez le grind.",
+      "pt": "A chave {key} deriva {found} no caminho desta correspondência, não o endereço registrado {expected} — o registro da correspondência é inconsistente. Nada foi alterado; moa novamente."
+    },
+    "exact": {
+      "de": "Der Schlüssel {key} leitet {found} auf dem Pfad dieser Übereinstimmung ab, nicht die aufgezeichnete Adresse {expected} — der Übereinstimmungsdatensatz ist inkonsistent. Es wurde nichts geändert; starten Sie die Durchmusterung erneut.",
+      "es": "La clave {key} deriva {found} en la ruta de esta coincidencia, no la dirección registrada {expected} — el registro de coincidencia es inconsistente. No se cambió nada; vuelve a buscar.",
+      "fr": "La clé {key} dérive {found} au chemin de cette correspondance, pas à l'adresse enregistrée {expected} — l'enregistrement de la correspondance est incohérent. Rien n'a été modifié ; recommencez la recherche.",
+      "pt": "A chave {key} deriva {found} no caminho desta correspondência, não o endereço registrado {expected} — o registro da correspondência é inconsistente. Nada foi alterado; busque novamente."
+    }
+  },
+  "Grind a vanity address from a key you already hold": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Rechercher une adresse vanity à partir d'une clé que vous possédez déjà",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Busque um endereço vanity a partir de uma chave que você já possui"
+    },
+    "retranslate": {
+      "fr": "Triturer une adresse vanity à partir d'une clé que vous possédez déjà",
+      "pt": "Moa um endereço vanity a partir de uma chave que você já possui"
+    },
+    "exact": {
+      "fr": "Rechercher une adresse vanity à partir d'une clé que vous possédez déjà",
+      "pt": "Busque um endereço vanity a partir de uma chave que você já possui"
+    }
+  },
+  "Before you grind": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing.",
+    "noteByLanguage": {
+      "fr": "French calls the vanity search \"recherche\" (as in \"Progression de la recherche vanity\") and the derivation method \"essai par dérivation\"; \"broyer\", \"broyage\" and \"triturer\" mean crushing. Return exactly: Avant la recherche",
+      "pt": "Portuguese calls the vanity search \"busca\" and the derivation method \"teste por derivação\"; \"moer\" and \"moagem\" mean milling. Return exactly: Antes de buscar"
+    },
+    "retranslate": {
+      "fr": "Avant de triturer",
+      "pt": "Antes de moer"
+    },
+    "exact": {
+      "fr": "Avant la recherche",
+      "pt": "Antes de buscar"
     }
   }
 }
