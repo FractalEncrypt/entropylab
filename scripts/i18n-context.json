@@ -521,5 +521,77 @@
       "fr": "Avant la recherche",
       "pt": "Antes de buscar"
     }
+  },
+  "Key {key} was imported as a root xprv: it has no seed words, so its passphrase cannot be extended — only the derivation grind is available.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Copied verbatim from key {key}'s Optional BIP39 passphrase on the Keys tab. Passphrase grind: candidates are that passphrase followed by the counter characters. Derivation grind: this exact passphrase, with the account index changing.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Key {key} has no passphrase. Passphrase grind: candidates are the counter characters alone. Derivation grind: no passphrase, with the account index changing.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Derivation grind: each candidate is a few BIP32 child steps.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Passphrase grind: each candidate is a full BIP39 seed stretch.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Pick a Key Station key first — the grinder searches that key's passphrase or account index.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Key {key} has no seed words (root xprv), so its passphrase cannot be extended — switch to the derivation grind.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
+  },
+  "Key {key} is watch-only; the derivation grind needs private material.": {
+    "note": "\"Grind\" here is the vanity-address search: trying candidates until an address matches the prefix. It is not milling or crushing. \"Passphrase grind\" and \"Derivation grind\" are the names of its two methods (buttons on the same screen).",
+    "noteByLanguage": {
+      "de": "German calls the vanity search \"Durchmusterung\"; the methods are \"Passphrasen-Durchmusterung\" (Passphrase grind) and \"Derivations-Durchmusterung\" (Derivation grind), and \"the grinder\" is \"die Durchmusterung\".",
+      "es": "Spanish calls the vanity search \"búsqueda\"; the methods are \"Prueba de frases de contraseña\" (Passphrase grind) and \"Prueba por derivación\" (Derivation grind), and \"the grinder\" is \"el probador\".",
+      "fr": "French calls the vanity search \"recherche\"; the methods are \"Essai de phrases de passe\" (Passphrase grind) and \"Essai par dérivation\" (Derivation grind), and \"the grinder\" is \"le testeur\".",
+      "pt": "Portuguese calls the vanity search \"busca\"; the methods are \"Teste de frases-senha\" (Passphrase grind) and \"Teste por derivação\" (Derivation grind), and \"the grinder\" is \"o testador\"."
+    }
   }
 }

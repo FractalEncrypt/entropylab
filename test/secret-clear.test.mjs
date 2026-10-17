@@ -1255,6 +1255,8 @@ test("saving a vanity passphrase match to its key zeroes the wallet the key had"
     hodlVanityPlan: () => ({ node: null, pathPrefix: [], path: run.path }), hodlWorkspace: "vanity", hodlSpSource: "", hodlBip85Source: "",
     hodlRenderVanityOut() {}, hodlVanitySyncControls() {}, hodlVanityKeyLabel: () => "key", hodlVanitySetStatus() {}, hodlVanitySyncSource() {},
     hodlPickSpSessionKey() {}, hodlPickBip85SessionKey() {},
+    // English, with placeholders filled the way the app's translator fills them.
+    hodlTText: (text, vars) => text.replace(/\{(\w+)\}/g, (whole, name) => (vars?.[name] == null ? whole : String(vars[name]))),
   });
   const page = { "calc-card": { hidden: false }, "vanity-error": { textContent: "" } }, byId = context.document.getElementById;
   context.document.getElementById = (id) => page[id] ?? byId(id);

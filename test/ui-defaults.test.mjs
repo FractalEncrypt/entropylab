@@ -2330,7 +2330,7 @@ test("the vanity grinder is a workspace tab that ships collapsed and never auto-
   // rather than a DOM attribute so a wipe cannot leave a copyable secret.
   assert.match(appSource, /hodlVanityReveal = false/);
   assert.match(appSource, /hodlPrivacyBarMarkup\(\{ id: "vanity-reveal"/);
-  assert.match(appSource, /copyMarkup\("data-vanity-copy", index, "Copy passphrase"\)/);
+  assert.match(appSource, /copyMarkup\("data-vanity-copy", index, hodlTAttr\("Copy passphrase"\)\)/);
   assert.match(appSource, /\$\{attribute\}="\$\{index\}"/);
   const vanityController = appSource.slice(appSource.indexOf("// ── Vanity grinder"), appSource.indexOf("function hodlInitWorkspace()"));
   assert.doesNotMatch(vanityController, /data-phrase/);
@@ -2353,7 +2353,7 @@ test("the vanity grinder is a workspace tab that ships collapsed and never auto-
   // source tab, including when a new passphrase changes the fingerprint.
   assert.match(vanityController, /async function hodlVanityApplyMatch\(index\) \{[\s\S]*?hodlFillLabFromKey\(state\)[\s\S]*?draft\.fields\.pass = hodlStoredPassphraseBytes\(match\.passphrase\);[\s\S]*?draft\.fields\.account = `\$\{match\.index\}[\s\S]*?await hodlDeriveWithProgress\("key", \(progress\) => hodlCalculateKey\(progress, "update"\)\);/);
   assert.match(vanityController, /data-vanity-apply="\$\{index\}"/);
-  assert.match(vanityController, /Saved to key \$\{hodlEscapeHtml\(match\.savedTo\)\}/);
+  assert.match(vanityController, /title="\$\{hodlTAttr\("Saved to key \{key\}", \{ key: match\.savedTo \}\)\}" aria-label="\$\{hodlTAttr\("Saved to key \{key\}", \{ key: match\.savedTo \}\)\}"/);
   // The chip picker marks the selected chip with a check, not colour alone.
   assert.match(appSource, /check\.className = "session-key-check";/);
   // The picker fills on tab entry and station-key refreshes, never at boot:
@@ -2430,7 +2430,7 @@ test("the vanity estimate is timed from a device sample, and Stop on first find 
   // The estimate uses the live rate while grinding, otherwise the sample
   // scaled by the worker count, and speaks in time.
   assert.match(vanityController, /function hodlVanityExpectedRate\(\) \{\s*if \(hodlVanityRunning && hodlVanityLiveRate > 0\) return hodlVanityLiveRate;/);
-  assert.match(vanityController, /expect a match roughly every \$\{hodlVanityFormatDuration\(Number\(work\) \/ rate\)\}/);
+  assert.match(vanityController, /expect a match roughly every \{every\}\.", \{ rate: hodlVanityFormatCount\(Math\.round\(rate\)\), every: hodlVanityFormatDuration\(Number\(work\) \/ rate\) \}\)/);
   assert.match(vanityController, /"Measuring this device…"/);
   // Stop on first find is a checkbox that asks the pool to stop as the first
   // match lands, and the status says so.
@@ -2457,5 +2457,5 @@ test("Update key carries the fingerprint and LifeHash with it: rows show the res
   assert.match(appSource, /image\.dataset\.fingerprint = fingerprint;\s*hodlLifeHash\.fromFingerprint\(fingerprint\)\.then\(\(url\) => \{\s*if \(!image\.isConnected \|\| image\.dataset\.fingerprint !== fingerprint\) return;/);
   // Tools holding the old seed reload it, and the status names the change.
   assert.match(vanityController, /if \(hodlSpSource === "key:" \+ updated\.id\) hodlPickSpSessionKey\(updated\);\s*if \(hodlBip85Source === "key:" \+ updated\.id\) hodlPickBip85SessionKey\(updated\);/);
-  assert.match(vanityController, /its master fingerprint and LifeHash changed from \$\{run\.sourceLabel\} to \$\{match\.savedTo\}/);
+  assert.match(vanityController, /let changed = run\.sourceLabel !== match\.savedTo;[\s\S]*?its master fingerprint and LifeHash changed from \{from\} to \{key\}[\s\S]*?\{ key: match\.savedTo, n: match\.index, from: run\.sourceLabel \}\)\);/);
 });
