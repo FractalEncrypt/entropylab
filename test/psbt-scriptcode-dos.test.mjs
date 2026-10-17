@@ -154,10 +154,10 @@ const bigLeafPsbt = (leafSize, sigCount, alternate) => {
 
 const DEADLINE_MS = 20000;
 // `ms` is wall-clock time. `cpuMs` is the CPU time the call itself used: the
-// worker thread's own where Node has process.threadCpuUsage (23.9+), else
-// this test process's, whose main thread sits idle awaiting the worker. Other
-// processes' load (a parallel test file, a busy machine) counts in neither,
-// so a ratio of two cpuMs compares the work, not the moment it ran in.
+// worker thread's own where Node has process.threadCpuUsage (22.19+, 23.9+),
+// else this test process's, whose main thread sits idle awaiting the worker.
+// Other processes' load (a parallel test file, a busy machine) counts in
+// neither, so a ratio of two cpuMs compares the work, not the moment it ran in.
 const inspectInWorker = (psbt, timeoutMs = DEADLINE_MS, issue = "#535") =>
   new Promise((resolve, reject) => {
     const worker = new Worker(
