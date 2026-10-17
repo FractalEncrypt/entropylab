@@ -101,13 +101,44 @@ If a translation PR stalls: check that auto-merge is allowed (step 3), that
 the gate and suite checks are required *and* passing, and read the job log —
 the publish step fails loudly with the reason.
 
+## 5. Correct a committed translation
+
+The automation fills only missing strings, so a wrong translation stays
+wrong, and a hand edit to `src/locales/` fails the gate. Fix it through
+`scripts/i18n-context.json` (issue #862) in an ordinary reviewed PR, keyed by
+the English string:
+
+```json
+{
+  "Output public key": {
+    "note": "A label, not an instruction: \"Output\" is a transaction output.",
+    "retranslate": { "de": "Öffentlichen Schlüssel ausgeben" },
+    "mustContain": { "de": ["Output"] }
+  }
+}
+```
+
+- `retranslate` pins the exact committed value to replace. While the
+  catalog still holds it, the next run translates the string again and puts
+  the result in the same place. After the bot's PR merges, the pin no longer
+  matches and the entry has no further effect, so leave it or delete it.
+- `note` (all languages) and `noteByLanguage` reach both the translate and
+  audit calls whenever the string is translated.
+- `mustContain` lists text a translation must include, such as a browser's
+  own name for a setting. A translation without it is dropped, and the string
+  shows in English until a run gets it right.
+
+Merging the context file starts a run (it matches `scripts/i18n-*`). A test
+fails if an entry names a string that is no longer in the source, so an
+English change that retires a string must update the file too.
+
 ## Security boundaries (what not to weaken)
 
 - Job A has `contents: read` and the LLM secret; it cannot write the repo.
 - Job B has the App token and never receives `TRANSLATE_API_KEY`.
-- The model receives only committed English strings and committed catalog
-  examples — never issue/PR text or web content — and returns
-  schema-constrained JSON.
+- The model receives only committed English strings, committed catalog
+  examples and the committed `scripts/i18n-context.json` — never issue/PR
+  text or web content — and returns schema-constrained JSON.
 - The gate checks App identity, branch namespace, the exact two-file scope
   (`src/locales/<lang>.json` + `src/locales/.sources/<lang>.json`), and
   catalog/sidecar validity — the label alone is never trusted.

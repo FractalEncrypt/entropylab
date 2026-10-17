@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { chat, languageWorkload, translateLanguage, translationSchema } from "../scripts/i18n-translate.mjs";
+import { CONTEXT_PATH, chat, contextProblems, languageWorkload, loadContext, translateLanguage, translationSchema } from "../scripts/i18n-translate.mjs";
+import { collectSources } from "../scripts/i18n-sources.mjs";
 import { hashSource, sidecarProblems, catalogProblems } from "../scripts/i18n-validate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +67,7 @@ const gappedRoot = async (gaps) => {
 };
 
 test("the workload derives from the same extraction as the sync check", async () => {
-  const { sources, catalog, keep, dead, missing } = await languageWorkload(root, "es");
+  const { sources, catalog, keep, stale, dead, missing } = await languageWorkload(root, "es");
   // The committed es catalog is partial by design; the invariants that must
   // hold regardless of how many keys are missing or awaiting post-merge
   // dead-key pruning after an English UI change:
@@ -76,7 +77,8 @@ test("the workload derives from the same extraction as the sync check", async ()
   // copy changes while saying nothing about the extraction being sound.
   assert.ok(Object.keys(keep).length > Object.keys(catalog).length * 0.8, "most committed entries survive");
   assert.ok(Object.keys(keep).every((key) => sources.has(key)), "kept entries come from the shared source extraction");
-  assert.equal(Object.keys(keep).length + dead, Object.keys(catalog).length, "every committed entry is retained or queued for dead-key pruning");
+  assert.equal(Object.keys(keep).length + stale.length + dead, Object.keys(catalog).length, "every committed entry is retained, pinned for retranslation (scripts/i18n-context.json), or queued for dead-key pruning");
+  for (const key of stale) assert.ok(missing.includes(key), "a pinned entry is translated again");
   for (const key of missing) assert.equal(typeof key, "string");
 });
 
@@ -178,6 +180,134 @@ test("a missing model response key is dropped, not invented", async () => {
     const report = await translateLanguage({ root: tree, lang: "es", outDir, client, limit: 2, log: quiet });
     assert.equal(report.translated, 0);
     assert.equal(report.dropped.length, 2);
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+// --- committed per-string context (issue #862) ------------------------------
+
+const writeContext = (tree, context) => {
+  mkdirSync(join(tree, "scripts"), { recursive: true });
+  writeFileSync(join(tree, CONTEXT_PATH), JSON.stringify(context, null, 2) + "\n");
+};
+// The first live es entry short enough to sit in the glossary, so the tests
+// can see a pinned value leave it. Taken before any context file exists.
+const glossaryEntry = async (tree) => {
+  const { keep, sources } = await languageWorkload(tree, "es");
+  const [key, value] = Object.entries(keep).find(([k, v]) => k.length <= 80 && v.length <= 80);
+  return { key, value, live: Object.keys(JSON.parse(readFileSync(join(tree, "src/locales/es.json"), "utf8"))).filter((k) => sources.has(k)) };
+};
+
+test("the committed context file names current English strings, known languages and well-formed fields", async () => {
+  const context = loadContext(root);
+  assert.deepEqual(contextProblems(context, await collectSources(root)), []);
+  for (const [key, entry] of Object.entries(context)) {
+    for (const [lang, terms] of Object.entries(entry.mustContain ?? {})) {
+      // A pinned value that still lacks a required term is exactly what the
+      // pin is there to replace; a required term must also survive the
+      // validator, so it can never contain markup or a placeholder.
+      for (const term of terms) assert.ok(!/[<>{}]/.test(term), `${key} ${lang}: ${term}`);
+    }
+  }
+});
+
+test("a malformed context file fails the run and writes nothing", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(1);
+  try {
+    assert.deepEqual(contextProblems([], null), ["the context file must be a JSON object"]);
+    const bad = {
+      "no such string": { note: "x" },
+      "Output public key": { note: "", retranslate: { xx: "y" }, mustContain: { es: [] }, notes: "typo" },
+    };
+    const problems = contextProblems(bad, await collectSources(root));
+    for (const expected of ["is not a current English source string", "note must be non-empty text", "unknown language \"xx\"", "mustContain.es has the wrong shape", "unknown field \"notes\""]) {
+      assert.ok(problems.some((problem) => problem.includes(expected)), expected);
+    }
+    writeContext(tree, { "Output public key": { retranslate: ["de"] } });
+    await assert.rejects(translateLanguage({ root: tree, lang: "es", outDir, client: stubClient(), log: quiet }), /i18n-context\.json is malformed/);
+    assert.equal(existsSync(join(outDir, "es.json")), false);
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("without a context file, the translate request is unchanged", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(1);
+  try {
+    const client = stubClient();
+    await translateLanguage({ root: tree, lang: "es", outDir, client, limit: 1, log: quiet });
+    const translateCall = client.calls.find((c) => c.name === "translate");
+    assert.deepEqual(Object.keys(JSON.parse(translateCall.messages[1].content)), ["glossary", "strings"]);
+    assert.doesNotMatch(translateCall.messages[0].content, /notes/);
+    const auditCall = client.calls.find((c) => c.name === "audit");
+    assert.ok(JSON.parse(auditCall.messages[1].content).pairs.every((pair) => !("note" in pair)));
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a pinned value is retranslated in place with its note, then goes quiet", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(0);
+  try {
+    const { key, value, live } = await glossaryEntry(tree);
+    writeContext(tree, { [key]: { note: "Context for every language.", noteByLanguage: { es: "Spanish only.", de: "German only." }, retranslate: { es: value, de: "not this" } } });
+    const client = stubClient();
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, log: quiet });
+    assert.equal(report.stale, 1);
+
+    const translateCall = client.calls.find((c) => c.name === "translate" && JSON.parse(c.messages[1].content).strings.includes(key));
+    const request = JSON.parse(translateCall.messages[1].content);
+    assert.deepEqual(request.notes, { [key]: "Context for every language. Spanish only." });
+    assert.ok(!(key in request.glossary), "the pinned value is not offered back as terminology");
+    assert.match(translateCall.messages[0].content, /"notes"/);
+    const auditCall = client.calls.find((c) => c.name === "audit" && JSON.parse(c.messages[1].content).pairs.some((pair) => pair.key === key));
+    const pair = JSON.parse(auditCall.messages[1].content).pairs.find((p) => p.key === key);
+    assert.equal(pair.note, "Context for every language. Spanish only.");
+    assert.match(auditCall.messages[0].content, /"note"/);
+
+    // The replacement takes the old value's place among the live entries;
+    // nothing else moves.
+    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
+    assert.equal(catalog[key], `${key} [translated]`);
+    assert.deepEqual(Object.keys(catalog).slice(0, live.length), live);
+    assert.deepEqual(catalogProblems(catalog), []);
+    const sidecar = JSON.parse(readFileSync(join(outDir, ".sources", "es.json"), "utf8"));
+    assert.deepEqual(sidecarProblems(catalog, sidecar), { invalid: [], drift: [] });
+
+    // Once the replacement is committed the pin no longer matches: the next
+    // run leaves the string alone.
+    cpSync(join(outDir, "es.json"), join(tree, "src/locales/es.json"));
+    cpSync(join(outDir, ".sources", "es.json"), join(tree, "src/locales/.sources/es.json"));
+    const next = await languageWorkload(tree, "es");
+    assert.deepEqual(next.stale, []);
+    assert.ok(!next.missing.includes(key));
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a translation without a required term is dropped, and a pinned value falls back to English", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(0);
+  try {
+    const { key, value } = await glossaryEntry(tree);
+    writeContext(tree, { [key]: { retranslate: { es: value }, mustContain: { es: ["Término exacto"] } } });
+    const client = stubClient();
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, log: quiet });
+    assert.ok(report.dropped.some((d) => d.key === key && d.problem === 'context: must contain "Término exacto"'));
+    const audited = client.calls.filter((c) => c.name === "audit").flatMap((c) => JSON.parse(c.messages[1].content).pairs.map((p) => p.key));
+    assert.ok(!audited.includes(key), "a value missing its required term never reaches the audit");
+    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
+    assert.ok(!(key in catalog), "the value the pin marks as wrong is not kept");
+    assert.deepEqual(catalogProblems(catalog), []);
   } finally {
     rmSync(outDir, { recursive: true, force: true });
     rmSync(tree, { recursive: true, force: true });
