@@ -174,6 +174,58 @@ test("changes that invalidate a vanity run still cancel it", () => {
   assert.equal(cancelled, 2, "script and method changes must each cancel the stale run");
 });
 
+test("a language switch says the Vanity status and error again in the new language", () => {
+  // A filled-in string is not a catalog key, so the static sweep cannot carry
+  // it across a switch: the station keeps its status and error lines as notes
+  // and renders them, and the rest of its text, again.
+  let locale = "en";
+  const elements = { "vanity-status": { textContent: "" }, "vanity-error": { textContent: "" } }, rendered = [];
+  const api = new Function(
+    "document", "hodlTText", "hodlVanitySyncScriptNote", "hodlVanitySyncSource", "hodlRenderVanityOut",
+    `let hodlVanityStatusNote = null, hodlVanityErrorNote = null;
+     ${appSlice("hodlNote")}
+     ${appSlice("hodlFormatNote")}
+     ${appSlice("hodlVanitySetStatus")}
+     ${appSlice("hodlSetVanityError")}
+     ${appSlice("hodlRefreshVanityLocale")}
+     return { hodlNote, hodlVanitySetStatus, hodlSetVanityError, hodlRefreshVanityLocale };`,
+  )(
+    { getElementById: (id) => elements[id] ?? null },
+    (key, vars) => `<${locale}>` + key.replace(/\{(\w+)\}/g, (whole, name) => (vars?.[name] == null ? whole : String(vars[name]))),
+    () => rendered.push("prefix help"),
+    () => rendered.push("source panel"),
+    () => rendered.push("matches"),
+  );
+  const note = api.hodlNote, status = () => elements["vanity-status"].textContent, error = () => elements["vanity-error"].textContent;
+
+  api.hodlVanitySetStatus(note("{outcome}: {done} candidates, {found} matches. Next counter: {next}.", { outcome: note("Range complete"), done: "300", found: 8, next: "300" }));
+  api.hodlSetVanityError(note("Key {key} is no longer in Key Station, so there is nothing to update.", { key: "5436d724" }));
+  assert.equal(status(), "<en><en>Range complete: 300 candidates, 8 matches. Next counter: 300.");
+  assert.equal(error(), "<en>Key 5436d724 is no longer in Key Station, so there is nothing to update.");
+
+  locale = "de";
+  api.hodlRefreshVanityLocale();
+  assert.deepEqual(rendered, ["prefix help", "source panel", "matches"], "the station's other text renders again too");
+  assert.equal(status(), "<de><de>Range complete: 300 candidates, 8 matches. Next counter: 300.", "the status, and the outcome inside it, follow the switch");
+  assert.equal(error(), "<de>Key 5436d724 is no longer in Key Station, so there is nothing to update.", "the error follows the switch");
+
+  // A worker's own message has no catalog key and stays as it was; a cleared
+  // error stays cleared.
+  api.hodlSetVanityError({ raw: "worker failed" });
+  api.hodlRefreshVanityLocale();
+  assert.equal(error(), "worker failed");
+  api.hodlSetVanityError(null);
+  api.hodlRefreshVanityLocale();
+  assert.equal(error(), "", "a cleared error must not come back on a language switch");
+
+  // hodlApplyLocale runs the refresh, and redraws the station key chips, whose
+  // labels are filled in too.
+  assert.match(appSlice("hodlApplyLocale"), /hodlRefreshPsbtLocale\(\);\s*hodlRefreshVanityLocale\(\);\s*hodlRefreshStationKeyPickers\(\);/);
+  // The match table's hidden action header is escaped once, from the text
+  // catalog: French "État de l'enfant" must not reach a screen reader as "&#39;".
+  assert.match(appSlice("hodlRenderVanityOut"), /let actionHeader = run\.sourceKind === "bip85" \? hodlTText\("Child status"\) : hodlTText\("Update Key"\);/);
+});
+
 test("Silent Payment custom characters constrain only the first free character", () => {
   const filter = new Function(`${appSlice("hodlFilterVanityPrefix")}; return hodlFilterVanityPrefix;`)();
   const silentPayment = { prefix: "sp1qq", bech32: true, firstFree: "gf2tvdw0" };

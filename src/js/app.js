@@ -16414,7 +16414,7 @@ function hodlSyncWorkspaceOverflow() {
 // or an account index of a wallet the user already holds, and Update key
 // writes it back to that key through the same Edit input → Derive path the
 // Keys tab uses by hand.
-var hodlVanityGrinder = null, hodlVanityMatches = [], hodlVanityFound = 0, hodlVanityRunning = false, hodlVanityReveal = false, hodlVanityDisplayLimit = 100, hodlVanitySource = "", hodlVanityRun = null, hodlVanityApplying = false, hodlVanityStopFirst = false, hodlVanityBench = null, hodlVanityBenchPending = false, hodlVanityLiveRate = 0;
+var hodlVanityGrinder = null, hodlVanityMatches = [], hodlVanityFound = 0, hodlVanityRunning = false, hodlVanityReveal = false, hodlVanityDisplayLimit = 100, hodlVanitySource = "", hodlVanityRun = null, hodlVanityApplying = false, hodlVanityStopFirst = false, hodlVanityBench = null, hodlVanityBenchPending = false, hodlVanityLiveRate = 0, hodlVanityStatusNote = null, hodlVanityErrorNote = null;
 // Only derived HD-root keys are listed — the same set the BIP-85 and Silent
 // Payments pickers offer. A BIP-85 child can be searched, but remains an
 // immutable child of its parent rather than a Key Station key to update.
@@ -16428,8 +16428,7 @@ function hodlVanityKeyLabel(state) {
   return state ? state.result?.masterFingerprint || state.name || "Key " + state.number : "";
 }
 function hodlPickVanitySessionKey(state) {
-  let error = document.getElementById("vanity-error");
-  if (error) error.textContent = "";
+  hodlSetVanityError(null);
   if (!state) return;
   // Vanity has no End Session, so the selected chip toggles: clicking it
   // again releases the key, as a Multi Signature co-signer chip does.
@@ -16843,7 +16842,7 @@ function hodlRenderVanityOut() {
     : hodlT("Each row is a new BIP39 passphrase for key {key}: the starting passphrase followed by the counter characters. With this key's seed words it derives {where}. Update key writes the passphrase to the key and re-derives it, so the Keys tab, its exports, and the Journal show this wallet. Anyone holding the words and this passphrase holds the coins.", { key: run.sourceLabel, where });
   // The same privacy switch as the key view, red while passphrases show.
   let reveal = derivation ? "" : `<div class="wallet-data-actions no-print">${hodlPrivacyBarMarkup({ id: "vanity-reveal", revealed: hodlVanityReveal, describedBy: "vanity-matches-description" })}</div>`;
-  let actionHeader = run.sourceKind === "bip85" ? hodlT("Child status") : hodlTText("Update Key");
+  let actionHeader = run.sourceKind === "bip85" ? hodlTText("Child status") : hodlTText("Update Key");
   let head = derivation
     ? `<th scope="col">#</th><th scope="col">${hodlT("Account")}</th><th scope="col">${hodlT("Path")}</th><th scope="col">${hodlT("Address")}</th><th scope="col">${hodlT("Key")}</th><th scope="col"><span class="sr-only">${hodlEscapeHtml(actionHeader)}</span></th>`
     : `<th scope="col">#</th><th scope="col">${hodlT("Counter")}</th><th scope="col"><span class="private-heading${hodlVanityReveal ? " is-revealed" : ""}">${hodlT("Passphrase")}${hodlPrivacyEyeMarkup(hodlVanityReveal)}</span></th><th scope="col">${hodlT("Address")}</th><th scope="col">${run.sourceKind === "bip85" ? hodlT("Derived key") : hodlT("Key after update")}</th><th scope="col"><span class="sr-only">${hodlEscapeHtml(actionHeader)}</span></th>`;
@@ -16898,9 +16897,26 @@ function hodlVanitySyncControls() {
   }
   if (progress) progress.hidden = !hodlVanityRunning;
 }
-function hodlVanitySetStatus(text) {
+// The status and error lines keep what they say as notes, so a language
+// switch can say it again (hodlRefreshVanityLocale).
+function hodlVanitySetStatus(note) {
+  hodlVanityStatusNote = note;
   let status = document.getElementById("vanity-status");
-  if (status) status.textContent = text;
+  if (status) status.textContent = hodlFormatNote(note);
+}
+function hodlSetVanityError(note) {
+  hodlVanityErrorNote = note || null;
+  let error = document.getElementById("vanity-error");
+  if (error) error.textContent = !note ? "" : note.key ? hodlFormatNote(note) : note.raw || "";
+}
+// The station fills its text in when it renders, so a language switch
+// renders it again; the static sweep cannot match a filled-in string.
+function hodlRefreshVanityLocale() {
+  hodlVanitySyncScriptNote();
+  hodlVanitySyncSource();
+  hodlRenderVanityOut();
+  if (hodlVanityStatusNote) hodlVanitySetStatus(hodlVanityStatusNote);
+  hodlSetVanityError(hodlVanityErrorNote);
 }
 function hodlVanityStop() {
   if (hodlVanityGrinder && hodlVanityRunning) hodlVanityGrinder.stop();
@@ -16910,10 +16926,10 @@ function hodlVanityCancel() {
   if (hodlVanityGrinder) hodlVanityGrinder.cancel();
   hodlVanityRunning = false;
   hodlVanityLiveRate = 0;
-  if (wasRunning) hodlVanitySetStatus(hodlTText("Stopped."));
+  if (wasRunning) hodlVanitySetStatus(hodlNote("Stopped."));
   hodlVanitySyncControls();
 }
-function hodlVanityClearResults(status = hodlTText("Idle. No range has been ground this session.")) {
+function hodlVanityClearResults(status = hodlNote("Idle. No range has been ground this session.")) {
   hodlVanityMatches = [];
   hodlVanityFound = 0;
   hodlVanityReveal = false;
@@ -16939,13 +16955,12 @@ function hodlVanityMethodChanged() {
   hodlVanitySyncMethod();
 }
 function hodlRunVanity() {
-  let error = document.getElementById("vanity-error");
-  if (error) error.textContent = "";
+  hodlSetVanityError(null);
   let inputs;
   try {
     inputs = hodlVanityParseInputs();
   } catch (exception) {
-    if (error) error.textContent = exception.message || String(exception);
+    hodlSetVanityError(hodlErrorSpecFrom(exception));
     return;
   }
   hodlVanityMatches = [];
@@ -16956,7 +16971,7 @@ function hodlRunVanity() {
   hodlRenderVanityOut();
   hodlVanityRunning = true;
   hodlVanitySyncControls();
-  hodlVanitySetStatus(inputs.method === "derivation" ? hodlTText("Starting workers — stepping through account indexes of key {key}…", { key: inputs.sourceLabel }) : hodlTText("Starting workers — extending key {key}'s passphrase with the counter characters…", { key: inputs.sourceLabel }));
+  hodlVanitySetStatus(inputs.method === "derivation" ? hodlNote("Starting workers — stepping through account indexes of key {key}…", { key: inputs.sourceLabel }) : hodlNote("Starting workers — extending key {key}'s passphrase with the counter characters…", { key: inputs.sourceLabel }));
   let progressBar = document.getElementById("vanity-progress");
   hodlVanityGrinder = new VanityGrinder({
     onProgress: ({ done, total, rate }) => {
@@ -16968,7 +16983,7 @@ function hodlRunVanity() {
         if (fill) fill.style.width = `${percent}%`;
         if (label) label.textContent = `${percent.toFixed(1)}%`;
       }
-      hodlVanitySetStatus(hodlTText(hodlVanityFound === 1 ? "{done} / {total} candidates · {rate}/s · {found} match" : "{done} / {total} candidates · {rate}/s · {found} matches", { done: hodlVanityFormatCount(done), total: hodlVanityFormatCount(total), rate: hodlVanityFormatCount(Math.round(rate)), found: hodlVanityFound }));
+      hodlVanitySetStatus(hodlNote(hodlVanityFound === 1 ? "{done} / {total} candidates · {rate}/s · {found} match" : "{done} / {total} candidates · {rate}/s · {found} matches", { done: hodlVanityFormatCount(done), total: hodlVanityFormatCount(total), rate: hodlVanityFormatCount(Math.round(rate)), found: hodlVanityFound }));
       // The live rate is the best estimate while the grind runs.
       if (rate > 0 && Math.abs(rate - hodlVanityLiveRate) / rate > 0.05) {
         hodlVanityLiveRate = rate;
@@ -16990,14 +17005,15 @@ function hodlRunVanity() {
       // resuming may repeat work from later buckets but cannot miss a gap.
       let startField = document.getElementById(inputs.method === "derivation" ? "vanity-account-start" : "vanity-start");
       if (startField) startField.value = nextStart.toString();
-      let outcome = stopped ? (hodlVanityStopFirst && hodlVanityFound > 0 ? hodlTText("Stopped at first match") : hodlTText("Stopped")) : hodlTText("Range complete"), accounts = inputs.method === "derivation";
-      let tally = hodlTText(hodlVanityFound === 1 ? "{outcome}: {done} candidates, {found} match." : "{outcome}: {done} candidates, {found} matches.", { outcome, done: hodlVanityFormatCount(done), found: hodlVanityFound });
-      hodlVanitySetStatus(tally + " " + hodlTText(accounts ? "Next account: {next}." : "Next counter: {next}.", { next: nextStart.toString() }));
+      let outcome = stopped ? (hodlVanityStopFirst && hodlVanityFound > 0 ? hodlNote("Stopped at first match") : hodlNote("Stopped")) : hodlNote("Range complete"), accounts = inputs.method === "derivation", one = hodlVanityFound === 1;
+      hodlVanitySetStatus(hodlNote(accounts
+        ? one ? "{outcome}: {done} candidates, {found} match. Next account: {next}." : "{outcome}: {done} candidates, {found} matches. Next account: {next}."
+        : one ? "{outcome}: {done} candidates, {found} match. Next counter: {next}." : "{outcome}: {done} candidates, {found} matches. Next counter: {next}.", { outcome, done: hodlVanityFormatCount(done), found: hodlVanityFound, next: nextStart.toString() }));
       hodlVanitySyncControls();
       hodlVanityEstimate();
     },
     onError: (message) => {
-      if (error) error.textContent = message;
+      hodlSetVanityError({ raw: message });
     },
   });
   hodlVanityGrinder.start(inputs);
@@ -17048,27 +17064,27 @@ function hodlVanityMatchAddress(match, run, state) {
 // (id, colour, custom name) even when a new passphrase gives it a new
 // fingerprint; the lab tab gets back whatever the user had in it.
 async function hodlVanityApplyMatch(index) {
-  let error = document.getElementById("vanity-error"), match = hodlVanityMatches[index], run = hodlVanityRun;
-  if (error) error.textContent = "";
+  let match = hodlVanityMatches[index], run = hodlVanityRun;
+  hodlSetVanityError(null);
   if (!match || !run || hodlVanityApplying || match.savedTo) return;
   if (run.sourceKind === "bip85") {
-    if (error) error.textContent = hodlTText("A BIP-85 child is fixed by its parent and index. Copy the match instead of changing the child.");
+    hodlSetVanityError(hodlNote("A BIP-85 child is fixed by its parent and index. Copy the match instead of changing the child."));
     return;
   }
   let state = hodlKeys.find((candidate) => candidate.id === run.sourceId && !candidate.isLab);
   if (!state) {
-    if (error) error.textContent = hodlTText("Key {key} is no longer in Key Station, so there is nothing to update.", { key: run.sourceLabel });
+    hodlSetVanityError(hodlNote("Key {key} is no longer in Key Station, so there is nothing to update.", { key: run.sourceLabel }));
     return;
   }
   // The grind is anchored to the key it started on (audit B5): an edit to the
   // words or passphrase since makes these matches foreign to the key standing
   // here, and the path check below cannot see it.
   if ((state.result?.masterFingerprint || "") !== run.sourceFingerprint) {
-    if (error) error.textContent = hodlTText("Key {key} changed since this grind started — its matches belong to the key it was. Grind again.", { key: hodlVanityKeyLabel(state) });
+    hodlSetVanityError(hodlNote("Key {key} changed since this grind started — its matches belong to the key it was. Grind again.", { key: hodlVanityKeyLabel(state) }));
     return;
   }
   if (hodlActiveDerivation) {
-    if (error) error.textContent = hodlTText("A derivation is already running on the Keys tab — wait for it to finish.");
+    hodlSetVanityError(hodlNote("A derivation is already running on the Keys tab — wait for it to finish."));
     return;
   }
   // The key can be re-derived in place since the grind (same fingerprint,
@@ -17081,12 +17097,12 @@ async function hodlVanityApplyMatch(index) {
     plan.node?.fill(0);
     path = [...plan.pathPrefix, ...plan.path];
   } catch (exception) {
-    if (error) error.textContent = exception.message || String(exception);
+    hodlSetVanityError(hodlErrorSpecFrom(exception));
     return;
   }
   let counterSlot = run.method === "derivation" ? 2 : -1;
   if (path.length !== run.path.length || path.some((component, slot) => slot !== counterSlot && component !== run.path[slot])) {
-    if (error) error.textContent = hodlTText("Key {key} now derives at {now}, but this match was ground at {then}. Set the path back on the Keys tab, or grind again.", { key: hodlVanityKeyLabel(state), now: hodlDisplayDerivationPath(vanityPathString(path)), then: hodlDisplayDerivationPath(run.pathText) });
+    hodlSetVanityError(hodlNote("Key {key} now derives at {now}, but this match was ground at {then}. Set the path back on the Keys tab, or grind again.", { key: hodlVanityKeyLabel(state), now: hodlDisplayDerivationPath(vanityPathString(path)), then: hodlDisplayDerivationPath(run.pathText) }));
     return;
   }
   // Fail closed on the record itself (audit B5): the address the key will
@@ -17096,11 +17112,11 @@ async function hodlVanityApplyMatch(index) {
   try {
     recomputed = hodlVanityMatchAddress(match, run, state);
   } catch (exception) {
-    if (error) error.textContent = exception.message || String(exception);
+    hodlSetVanityError(hodlErrorSpecFrom(exception));
     return;
   }
   if (recomputed !== match.address) {
-    if (error) error.textContent = hodlTText("Key {key} derives {found} at this match's path, not the recorded address {expected} — the match record is inconsistent. Nothing was changed; grind again.", { key: hodlVanityKeyLabel(state), found: recomputed, expected: match.address || hodlTText("(none recorded)") });
+    hodlSetVanityError(hodlNote("Key {key} derives {found} at this match's path, not the recorded address {expected} — the match record is inconsistent. Nothing was changed; grind again.", { key: hodlVanityKeyLabel(state), found: recomputed, expected: match.address || hodlNote("(none recorded)") }));
     return;
   }
   hodlVanityApplying = true;
@@ -17122,7 +17138,7 @@ async function hodlVanityApplyMatch(index) {
     document.getElementById("calc-card").hidden = hodlWorkspace !== "calc";
     await hodlDeriveWithProgress("key", (progress) => hodlCalculateKey(progress, "update"));
     let active = hodlKeys[hodlActiveKey];
-    if (!active || active.isLab || !active.result) throw new Error(active?.error || hodlTText("Deriving the updated key failed."));
+    if (!active || active.isLab || !active.result) throw active?.error ? new Error(active.error) : hodlError("Deriving the updated key failed.");
     let updated = hodlKeys[hodlActiveKey];
     match.savedTo = hodlVanityKeyLabel(updated);
     // The key now carries the identity this run just wrote; later matches
@@ -17133,11 +17149,11 @@ async function hodlVanityApplyMatch(index) {
     if (hodlSpSource === "key:" + updated.id) hodlPickSpSessionKey(updated);
     if (hodlBip85Source === "key:" + updated.id) hodlPickBip85SessionKey(updated);
     let changed = run.sourceLabel !== match.savedTo;
-    hodlVanitySetStatus(hodlTText(match.index !== null
+    hodlVanitySetStatus(hodlNote(match.index !== null
       ? changed ? "Saved to key {key}: account {n} is now on the key — its master fingerprint and LifeHash changed from {from} to {key}. Open the Keys tab to review and export it." : "Saved to key {key}: account {n} is now on the key. Open the Keys tab to review and export it."
       : changed ? "Saved to key {key}: the new passphrase is now on the key — its master fingerprint and LifeHash changed from {from} to {key}. Open the Keys tab to review and export it." : "Saved to key {key}: the new passphrase is now on the key. Open the Keys tab to review and export it.", { key: match.savedTo, n: match.index, from: run.sourceLabel }));
   } catch (exception) {
-    if (error) error.textContent = exception.message || String(exception);
+    hodlSetVanityError(hodlErrorSpecFrom(exception));
   } finally {
     if (lab) {
       let current = hodlKeys.findIndex((candidate) => candidate.isLab);
@@ -17724,14 +17740,14 @@ function hodlInitSecretFieldAutoClear() {
     hodlVanityRun = null;
     hodlVanitySource = "";
     hodlVanityApplying = false;
-    let vanityPass = document.getElementById("vanity-pass"), vanityOut = document.getElementById("vanity-out"), vanityError = document.getElementById("vanity-error"), vanityStatus = document.getElementById("vanity-status");
+    let vanityPass = document.getElementById("vanity-pass"), vanityOut = document.getElementById("vanity-out");
     if (vanityPass) vanityPass.textContent = "";
     if (vanityOut) {
       vanityOut.innerHTML = "";
       vanityOut.style.removeProperty("--vanity-pass-width");
     }
-    if (vanityError) vanityError.textContent = "";
-    if (vanityStatus) vanityStatus.textContent = hodlTText("Idle. No range has been ground this session.");
+    hodlSetVanityError(null);
+    hodlVanitySetStatus(hodlNote("Idle. No range has been ground this session."));
     hodlVanitySyncSource();
     hodlVanitySyncControls();
     // The keys above were just reset, so their passphrases (and thus the
@@ -17827,6 +17843,8 @@ function hodlApplyLocale() {
   if (hodlWalletResult?.kind === "msig") hodlShowMsig();
   else if (hodlWalletResult) hodlRefreshKeyResult();
   hodlRefreshPsbtLocale();
+  hodlRefreshVanityLocale();
+  hodlRefreshStationKeyPickers();
   hodlApplyTheme(hodlReadThemeMode());
   hodlRefreshWorkspaceErrors();
   hodlSecurityLog?.refresh();
