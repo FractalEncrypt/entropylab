@@ -44,14 +44,21 @@ export const LANGUAGE_NAMES = { es: "Spanish", fr: "French", pt: "Portuguese", d
 //   retranslate     { lang: the committed value to replace }: while the
 //                   catalog still holds exactly that value it is translated
 //                   again, in place. Once replaced, the pin no longer matches
-//                   and the entry goes quiet, so a run never churns it;
+//                   and the entry goes quiet, so a run never churns it. A
+//                   retranslation that fails any check below leaves the
+//                   committed value as it is, and the next run tries again;
 //   mustContain     { lang: [substrings] } every translation of the key must
-//                   carry, such as a browser's own name for a setting. One
-//                   that does not is dropped and the key stays English.
+//                   carry, such as a browser's own name for a setting;
+//   exact           { lang: value } the translation must be exactly this
+//                   string, for a reviewed correction whose wording is
+//                   settled (a one-word fix that keeps the rest of the
+//                   committed sentence as it is).
+// A translation that fails mustContain or exact is dropped on arrival: a
+// missing string stays English, and a pinned one keeps its committed value.
 // The file is committed repo content, reviewed like code: it is not a way
 // for anything outside the tree to reach the model.
 export const CONTEXT_PATH = "scripts/i18n-context.json";
-const CONTEXT_FIELDS = new Set(["note", "noteByLanguage", "retranslate", "mustContain"]);
+const CONTEXT_FIELDS = new Set(["note", "noteByLanguage", "retranslate", "mustContain", "exact"]);
 
 export function contextProblems(context, sources) {
   const problems = [];
@@ -75,6 +82,7 @@ export function contextProblems(context, sources) {
     if ("noteByLanguage" in entry) byLanguage(key, "noteByLanguage", entry.noteByLanguage, isText);
     if ("retranslate" in entry) byLanguage(key, "retranslate", entry.retranslate, isText);
     if ("mustContain" in entry) byLanguage(key, "mustContain", entry.mustContain, (list) => Array.isArray(list) && list.length > 0 && list.every(isText));
+    if ("exact" in entry) byLanguage(key, "exact", entry.exact, isText);
   }
   return problems;
 }
@@ -101,10 +109,15 @@ const contextNote = (context, key, lang) => {
   return [entry?.note, forLanguage(entry?.noteByLanguage, lang)].filter(Boolean).join(" ");
 };
 
-const mustContainProblems = (context, key, lang, value) =>
-  (forLanguage(contextEntry(context, key)?.mustContain, lang) ?? [])
+const contextValueProblems = (context, key, lang, value) => {
+  const entry = contextEntry(context, key);
+  const problems = (forLanguage(entry?.mustContain, lang) ?? [])
     .filter((term) => !value.includes(term))
     .map((term) => `context: must contain ${JSON.stringify(term)}`);
+  const exact = forLanguage(entry?.exact, lang);
+  if (exact !== undefined && value !== exact) problems.push("context: must be exactly the committed correction");
+  return problems;
+};
 
 const DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -310,7 +323,7 @@ export async function translateLanguage({ root, lang, outDir, client, limit, log
         }
         // Validate on arrival: a single bad placeholder or disallowed tag
         // must not poison the batch — the key just stays missing.
-        const problems = [...valueProblems(key, value), ...mustContainProblems(context, key, lang, value)];
+        const problems = [...valueProblems(key, value), ...contextValueProblems(context, key, lang, value)];
         if (problems.length) {
           dropped.push({ key, problem: problems.join("; ") });
           continue;
@@ -341,12 +354,12 @@ export async function translateLanguage({ root, lang, outDir, client, limit, log
   // Preserve the committed key order and append new translations in source
   // order, so the first automated PR is a minimal diff and later ones stay
   // stable. A stale entry's replacement takes its old place; one whose
-  // retranslation was dropped is left out, so the string falls back to
-  // English rather than keep a value its pin marks as wrong.
+  // retranslation was dropped keeps its committed value, so a failed
+  // correction changes nothing a reader sees and the next run tries again.
   const catalogNext = {};
   for (const key of Object.keys(catalog)) {
     if (Object.hasOwn(keep, key)) catalogNext[key] = keep[key];
-    else if (stale.includes(key) && translated[key]) catalogNext[key] = translated[key];
+    else if (stale.includes(key)) catalogNext[key] = translated[key] ?? catalog[key];
   }
   for (const key of missing) if (translated[key] && !Object.hasOwn(catalogNext, key)) catalogNext[key] = translated[key];
   const sidecarNext = Object.fromEntries(Object.keys(catalogNext).map((key) => [key, hashSource(key)]));

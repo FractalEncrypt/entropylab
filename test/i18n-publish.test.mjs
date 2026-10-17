@@ -135,6 +135,7 @@ test("fresh run: branch from rock tip, two file writes, PR opened, labelled, aut
     assert.equal(prCreate.body.head, `${BRANCH_PREFIX}es`);
     assert.equal(prCreate.body.base, "rock");
     assert.equal(prCreate.body.maintainer_can_modify, false);
+    assert.match(prCreate.body.body, /Touches exactly `src\/locales\/es\.json` and `src\/locales\/\.sources\/es\.json`/);
 
     const labels = calls.find((c) => c.method === "PUT" && c.url.includes("/labels"));
     assert.deepEqual(labels.body, { labels: [TRANSLATION_LABEL] });
@@ -147,6 +148,26 @@ test("fresh run: branch from rock tip, two file writes, PR opened, labelled, aut
   } finally {
     server.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a value-only refresh says its sidecar stays as is", async () => {
+  // The committed tree already holds these keys and their sidecar; only a
+  // value changes, as a scripts/i18n-context.json correction does (#862).
+  const dir = mkdtempSync(join(tmpdir(), "i18n-pub-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "i18n-pub-root-"));
+  const { server, calls, url } = await stubGitHub();
+  try {
+    proposals(join(repoRoot, "src/locales"), CATALOG);
+    proposals(dir, { ...CATALOG, Cancel: "Anular" });
+    await publishLanguage({ dir, lang: "es", repoRoot, repo: "o/r", token: "tok", apiUrl: url, log: quiet });
+    const prCreate = calls.find((c) => c.method === "POST" && c.url === "/repos/o/r/pulls");
+    assert.match(prCreate.body.title, /\(\+0 −0 ~1\)$/);
+    assert.match(prCreate.body.body, /Touches only `src\/locales\/es\.json`: its English keys are unchanged/);
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });
 

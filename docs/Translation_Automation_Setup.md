@@ -113,7 +113,7 @@ the English string:
   "Output public key": {
     "note": "A label, not an instruction: \"Output\" is a transaction output.",
     "retranslate": { "de": "Öffentlichen Schlüssel ausgeben" },
-    "mustContain": { "de": ["Output"] }
+    "exact": { "de": "Öffentlicher Output-Schlüssel" }
   }
 }
 ```
@@ -124,9 +124,21 @@ the English string:
   matches and the entry has no further effect, so leave it or delete it.
 - `note` (all languages) and `noteByLanguage` reach both the translate and
   audit calls whenever the string is translated.
+- `exact` is the reviewed wording itself. Use it when only part of a
+  committed sentence is wrong: copy the committed sentence and change just
+  that part, so its words, punctuation, quotation marks and length stay as
+  readers know them. Any other translation is rejected.
 - `mustContain` lists text a translation must include, such as a browser's
-  own name for a setting. A translation without it is dropped, and the string
-  shows in English until a run gets it right.
+  own name for a setting, when the rest of the wording is left to the model.
+- A translation that fails `exact` or `mustContain` is dropped. A missing
+  string then stays English, and a pinned string keeps its committed value,
+  so a failed correction changes nothing on screen and the next run tries
+  again.
+- Translations only ever change words. The validator rejects any
+  translation whose tags differ from its English string's, so none can add
+  bold, code or a line break, or drop a link. Translations render inside
+  the same elements as the English, so fonts, sizes and colours come from
+  the page's CSS.
 
 Merging the context file starts a run (it matches `scripts/i18n-*`). A test
 fails if an entry names a string that is no longer in the source, so an
@@ -139,9 +151,11 @@ English change that retires a string must update the file too.
 - The model receives only committed English strings, committed catalog
   examples and the committed `scripts/i18n-context.json` — never issue/PR
   text or web content — and returns schema-constrained JSON.
-- The gate checks App identity, branch namespace, the exact two-file scope
-  (`src/locales/<lang>.json` + `src/locales/.sources/<lang>.json`), and
-  catalog/sidecar validity — the label alone is never trusted.
+- The gate checks App identity, branch namespace, the one-language scope
+  (`src/locales/<lang>.json`, plus `src/locales/.sources/<lang>.json` when
+  keys change; a value-only correction leaves the sidecar as is), and
+  catalog/sidecar validity of both files on disk — the label alone is never
+  trusted.
 - Auto-merge binds the exact head SHA; a branch that moves after publication
   aborts the merge.
 - The runtime sanitizer (`src/js/i18n-sanitize.js`) remains the final

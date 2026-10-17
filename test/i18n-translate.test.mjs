@@ -10,7 +10,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CONTEXT_PATH, chat, contextProblems, languageWorkload, loadContext, translateLanguage, translationSchema } from "../scripts/i18n-translate.mjs";
 import { collectSources } from "../scripts/i18n-sources.mjs";
-import { hashSource, sidecarProblems, catalogProblems } from "../scripts/i18n-validate.mjs";
+import { contentProblems, gateProblems } from "../scripts/i18n-gate.mjs";
+import { hashSource, sidecarProblems, catalogProblems, valueProblems } from "../scripts/i18n-validate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const quiet = () => {};
@@ -205,10 +206,15 @@ test("the committed context file names current English strings, known languages 
   assert.deepEqual(contextProblems(context, await collectSources(root)), []);
   for (const [key, entry] of Object.entries(context)) {
     for (const [lang, terms] of Object.entries(entry.mustContain ?? {})) {
-      // A pinned value that still lacks a required term is exactly what the
-      // pin is there to replace; a required term must also survive the
-      // validator, so it can never contain markup or a placeholder.
+      // A required term must survive the validator, so it can never carry
+      // markup or a placeholder.
       for (const term of terms) assert.ok(!/[<>{}]/.test(term), `${key} ${lang}: ${term}`);
+    }
+    for (const [lang, exact] of Object.entries(entry.exact ?? {})) {
+      // An exact correction must be committable as it stands, and must
+      // differ from the value it replaces.
+      assert.deepEqual(valueProblems(key, exact), [], `${key} ${lang}`);
+      assert.notEqual(exact, entry.retranslate?.[lang], `${key} ${lang}: the correction changes something`);
     }
   }
 });
@@ -220,10 +226,10 @@ test("a malformed context file fails the run and writes nothing", async () => {
     assert.deepEqual(contextProblems([], null), ["the context file must be a JSON object"]);
     const bad = {
       "no such string": { note: "x" },
-      "Output public key": { note: "", retranslate: { xx: "y" }, mustContain: { es: [] }, notes: "typo" },
+      "Output public key": { note: "", retranslate: { xx: "y" }, mustContain: { es: [] }, exact: { de: 7 }, notes: "typo" },
     };
     const problems = contextProblems(bad, await collectSources(root));
-    for (const expected of ["is not a current English source string", "note must be non-empty text", "unknown language \"xx\"", "mustContain.es has the wrong shape", "unknown field \"notes\""]) {
+    for (const expected of ["is not a current English source string", "note must be non-empty text", "unknown language \"xx\"", "mustContain.es has the wrong shape", "exact.de has the wrong shape", "unknown field \"notes\""]) {
       assert.ok(problems.some((problem) => problem.includes(expected)), expected);
     }
     writeContext(tree, { "Output public key": { retranslate: ["de"] } });
@@ -294,20 +300,73 @@ test("a pinned value is retranslated in place with its note, then goes quiet", a
   }
 });
 
-test("a translation without a required term is dropped, and a pinned value falls back to English", async () => {
+test("a value-only correction becomes a catalog-only diff that the translation gate accepts", async () => {
   const outDir = tmp();
   const tree = await gappedRoot(0);
   try {
     const { key, value } = await glossaryEntry(tree);
-    writeContext(tree, { [key]: { retranslate: { es: value }, mustContain: { es: ["Término exacto"] } } });
-    const client = stubClient();
-    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, log: quiet });
-    assert.ok(report.dropped.some((d) => d.key === key && d.problem === 'context: must contain "Término exacto"'));
-    const audited = client.calls.filter((c) => c.name === "audit").flatMap((c) => JSON.parse(c.messages[1].content).pairs.map((p) => p.key));
-    assert.ok(!audited.includes(key), "a value missing its required term never reaches the audit");
-    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
-    assert.ok(!(key in catalog), "the value the pin marks as wrong is not kept");
-    assert.deepEqual(catalogProblems(catalog), []);
+    writeContext(tree, { [key]: { retranslate: { es: value } } });
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client: stubClient(), log: quiet });
+    assert.equal(report.translated, 1);
+    // The files a pull request of this proposal would change, as git sees
+    // them: a byte difference against the committed tree.
+    const changedFiles = [
+      ["es.json", "src/locales/es.json"],
+      [".sources/es.json", "src/locales/.sources/es.json"],
+    ]
+      .filter(([proposal, committed]) => !readFileSync(join(outDir, proposal)).equals(readFileSync(join(tree, committed))))
+      .map(([, committed]) => committed);
+    assert.deepEqual(changedFiles, ["src/locales/es.json"], "the key-hash sidecar does not move");
+    const slug = "entropylab-translate";
+    assert.deepEqual(gateProblems({ author: `${slug}[bot]`, appSlug: slug, baseRef: "rock", headRef: "i18n/translate-es", changedFiles }), []);
+    cpSync(join(outDir, "es.json"), join(tree, "src/locales/es.json"));
+    assert.deepEqual(contentProblems(tree, "es"), [], "the unchanged sidecar still validates the corrected catalog");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+// The es catalog a run would publish: its proposal if it wrote one, else the
+// committed catalog unchanged.
+const resultCatalog = (outDir, tree) => JSON.parse(readFileSync(existsSync(join(outDir, "es.json")) ? join(outDir, "es.json") : join(tree, "src/locales/es.json"), "utf8"));
+
+test("a retranslation without a required term or its exact wording is dropped, and the committed value stays", async () => {
+  for (const [label, field, problem] of [
+    ["mustContain", { mustContain: { es: ["Término exacto"] } }, 'context: must contain "Término exacto"'],
+    ["exact", { exact: { es: "Una frase exacta" } }, "context: must be exactly the committed correction"],
+  ]) {
+    const outDir = tmp();
+    const tree = await gappedRoot(0);
+    try {
+      const { key, value } = await glossaryEntry(tree);
+      writeContext(tree, { [key]: { retranslate: { es: value }, ...field } });
+      const client = stubClient();
+      const report = await translateLanguage({ root: tree, lang: "es", outDir, client, log: quiet });
+      assert.ok(report.dropped.some((d) => d.key === key && d.problem === problem), label);
+      const audited = client.calls.filter((c) => c.name === "audit").flatMap((c) => JSON.parse(c.messages[1].content).pairs.map((p) => p.key));
+      assert.ok(!audited.includes(key), `${label}: a rejected value never reaches the audit`);
+      // A failed correction changes nothing a reader sees; the pin still
+      // matches, so the next run tries again.
+      assert.equal(resultCatalog(outDir, tree)[key], value, label);
+      if (existsSync(join(outDir, "es.json"))) cpSync(join(outDir, "es.json"), join(tree, "src/locales/es.json"));
+      assert.deepEqual((await languageWorkload(tree, "es")).stale, [key], label);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(tree, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a retranslation that matches its exact wording is written", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(0);
+  try {
+    const { key, value } = await glossaryEntry(tree);
+    writeContext(tree, { [key]: { retranslate: { es: value }, exact: { es: `${key} [translated]` } } });
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client: stubClient(), log: quiet });
+    assert.equal(report.dropped.length, 0);
+    assert.equal(resultCatalog(outDir, tree)[key], `${key} [translated]`);
   } finally {
     rmSync(outDir, { recursive: true, force: true });
     rmSync(tree, { recursive: true, force: true });
