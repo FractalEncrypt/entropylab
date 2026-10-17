@@ -624,6 +624,32 @@
     assert(localStorage.getItem("entropylab-locale") === "en", "The locale choice should be stored as English again");
   });
 
+  await test("a language switch keeps the Vanity prefix hint the address type set", async () => {
+    // The station sets the prefix placeholder itself; for Silent Payments it
+    // names the parity characters. The sweep that runs after a switch must not
+    // put the generic hint back.
+    const select = document.getElementById("locale-select"), script = document.getElementById("vanity-script"), prefix = document.getElementById("vanity-prefix");
+    const previous = script.value;
+    const choose = async (element, value) => {
+      element.value = value;
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(0);
+    };
+    try {
+      await choose(script, "sp");
+      assert(prefix.placeholder.includes("g f 2 t v d w 0"), "The Silent Payments hint does not name the parity characters: " + prefix.placeholder);
+      for (const code of ["es", "en"]) {
+        await choose(select, code);
+        assert(prefix.placeholder.includes("g f 2 t v d w 0"), `After switching to ${code} the prefix hint lost the parity characters: ${prefix.placeholder}`);
+      }
+    } finally {
+      // A failure must not leave the rest of the suite in Spanish.
+      if (select.value !== "en") await choose(select, "en");
+      await choose(script, previous);
+    }
+    assert(!prefix.placeholder.includes("g f 2 t v d w 0"), "The prefix hint kept the Silent Payments characters after the address type changed back");
+  });
+
   await test("catalog markup is rebuilt from the allowlist before it can reach innerHTML", () => {
     // The catalogs are the one place translated text can carry markup into
     // the page. Whatever a catalog value says, only allowlisted elements may
