@@ -61,16 +61,20 @@ export async function githubRequest({ apiUrl = DEFAULT_API_URL, token, method, p
     const error = new Error(`GitHub ${method} ${path} → HTTP ${response.status}: ${detail}`);
     error.status = response.status;
     error.data = data;
+    error.json = json;
     throw error;
   }
   return data;
 }
 
+// A lookup that answers 404 means "not there yet" only when GitHub's API said
+// so in JSON. A 404 page from anything in between is a failure, not absence:
+// treating it as absence would publish a new branch and pull request.
 const tryRequest = async (request) => {
   try {
     return await request();
   } catch (error) {
-    if (error.status === 404) return null;
+    if (error.status === 404 && error.json) return null;
     throw error;
   }
 };
