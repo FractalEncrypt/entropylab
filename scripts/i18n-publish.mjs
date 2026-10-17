@@ -43,21 +43,38 @@ export async function githubRequest({ apiUrl = DEFAULT_API_URL, token, method, p
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    const error = new Error(`GitHub ${method} ${path} → HTTP ${response.status}: ${(data && data.message) || text.slice(0, 200)}`);
+  // GitHub answers some failures (a 5xx during an incident) with an HTML
+  // page, not JSON. Parse after reading the status, so the error names the
+  // status and the call instead of "Unexpected token '<'".
+  let data = null, json = true;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      json = false;
+    }
+  }
+  if (!response.ok || !json) {
+    const detail = !json
+      ? `a non-JSON response (${text.trimStart().startsWith("<") ? "an HTML page" : JSON.stringify(text.slice(0, 80))})`
+      : (data && data.message) || text.slice(0, 200);
+    const error = new Error(`GitHub ${method} ${path} → HTTP ${response.status}: ${detail}`);
     error.status = response.status;
     error.data = data;
+    error.json = json;
     throw error;
   }
   return data;
 }
 
+// A lookup that answers 404 means "not there yet" only when GitHub's API said
+// so in JSON. A 404 page from anything in between is a failure, not absence:
+// treating it as absence would publish a new branch and pull request.
 const tryRequest = async (request) => {
   try {
     return await request();
   } catch (error) {
-    if (error.status === 404) return null;
+    if (error.status === 404 && error.json) return null;
     throw error;
   }
 };
