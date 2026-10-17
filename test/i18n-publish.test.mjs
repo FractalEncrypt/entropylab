@@ -34,7 +34,8 @@ const treeSha = ({ base_tree, tree }) =>
 // rock sits at rockSha on tree "rocktree". An existing automation branch sits
 // at branchSha, on a commit whose tree and parents are scriptable: a branch
 // cut from an older rock, or one already holding a proposal on current rock.
-const stubGitHub = async ({ branchExists = false, prExists = false, cleanStatus = false, rockSha = "base0000", branchSha = "stale000", branchTree = "oldtree", branchParents = ["older000"] } = {}) => {
+// rockFiles is what rock's tree already holds, by path.
+const stubGitHub = async ({ branchExists = false, prExists = false, cleanStatus = false, rockSha = "base0000", branchSha = "stale000", branchTree = "oldtree", branchParents = ["older000"], rockFiles = {} } = {}) => {
   const calls = [];
   const state = { rockSha, branchSha, prNumber: 7, prNode: "PR_node_7", writes: [], trees: [], commits: { [rockSha]: { tree: "rocktree", parents: ["older000"] } } };
   if (branchExists) state.commits[branchSha] = { tree: branchTree, parents: branchParents };
@@ -59,6 +60,9 @@ const stubGitHub = async ({ branchExists = false, prExists = false, cleanStatus 
       if (url === "/repos/o/r/git/trees" && req.method === "POST") {
         state.trees.push(parsed);
         for (const entry of parsed.tree) state.writes.push({ path: entry.path, content: entry.content, mode: entry.mode, type: entry.type });
+        // Content-addressed, as on GitHub: writing exactly what rock's tree
+        // already holds yields rock's own tree id.
+        if (parsed.tree.every((entry) => rockFiles[entry.path] === entry.content)) return reply(201, { sha: parsed.base_tree });
         return reply(201, { sha: treeSha(parsed) });
       }
       if (url === "/repos/o/r/git/commits" && req.method === "POST") {
@@ -231,6 +235,31 @@ test("rerun with the same proposal already on rock's current tip leaves the bran
   } finally {
     server.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a proposal rock's tip already holds publishes nothing (the #902/#903 race)", async () => {
+  // This run's checkout predates the merge of another run's PR for es, so
+  // its committed-catalog check still sees a change; rock's live tip already
+  // holds the files. With or without a branch left from that merged PR, no
+  // commit, branch move, PR, label or auto-merge may follow.
+  for (const branchExists of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "i18n-pub-"));
+    proposals(dir, CATALOG);
+    const file = (path) => readFileSync(join(dir, path), "utf8");
+    const rockFiles = { "src/locales/es.json": file("es.json"), "src/locales/.sources/es.json": file(".sources/es.json") };
+    const { server, calls, url } = await stubGitHub({ branchExists, rockFiles });
+    try {
+      const summary = await publish(dir, url);
+      assert.match(summary, /rock's tip already holds this proposal — nothing to publish/, `branch exists: ${branchExists}`);
+      for (const [method, prefix] of [["POST", "/repos/o/r/git/commits"], ["POST", "/repos/o/r/git/refs"], ["PATCH", "/repos/o/r/git/refs"], ["POST", "/repos/o/r/pulls"], ["PATCH", "/repos/o/r/pulls"]]) {
+        assert.ok(!calls.some((c) => c.method === method && c.url.startsWith(prefix)), `branch exists: ${branchExists}: no ${method} ${prefix}`);
+      }
+      assert.ok(!calls.some((c) => c.url === "/graphql" || c.url.includes("/labels")), `branch exists: ${branchExists}: no label, no auto-merge`);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
