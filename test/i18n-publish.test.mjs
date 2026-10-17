@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { publishLanguage, BRANCH_PREFIX, TRANSLATION_LABEL } from "../scripts/i18n-publish.mjs";
+import { githubRequest, publishLanguage, BRANCH_PREFIX, TRANSLATION_LABEL } from "../scripts/i18n-publish.mjs";
 import { hashSource } from "../scripts/i18n-validate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -329,5 +329,36 @@ test("an immediately mergeable PR merges directly when auto-merge has nothing to
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a GitHub error page is reported with its status and call, not as a JSON parse error", async () => {
+  // Run 39066081254 (fr) failed with only "Unexpected token '<'": GitHub had
+  // answered with an HTML page, and the body was parsed before the status
+  // was read.
+  const replies = {
+    "/html-502": [502, "text/html", "<!DOCTYPE html>\n<html><body>Unicorn!</body></html>"],
+    "/html-200": [200, "text/html", "<!DOCTYPE html>\n<html></html>"],
+    "/json-422": [422, "application/json", JSON.stringify({ message: "Reference already exists" })],
+    "/json-200": [200, "application/json", JSON.stringify({ ok: true })],
+  };
+  const server = createServer((req, res) => {
+    const [status, type, body] = replies[req.url];
+    res.writeHead(status, { "content-type": type }).end(body);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const apiUrl = `http://127.0.0.1:${server.address().port}`;
+  const request = (path) => githubRequest({ apiUrl, token: "tok", method: "GET", path });
+  try {
+    await assert.rejects(request("/html-502"), (error) => {
+      assert.equal(error.message, "GitHub GET /html-502 → HTTP 502: a non-JSON response (an HTML page)");
+      assert.equal(error.status, 502);
+      return true;
+    });
+    await assert.rejects(request("/html-200"), { message: "GitHub GET /html-200 → HTTP 200: a non-JSON response (an HTML page)" });
+    await assert.rejects(request("/json-422"), { message: "GitHub GET /json-422 → HTTP 422: Reference already exists" });
+    assert.deepEqual(await request("/json-200"), { ok: true });
+  } finally {
+    server.close();
   }
 });
