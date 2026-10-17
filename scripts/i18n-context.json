@@ -1,4 +1,82 @@
 {
+  "Need the matching key in this session to check RFC 6979 and low-r grind.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing. Return exactly: La clé correspondante est nécessaire dans cette session pour vérifier RFC 6979 et le grind low-r."
+    },
+    "retranslate": {
+      "fr": "La clé correspondante est nécessaire dans cette session pour vérifier RFC 6979 et le meulage low-r."
+    },
+    "exact": {
+      "fr": "La clé correspondante est nécessaire dans cette session pour vérifier RFC 6979 et le grind low-r."
+    }
+  },
+  "Also does not match RFC 6979 or low-r grind.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing. Return exactly: Ne correspond pas non plus à RFC 6979 ni au grind low-r."
+    },
+    "retranslate": {
+      "fr": "Ne correspond pas non plus à RFC 6979 ni au meulage low-r."
+    },
+    "exact": {
+      "fr": "Ne correspond pas non plus à RFC 6979 ni au grind low-r."
+    }
+  },
+  "Matches RFC 6979 (plain deterministic nonce). r is high; Bitcoin Core would grind this one.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French keeps the term in English here as Spanish (\"haría grind de este\") and Portuguese (\"faria grind neste\") do; \"meulerait\" means would grind with a grinding wheel. Return exactly: Correspond à RFC 6979 (nonce déterministe simple). r est élevé ; Bitcoin Core ferait un grind de celui-ci."
+    },
+    "retranslate": {
+      "fr": "Correspond à RFC 6979 (nonce déterministe simple). r est élevé ; Bitcoin Core meulerait celui-ci."
+    },
+    "exact": {
+      "fr": "Correspond à RFC 6979 (nonce déterministe simple). r est élevé ; Bitcoin Core ferait un grind de celui-ci."
+    }
+  },
+  "Matches RFC 6979 with Bitcoin Core-style low-r grind (retry {n}). Saves one byte. Not a leak.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing. Return exactly: Correspond à RFC 6979 avec grind low-r de style Bitcoin Core (nouvelle tentative {n}). Économise un octet. Pas une fuite."
+    },
+    "retranslate": {
+      "fr": "Correspond à RFC 6979 avec meulage low-r de style Bitcoin Core (nouvelle tentative {n}). Économise un octet. Pas une fuite."
+    },
+    "exact": {
+      "fr": "Correspond à RFC 6979 avec grind low-r de style Bitcoin Core (nouvelle tentative {n}). Économise un octet. Pas une fuite."
+    }
+  },
+  "Does not match plain RFC 6979 or Bitcoin Core-style low-r grind. Honest signers may add other auxiliary randomness. A mismatch alone is not evidence of compromise. Reused r on two different messages is the real alarm.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing. Return exactly: Ne correspond pas à RFC 6979 simple ni au grind low-r de style Bitcoin Core. Les signataires honnêtes peuvent ajouter un autre aléa auxiliaire. Un écart à lui seul n'est pas une preuve de compromission. Un r réutilisé sur deux messages différents est la vraie alarme."
+    },
+    "retranslate": {
+      "fr": "Ne correspond pas à RFC 6979 simple ni au meulage low-r de style Bitcoin Core. Les signataires honnêtes peuvent ajouter un autre aléa auxiliaire. Un écart à lui seul n'est pas une preuve de compromission. Un r réutilisé sur deux messages différents est la vraie alarme."
+    },
+    "exact": {
+      "fr": "Ne correspond pas à RFC 6979 simple ni au grind low-r de style Bitcoin Core. Les signataires honnêtes peuvent ajouter un autre aléa auxiliaire. Un écart à lui seul n'est pas une preuve de compromission. Un r réutilisé sur deux messages différents est la vraie alarme."
+    }
+  },
+  "Add a key to check each signature against RFC 6979 and low-r grinding, so an unexpected nonce can be told apart from a deterministic one.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing. Return exactly: Ajoutez une clé pour vérifier chaque signature par rapport à la norme RFC 6979 et au grind low-r, afin de distinguer un nonce inattendu d'un nonce déterministe.",
+      "es": "Spanish writes the term \"el low-r grind\", as its other low-r strings do; \"molienda\" means milling. Return exactly: Agrega una clave para verificar cada firma contra RFC 6979 y el low-r grind, para que un nonce inesperado se pueda distinguir de uno determinista.",
+      "pt": "Portuguese writes the term \"o grind low-r\", as its other low-r strings do; \"moagem\" means milling. Return exactly: Adicione uma chave para verificar cada assinatura contra RFC 6979 e o grind low-r, para que um nonce inesperado possa ser distinguido de um determinístico."
+    },
+    "retranslate": {
+      "fr": "Ajoutez une clé pour vérifier chaque signature par rapport à la norme RFC 6979 et au broyage low-r, afin de distinguer un nonce inattendu d'un nonce déterministe.",
+      "es": "Agrega una clave para verificar cada firma contra RFC 6979 y la molienda low-r, para que un nonce inesperado se pueda distinguir de uno determinista.",
+      "pt": "Adicione uma chave para verificar cada assinatura contra RFC 6979 e moagem low-r, para que um nonce inesperado possa ser distinguido de um determinístico."
+    },
+    "exact": {
+      "fr": "Ajoutez une clé pour vérifier chaque signature par rapport à la norme RFC 6979 et au grind low-r, afin de distinguer un nonce inattendu d'un nonce déterministe.",
+      "es": "Agrega una clave para verificar cada firma contra RFC 6979 y el low-r grind, para que un nonce inesperado se pueda distinguir de uno determinista.",
+      "pt": "Adicione uma chave para verificar cada assinatura contra RFC 6979 e o grind low-r, para que um nonce inesperado possa ser distinguido de um determinístico."
+    }
+  },
   "Output public key": {
     "note": "A label, not an instruction. \"Output\" is a noun here: a transaction output. The string labels the x-only public key of a Taproot output this tool generated, in the Silent Payments send results.",
     "noteByLanguage": {
