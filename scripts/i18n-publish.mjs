@@ -106,7 +106,8 @@ const ensureLabel = async (ctx) => {
 // rock as soon as another translation merged there. The commit is built
 // before the branch moves, so the head never passes through rock itself (a
 // PR whose head is already on its base reads as merged). A branch already
-// holding these files on rock's tip is left alone.
+// holding these files on rock's tip is left alone. Returns null, touching
+// nothing, when rock's tip already holds the files.
 const commitOnRock = async (ctx, branch, files, message) => {
   const rockSha = (await githubRequest({ ...ctx, method: "GET", path: `/repos/${ctx.repo}/git/ref/heads/rock` })).object.sha;
   const rockCommit = await githubRequest({ ...ctx, method: "GET", path: `/repos/${ctx.repo}/git/commits/${rockSha}` });
@@ -116,6 +117,13 @@ const commitOnRock = async (ctx, branch, files, message) => {
     path: `/repos/${ctx.repo}/git/trees`,
     body: { base_tree: rockCommit.tree.sha, tree: files.map(({ path, content }) => ({ path, mode: "100644", type: "blob", content })) },
   });
+  // Trees are content-addressed: the same id as rock's own tree means rock's
+  // tip already holds these files. The usual cause is a race: this run's
+  // checkout was taken before another run's PR for the language merged, so
+  // publishLanguage's committed-catalog check read stale content. Committing would
+  // open a PR with no changes that auto-merges as an empty commit, as #902
+  // and #903 did.
+  if (tree.sha === rockCommit.tree.sha) return null;
   const existing = await tryRequest(() => githubRequest({ ...ctx, method: "GET", path: `/repos/${ctx.repo}/git/ref/heads/${encodeURIComponent(branch)}` }));
   if (existing) {
     const head = await githubRequest({ ...ctx, method: "GET", path: `/repos/${ctx.repo}/git/commits/${existing.object.sha}` });
@@ -215,6 +223,7 @@ export async function publishLanguage({ dir, lang, repoRoot = root, repo, token,
     { path: `src/locales/${lang}.json`, content: catalogText },
     { path: `src/locales/.sources/${lang}.json`, content: sidecarText },
   ], message);
+  if (!headSha) return `${lang}: rock's tip already holds this proposal — nothing to publish`;
   log(`${lang}: ${branch} at ${headSha.slice(0, 10)} on rock`);
 
   const owner = repo.split("/")[0];
