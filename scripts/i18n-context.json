@@ -31,5 +31,296 @@
       "fr": "Vous utilisez Microsoft Edge. Lors de nos tests, Edge a conservé des copies d'une phrase secrète copiée après la fermeture de l'onglet, jusqu'à ce qu'Edge lui-même soit arrêté. Supposez qu'il en soit de même pour tout secret que vous copiez, tel qu'une clé privée. Quittez Edge complètement, et désactivez le démarrage rapide et les applications en arrière-plan dans ses paramètres Système.",
       "pt": "Você está usando o Microsoft Edge. Em nossos testes, o Edge manteve cópias de uma frase-semente copiada após o fechamento da aba, até que o próprio Edge fosse encerrado. Presuma que ele faz o mesmo com qualquer segredo que você copiar, como uma chave privada. Encerre o Edge completamente e desative o início rápido e os aplicativos em segundo plano nas configurações do Sistema."
     }
+  },
+  "BIP39 passphrase": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Phrase de passe BIP39"
+    },
+    "retranslate": {
+      "fr": "Phrase secrète BIP39"
+    },
+    "exact": {
+      "fr": "Phrase de passe BIP39"
+    }
+  },
+  "Boundary whitespace trimming leaves an empty passphrase · enter non-whitespace text or turn trimming off": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: La suppression des espaces blancs en bordure laisse une phrase de passe vide · entrez du texte non blanc ou désactivez la suppression"
+    },
+    "retranslate": {
+      "fr": "La suppression des espaces blancs en bordure laisse une phrase secrète vide · entrez du texte non blanc ou désactivez la suppression"
+    },
+    "exact": {
+      "fr": "La suppression des espaces blancs en bordure laisse une phrase de passe vide · entrez du texte non blanc ou désactivez la suppression"
+    }
+  },
+  "Pick a key to grind. {station} settings come along as set there; BIP-85 children use an empty passphrase and the default account path. A key with seed words supports both methods, a root-xprv key the derivation grind only.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+    },
+    "retranslate": {
+      "fr": "Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase secrète vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+    },
+    "exact": {
+      "fr": "Choisissez une clé à broyer. Les paramètres {station} sont ceux définis là-bas ; les enfants BIP-85 utilisent une phrase de passe vide et le chemin de compte par défaut. Une clé avec des mots de départ prend en charge les deux méthodes, une clé racine xprv uniquement le broyage par dérivation."
+    }
+  },
+  "The passphrase stays as it is; each candidate is the next BIP32 account index. A BIP-85 child stays unchanged; copy any match you need.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: La phrase de passe reste telle quelle ; chaque candidat est l'index de compte BIP32 suivant. Un enfant BIP-85 reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    },
+    "retranslate": {
+      "fr": "La phrase secrète reste telle quelle ; chaque candidat est l'index de compte BIP32 suivant. Un enfant BIP-85 reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    },
+    "exact": {
+      "fr": "La phrase de passe reste telle quelle ; chaque candidat est l'index de compte BIP32 suivant. Un enfant BIP-85 reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    }
+  },
+  "Each candidate extends the BIP-85 child's seed words with a new passphrase. The child stays unchanged; copy any match you need.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Chaque candidat étend les mots de départ de l'enfant BIP-85 avec une nouvelle phrase de passe. L'enfant reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    },
+    "retranslate": {
+      "fr": "Chaque candidat étend les mots de départ de l'enfant BIP-85 avec une nouvelle phrase secrète. L'enfant reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    },
+    "exact": {
+      "fr": "Chaque candidat étend les mots de départ de l'enfant BIP-85 avec une nouvelle phrase de passe. L'enfant reste inchangé ; copiez toute correspondance dont vous avez besoin."
+    }
+  },
+  "Matching passphrases": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Phrases de passe correspondantes"
+    },
+    "retranslate": {
+      "fr": "Phrases secrètes correspondantes"
+    },
+    "exact": {
+      "fr": "Phrases de passe correspondantes"
+    }
+  },
+  "Passphrase hidden — turn on the Private data switch above to reveal": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Phrase de passe masquée — activez le commutateur Données privées ci-dessus pour révéler"
+    },
+    "retranslate": {
+      "fr": "Phrase secrète masquée — activez le commutateur Données privées ci-dessus pour révéler"
+    },
+    "exact": {
+      "fr": "Phrase de passe masquée — activez le commutateur Données privées ci-dessus pour révéler"
+    }
+  },
+  "Each match derives from the selected BIP-85 child. The child remains fixed by its parent, application, and index; copy a matching address or passphrase rather than changing the child.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Chaque correspondance dérive de l'enfant BIP-85 sélectionné. L'enfant reste fixe par son parent, son application et son index ; copiez une adresse ou une phrase de passe correspondante plutôt que de changer l'enfant.",
+      "pt": "A BIP-85 child is a derived key, not a person: this catalog calls it \"filho\" (\"Filho BIP-85\"). Return exactly: Cada correspondência deriva do filho BIP-85 selecionado. O filho permanece fixo por seu pai, aplicativo e índice; copie um endereço ou frase secreta correspondente em vez de alterar o filho."
+    },
+    "retranslate": {
+      "fr": "Chaque correspondance dérive de l'enfant BIP-85 sélectionné. L'enfant reste fixe par son parent, son application et son index ; copiez une adresse ou une phrase secrète correspondante plutôt que de changer l'enfant.",
+      "pt": "Cada correspondência deriva da criança BIP-85 selecionada. A criança permanece fixa por seu pai, aplicativo e índice; copie um endereço ou frase secreta correspondente em vez de alterar a criança."
+    },
+    "exact": {
+      "fr": "Chaque correspondance dérive de l'enfant BIP-85 sélectionné. L'enfant reste fixe par son parent, son application et son index ; copiez une adresse ou une phrase de passe correspondante plutôt que de changer l'enfant.",
+      "pt": "Cada correspondência deriva do filho BIP-85 selecionado. O filho permanece fixo por seu pai, aplicativo e índice; copie um endereço ou frase secreta correspondente em vez de alterar o filho."
+    }
+  },
+  "Passphrase (optional)": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Phrase de passe (facultatif)"
+    },
+    "retranslate": {
+      "fr": "Phrase secrète (facultatif)"
+    },
+    "exact": {
+      "fr": "Phrase de passe (facultatif)"
+    }
+  },
+  "Walks either the passphrase or the account number until the address matches your prefix. Same key and same counter always give the same address. Key Station matches can be written back; BIP-85 children stay unchanged. Generates no new entropy.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Parcourt soit la phrase de passe, soit le numéro de compte jusqu'à ce que l'adresse corresponde à votre préfixe. La même clé et le même compteur donnent toujours la même adresse. Les correspondances Key Station peuvent être réécrites ; les enfants BIP-85 restent inchangés. Ne génère pas de nouvelle entropie."
+    },
+    "retranslate": {
+      "fr": "Parcourt soit la phrase secrète, soit le numéro de compte jusqu'à ce que l'adresse corresponde à votre préfixe. La même clé et le même compteur donnent toujours la même adresse. Les correspondances Key Station peuvent être réécrites ; les enfants BIP-85 restent inchangés. Ne génère pas de nouvelle entropie."
+    },
+    "exact": {
+      "fr": "Parcourt soit la phrase de passe, soit le numéro de compte jusqu'à ce que l'adresse corresponde à votre préfixe. La même clé et le même compteur donnent toujours la même adresse. Les correspondances Key Station peuvent être réécrites ; les enfants BIP-85 restent inchangés. Ne génère pas de nouvelle entropie."
+    }
+  },
+  "Each candidate is the starting passphrase followed by the counter characters, stretched into a seed (2,048 PBKDF2 rounds) and derived at the key's path. A match is a new passphrase for the same seed words.": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Chaque candidat est la phrase de passe de départ suivie des caractères du compteur, étirée en une seed (2 048 tours PBKDF2) et dérivée au chemin de la clé. Une correspondance est une nouvelle phrase de passe pour les mêmes mots de seed."
+    },
+    "retranslate": {
+      "fr": "Chaque candidat est la phrase secrète de départ suivie des caractères du compteur, étirée en une seed (2 048 tours PBKDF2) et dérivée au chemin de la clé. Une correspondance est une nouvelle phrase secrète pour les mêmes mots de seed."
+    },
+    "exact": {
+      "fr": "Chaque candidat est la phrase de passe de départ suivie des caractères du compteur, étirée en une seed (2 048 tours PBKDF2) et dérivée au chemin de la clé. Une correspondance est une nouvelle phrase de passe pour les mêmes mots de seed."
+    }
+  },
+  "Enter a passphrase, or leave blank for none": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Entrez une phrase de passe, ou laissez vide pour aucune"
+    },
+    "retranslate": {
+      "fr": "Entrez une phrase secrète, ou laissez vide pour aucune"
+    },
+    "exact": {
+      "fr": "Entrez une phrase de passe, ou laissez vide pour aucune"
+    }
+  },
+  "Scan public key": {
+    "note": "A label, not an instruction: it names the Silent Payments scan public key in the receive results, next to the \"Spend public key\" label.",
+    "noteByLanguage": {
+      "de": "Write it like the German label for \"Spend public key\" (\"Öffentlicher Schlüssel zum Ausgeben\"). Return exactly: Öffentlicher Schlüssel zum Scannen",
+      "es": "Write it like the Spanish label for \"Spend public key\" (\"Clave pública de gasto\"). Return exactly: Clave pública de exploración",
+      "fr": "Write it like the French label for \"Spend public key\" (\"Clé publique de dépense\"). Return exactly: Clé publique de balayage",
+      "pt": "Write it like the Portuguese label for \"Spend public key\" (\"Chave pública de gastos\"). Return exactly: Chave pública de varredura"
+    },
+    "retranslate": {
+      "de": "Öffentlichen Schlüssel scannen",
+      "es": "Escanear clave pública",
+      "fr": "Scanner la clé publique",
+      "pt": "Escanear chave pública"
+    },
+    "exact": {
+      "de": "Öffentlicher Schlüssel zum Scannen",
+      "es": "Clave pública de exploración",
+      "fr": "Clé publique de balayage",
+      "pt": "Chave pública de varredura"
+    }
+  },
+  "Scan private key": {
+    "note": "A label, not an instruction: it names the Silent Payments scan private key in the receive results, next to the \"Spend private key\" label.",
+    "noteByLanguage": {
+      "de": "Write it like the German label for \"Spend public key\" (\"Öffentlicher Schlüssel zum Ausgeben\"). Return exactly: Privater Schlüssel zum Scannen",
+      "es": "Write it like the Spanish label for \"Spend public key\" (\"Clave pública de gasto\"). Return exactly: Clave privada de exploración",
+      "fr": "Write it like the French label for \"Spend public key\" (\"Clé publique de dépense\"). Return exactly: Clé privée de balayage",
+      "pt": "Write it like the Portuguese label for \"Spend public key\" (\"Chave pública de gastos\"). Return exactly: Chave privada de varredura"
+    },
+    "retranslate": {
+      "de": "Privaten Schlüssel scannen",
+      "es": "Escanear clave privada",
+      "fr": "Scanner la clé privée",
+      "pt": "Escanear chave privada"
+    },
+    "exact": {
+      "de": "Privater Schlüssel zum Scannen",
+      "es": "Clave privada de exploración",
+      "fr": "Clé privée de balayage",
+      "pt": "Chave privada de varredura"
+    }
+  },
+  "Spend private key": {
+    "note": "A label, not an instruction: it names a Silent Payments spend private key, next to the \"Scan private key\" label.",
+    "noteByLanguage": {
+      "de": "Write it like the German label for \"Spend public key\" (\"Öffentlicher Schlüssel zum Ausgeben\"). Return exactly: Privater Schlüssel zum Ausgeben"
+    },
+    "retranslate": {
+      "de": "Privaten Schlüssel ausgeben"
+    },
+    "exact": {
+      "de": "Privater Schlüssel zum Ausgeben"
+    }
+  },
+  "BIP-392 spend": {
+    "note": "A label, not an instruction: it names the BIP-392 spend descriptor (spspend), next to the \"BIP-392 watch-only\" label.",
+    "noteByLanguage": {
+      "de": "Use the same phrasing as the German key labels (\"Öffentlicher Schlüssel zum Ausgeben\"). Return exactly: BIP-392 zum Ausgeben"
+    },
+    "retranslate": {
+      "de": "BIP-392 ausgeben"
+    },
+    "exact": {
+      "de": "BIP-392 zum Ausgeben"
+    }
+  },
+  "Upload .psbt File": {
+    "noteByLanguage": {
+      "fr": "\"Upload\" means opening a file from this device. French \"télécharger\" means download; this catalog uses \"téléverser\" for upload. Return exactly: Téléverser le fichier .psbt"
+    },
+    "retranslate": {
+      "fr": "Télécharger le fichier .psbt"
+    },
+    "exact": {
+      "fr": "Téléverser le fichier .psbt"
+    }
+  },
+  "Upload Nonce History": {
+    "noteByLanguage": {
+      "fr": "\"Upload\" means opening a file from this device. French \"télécharger\" means download; this catalog uses \"téléverser\" for upload. Return exactly: Téléverser l'historique des nonces"
+    },
+    "retranslate": {
+      "fr": "Télécharger l'historique des nonces"
+    },
+    "exact": {
+      "fr": "Téléverser l'historique des nonces"
+    }
+  },
+  "No nonce history in memory. Inspect a PSBT or upload a history file.": {
+    "noteByLanguage": {
+      "fr": "\"Upload\" means opening a file from this device. French \"télécharger\" means download; this catalog uses \"téléverser\" for upload. Return exactly: Aucun historique de nonce en mémoire. Inspectez un PSBT ou téléversez un fichier d'historique."
+    },
+    "retranslate": {
+      "fr": "Aucun historique de nonce en mémoire. Inspectez un PSBT ou téléchargez un fichier d'historique."
+    },
+    "exact": {
+      "fr": "Aucun historique de nonce en mémoire. Inspectez un PSBT ou téléversez un fichier d'historique."
+    }
+  },
+  "Journal open": {
+    "note": "A status heading, not an instruction: it says the Journal is open.",
+    "noteByLanguage": {
+      "de": "German text already says \"Journal geöffnet\" for this status (\"Journal geöffnet · Passwortgeschützt\"). Return exactly: Journal geöffnet"
+    },
+    "retranslate": {
+      "de": "Journal öffnen"
+    },
+    "exact": {
+      "de": "Journal geöffnet"
+    }
+  },
+  "Child status": {
+    "noteByLanguage": {
+      "pt": "A BIP-85 child is a derived key, not a person: this catalog calls it \"filho\" (\"Filho BIP-85\"). Return exactly: Status do filho"
+    },
+    "retranslate": {
+      "pt": "Status da criança"
+    },
+    "exact": {
+      "pt": "Status do filho"
+    }
+  },
+  "Real coins": {
+    "noteByLanguage": {
+      "fr": "\"pièces\" is feminine. Return exactly: Vraies pièces"
+    },
+    "retranslate": {
+      "fr": "Vrais pièces"
+    },
+    "exact": {
+      "fr": "Vraies pièces"
+    }
+  },
+  "Clear Parent Key": {
+    "noteByLanguage": {
+      "es": "\"Parent\" is the BIP-85 parent key, whose derived keys this catalog calls \"clave hija\"; \"principal\" means main. Return exactly: Borrar clave padre"
+    },
+    "retranslate": {
+      "es": "Borrar clave principal"
+    },
+    "exact": {
+      "es": "Borrar clave padre"
+    }
+  },
+  "Keys": {
+    "note": "A tab name: the main tab, where keys are created and imported. The same string is the tab's short name on narrow screens.",
+    "noteByLanguage": {
+      "de": "German text already names this tab \"Schlüssel\" (\"im Reiter Schlüssel\"). Return exactly: Schlüssel"
+    },
+    "retranslate": {
+      "de": "Keys"
+    },
+    "exact": {
+      "de": "Schlüssel"
+    }
   }
 }
