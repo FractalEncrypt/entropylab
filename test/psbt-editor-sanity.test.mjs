@@ -257,3 +257,71 @@ test("a finalized P2SH input whose scriptSig redeem push does not hash to the ou
     assert.deepEqual(codes(psbtInspectDoc(flipped(bytes, lastAt(bytes, payment.redeemScript) + 5))), ["error:redeem_script_mismatch"], label);
   }
 });
+
+// The 0x04-less path reads a present final scriptSig as consensus does
+// (#890 review). BIP-16 requires a push-only scriptSig whose last push is
+// the serialized redeem script, so a non-push, unparseable or empty one is
+// final_scriptsig_bad. For a wrapped-segwit redeem, BIP-141 further requires
+// the exact single push (Core: SCRIPT_ERR_WITNESS_MALLEATED_P2SH), so a
+// non-minimal push is final_scriptsig_bad even with a good witness, and the
+// witness is still checked. For a legacy redeem, a non-minimal push is
+// policy, not consensus, and is not flagged.
+const withFinalPairs = (doc, scriptSig, witness) => rebuild({
+  ...doc,
+  inputs: [doc.inputs[0].map((pair) => (
+    pair.name === "PSBT_IN_FINAL_SCRIPTSIG" ? { ...pair, value: scriptSig }
+      : pair.name === "PSBT_IN_FINAL_SCRIPTWITNESS" && witness !== undefined ? { ...pair, value: witness }
+        : pair
+  ))],
+}, { insane: true });
+
+test("a malformed final scriptSig on a 0x04-less wrapped-segwit input fails closed (#866)", () => {
+  const doc = psbtInspectDoc(finalizedSpend(wrappedP2wpkh));
+  const value = (name) => doc.inputs[0].find((pair) => pair.name === name).value;
+  const redeem = bytesToHex(wrappedP2wpkh.redeemScript);
+  assert.equal(value("PSBT_IN_FINAL_SCRIPTSIG"), "16" + redeem, "the finalizer wrote one minimal push");
+  const otherKey = bytesToHex(secp256k1.getPublicKey(new Uint8Array(32).fill(9), true));
+  const badWitness = value("PSBT_IN_FINAL_SCRIPTWITNESS").replace(bytesToHex(wrappedKey), otherKey);
+  assert.notEqual(badWitness, value("PSBT_IN_FINAL_SCRIPTWITNESS"));
+  const cases = [
+    ["a non-push opcode (OP_NOP) ahead of the redeem push", "61" + "16" + redeem, undefined, ["error:final_scriptsig_bad"]],
+    ["the redeem push truncated by one byte", "16" + redeem.slice(0, -2), undefined, ["error:final_scriptsig_bad"]],
+    ["an empty scriptSig", "", undefined, ["error:final_scriptsig_bad"]],
+    ["a non-minimal OP_PUSHDATA1 redeem push, good witness", "4c16" + redeem, undefined, ["error:final_scriptsig_bad"]],
+    ["a non-minimal OP_PUSHDATA1 redeem push, witness key that does not bind", "4c16" + redeem, badWitness, ["error:final_scriptsig_bad", "error:final_witness_bad"]],
+  ];
+  for (const [label, scriptSig, witness, expected] of cases) {
+    assert.deepEqual(codes(withFinalPairs(doc, scriptSig, witness)).sort(), expected, label);
+  }
+  assert.deepEqual(codes(withFinalPairs(doc, "16" + redeem)), [], "control: the finalizer's own bytes stay clean");
+});
+
+test("a 0x04-less legacy P2SH input keeps a valid non-minimal push, and an absent final scriptSig is not a finding (#866)", () => {
+  // A finalized legacy P2SH(P2PK) spend, its previous transaction carried as
+  // the non-witness UTXO.
+  const legacy = p2sh(p2pk(wrappedKey));
+  const previous = new Transaction();
+  previous.addInput({ txid: "22".repeat(32), index: 0 });
+  previous.addOutput({ script: legacy.script, amount: 50_000n });
+  const tx = new Transaction();
+  tx.addInput({ txid: previous.id, index: 0, nonWitnessUtxo: previous.toBytes(true, false), redeemScript: legacy.redeemScript });
+  tx.addOutputAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 40_000n);
+  tx.signIdx(wrappedSigner, 0);
+  tx.finalize();
+  const doc = psbtInspectDoc(tx.toPSBT());
+  assert.ok(!doc.inputs[0].some((pair) => pair.name === "PSBT_IN_REDEEM_SCRIPT"), "the finalizer cleared 0x04");
+  assert.deepEqual(codes(doc), [], "honest legacy spend");
+  // Re-encode its last push, the redeem script, with OP_PUSHDATA1: still a
+  // consensus-valid legacy spend (MINIMALDATA is policy).
+  const scriptSig = doc.inputs[0].find((pair) => pair.name === "PSBT_IN_FINAL_SCRIPTSIG").value;
+  const redeem = bytesToHex(legacy.redeemScript);
+  assert.ok(scriptSig.endsWith(bytesToHex([legacy.redeemScript.length]) + redeem), "the redeem script is the last, minimal push");
+  const nonMinimal = scriptSig.slice(0, -(redeem.length + 2)) + "4c" + bytesToHex([legacy.redeemScript.length]) + redeem;
+  assert.deepEqual(codes(withFinalPairs(doc, nonMinimal)), [], "a non-minimal legacy push is not flagged");
+  // An unfinalized P2SH input with neither 0x04 nor 0x07 has nothing to
+  // check: no finding.
+  const unfinalized = new Transaction();
+  unfinalized.addInput({ txid: "33".repeat(32), index: 0, witnessUtxo: { script: wrappedP2wpkh.script, amount: 50_000n } });
+  unfinalized.addOutputAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 40_000n);
+  assert.deepEqual(codes(psbtInspectDoc(unfinalized.toPSBT())), [], "absent final scriptSig");
+});
