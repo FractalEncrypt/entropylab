@@ -760,7 +760,8 @@ jobs:
   # translation automation (issue #286). Any PR whose diff touches
   # src/locales/ must come from the configured GitHub App, on the
   # i18n/translate-<lang> branch namespace, changing exactly one catalog and
-  # its provenance sidecar — and both must validate. PRs that touch no locale
+  # at most its provenance sidecar (a value-only correction leaves the sidecar
+  # as is) — and both must validate. PRs that touch no locale
   # files pass trivially. Make this a required check alongside test-ci so
   # auto-merged translation PRs cannot skip it (see
   # docs/Translation_Automation_Setup.md).

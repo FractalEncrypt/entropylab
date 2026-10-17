@@ -187,11 +187,17 @@ export async function publishLanguage({ dir, lang, repoRoot = root, repo, token,
   const removed = Object.keys(committed).filter((key) => !(key in catalogNext)).length;
   const changed = Object.keys(catalogNext).filter((key) => key in committed && committed[key] !== catalogNext[key]).length;
   const title = `i18n(${lang}): automated translation update (+${added} −${removed} ~${changed})`;
+  // The sidecar hashes English keys only: a refresh of values alone leaves it
+  // byte-identical, so the PR's diff holds the catalog by itself.
+  const committedSidecarPath = join(repoRoot, "src/locales/.sources", `${lang}.json`);
+  const sidecarChanged = !existsSync(committedSidecarPath) || readFileSync(committedSidecarPath, "utf8") !== sidecarText;
   const body = [
     `Automated translation update for \`${lang}\` from the post-merge i18n workflow (issue #286).`,
     "",
     `- **+${added}** new translations, **−${removed}** obsolete keys pruned, **~${changed}** refreshed`,
-    "- Touches exactly `src/locales/" + lang + ".json` and `src/locales/.sources/" + lang + ".json`",
+    sidecarChanged
+      ? "- Touches exactly `src/locales/" + lang + ".json` and `src/locales/.sources/" + lang + ".json`"
+      : "- Touches only `src/locales/" + lang + ".json`: its English keys are unchanged, so `src/locales/.sources/" + lang + ".json` stays as is",
     "- Catalog and sidecar validated before publication; the translation-only CI gate re-checks both, plus the full suite",
     "- Auto-merge is enabled for the exact head SHA; missing or rejected strings fall back to English",
     "",

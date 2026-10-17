@@ -1,0 +1,35 @@
+{
+  "Output public key": {
+    "note": "A label, not an instruction. \"Output\" is a noun here: a transaction output. The string labels the x-only public key of a Taproot output this tool generated, in the Silent Payments send results.",
+    "noteByLanguage": {
+      "de": "Write it like the other German labels (\"Public key\" is \"Öffentlicher Schlüssel\"), with the catalog's word for a transaction output (\"Output\", as in \"Taproot-Output-Schlüssel\"). Return exactly: Öffentlicher Output-Schlüssel"
+    },
+    "retranslate": {
+      "de": "Öffentlichen Schlüssel ausgeben"
+    },
+    "exact": {
+      "de": "Öffentlicher Output-Schlüssel"
+    }
+  },
+  "You are using Microsoft Edge. In our tests, Edge kept copies of a copied seed phrase after the tab closed, until Edge itself was quit. Assume it does the same with any secret you copy, such as a private key. Quit Edge completely, and turn off Startup boost and background apps in its System settings.": {
+    "note": "Only the name of Edge's \"Startup boost\" setting is wrong in the committed translation. Return the committed translation unchanged except for that name: the same words, word order, punctuation, quotation marks and capitalization.",
+    "noteByLanguage": {
+      "de": "Edge itself calls the setting \"Startup-Boost\". Return exactly: Sie verwenden Microsoft Edge. In unseren Tests hat Edge Kopien einer kopierten Seed-Phrase gespeichert, nachdem der Tab geschlossen wurde, bis Edge selbst beendet wurde. Gehen Sie davon aus, dass es dasselbe mit allen geheimen Informationen tut, die Sie kopieren, wie z. B. einem privaten Schlüssel. Beenden Sie Edge vollständig und deaktivieren Sie \"Startup-Boost\" und \"Hintergrund-Apps\" in den Systemeinstellungen.",
+      "es": "Edge itself calls the setting \"Inicio rápido\". Return exactly: Estás usando Microsoft Edge. En nuestras pruebas, Edge conservó copias de una frase semilla copiada después de cerrar la pestaña, hasta que se cerró el propio Edge. Asume que hace lo mismo con cualquier secreto que copies, como una clave privada. Cierra Edge por completo y desactiva el inicio rápido y las aplicaciones en segundo plano en su configuración del Sistema.",
+      "fr": "Edge itself calls the setting \"Démarrage rapide\". Return exactly: Vous utilisez Microsoft Edge. Lors de nos tests, Edge a conservé des copies d'une phrase secrète copiée après la fermeture de l'onglet, jusqu'à ce qu'Edge lui-même soit arrêté. Supposez qu'il en soit de même pour tout secret que vous copiez, tel qu'une clé privée. Quittez Edge complètement, et désactivez le démarrage rapide et les applications en arrière-plan dans ses paramètres Système.",
+      "pt": "Edge itself calls the setting \"Início rápido\". Return exactly: Você está usando o Microsoft Edge. Em nossos testes, o Edge manteve cópias de uma frase-semente copiada após o fechamento da aba, até que o próprio Edge fosse encerrado. Presuma que ele faz o mesmo com qualquer segredo que você copiar, como uma chave privada. Encerre o Edge completamente e desative o início rápido e os aplicativos em segundo plano nas configurações do Sistema."
+    },
+    "retranslate": {
+      "de": "Sie verwenden Microsoft Edge. In unseren Tests hat Edge Kopien einer kopierten Seed-Phrase gespeichert, nachdem der Tab geschlossen wurde, bis Edge selbst beendet wurde. Gehen Sie davon aus, dass es dasselbe mit allen geheimen Informationen tut, die Sie kopieren, wie z. B. einem privaten Schlüssel. Beenden Sie Edge vollständig und deaktivieren Sie \"Startanreicherung\" und \"Hintergrund-Apps\" in den Systemeinstellungen.",
+      "es": "Estás usando Microsoft Edge. En nuestras pruebas, Edge conservó copias de una frase semilla copiada después de cerrar la pestaña, hasta que se cerró el propio Edge. Asume que hace lo mismo con cualquier secreto que copies, como una clave privada. Cierra Edge por completo y desactiva el impulso de inicio y las aplicaciones en segundo plano en su configuración del Sistema.",
+      "fr": "Vous utilisez Microsoft Edge. Lors de nos tests, Edge a conservé des copies d'une phrase secrète copiée après la fermeture de l'onglet, jusqu'à ce qu'Edge lui-même soit arrêté. Supposez qu'il en soit de même pour tout secret que vous copiez, tel qu'une clé privée. Quittez Edge complètement, et désactivez l'accélérateur de démarrage et les applications en arrière-plan dans ses paramètres Système.",
+      "pt": "Você está usando o Microsoft Edge. Em nossos testes, o Edge manteve cópias de uma frase-semente copiada após o fechamento da aba, até que o próprio Edge fosse encerrado. Presuma que ele faz o mesmo com qualquer segredo que você copiar, como uma chave privada. Encerre o Edge completamente e desative a inicialização rápida e os aplicativos em segundo plano nas configurações do Sistema."
+    },
+    "exact": {
+      "de": "Sie verwenden Microsoft Edge. In unseren Tests hat Edge Kopien einer kopierten Seed-Phrase gespeichert, nachdem der Tab geschlossen wurde, bis Edge selbst beendet wurde. Gehen Sie davon aus, dass es dasselbe mit allen geheimen Informationen tut, die Sie kopieren, wie z. B. einem privaten Schlüssel. Beenden Sie Edge vollständig und deaktivieren Sie \"Startup-Boost\" und \"Hintergrund-Apps\" in den Systemeinstellungen.",
+      "es": "Estás usando Microsoft Edge. En nuestras pruebas, Edge conservó copias de una frase semilla copiada después de cerrar la pestaña, hasta que se cerró el propio Edge. Asume que hace lo mismo con cualquier secreto que copies, como una clave privada. Cierra Edge por completo y desactiva el inicio rápido y las aplicaciones en segundo plano en su configuración del Sistema.",
+      "fr": "Vous utilisez Microsoft Edge. Lors de nos tests, Edge a conservé des copies d'une phrase secrète copiée après la fermeture de l'onglet, jusqu'à ce qu'Edge lui-même soit arrêté. Supposez qu'il en soit de même pour tout secret que vous copiez, tel qu'une clé privée. Quittez Edge complètement, et désactivez le démarrage rapide et les applications en arrière-plan dans ses paramètres Système.",
+      "pt": "Você está usando o Microsoft Edge. Em nossos testes, o Edge manteve cópias de uma frase-semente copiada após o fechamento da aba, até que o próprio Edge fosse encerrado. Presuma que ele faz o mesmo com qualquer segredo que você copiar, como uma chave privada. Encerre o Edge completamente e desative o início rápido e os aplicativos em segundo plano nas configurações do Sistema."
+    }
+  }
+}
