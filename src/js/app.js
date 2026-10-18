@@ -10235,9 +10235,7 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
     }
   }
   let signatures = [], uninspected = 0, scriptCode = hodlInputScriptCode(entries, witnessUtxo);
-  // Once finalized, a P2WSH script survives only as the witness's last item.
-  // Its keys are candidates too, now that scriptCode proved it the committed
-  // script; verification below still decides which one signed.
+  // Its keys are safe candidates only because scriptCode matched the commitment.
   if (scriptCode) {
     try {
       for (let push of hodlScriptPushes(scriptCode)) if (hodlLooksPubkey(push)) candidates.push(push);
@@ -10294,14 +10292,8 @@ function hodlInputScriptCode(entries, witnessUtxo) {
   if (!witnessUtxo) return null;
   let unkeyed = (type) => (hodlFind(entries, type).find((entry) => entry.keydata.length === 0) || {}).val;
   let outputScript = witnessUtxo.script, redeem = unkeyed(4), witnessScript = unkeyed(5), finalScriptSig = unkeyed(7), finalWitness = unkeyed(8);
-  // A finalizer removes the redeem (0x04) and witness (0x05) script fields
-  // (BIP-174), but the spend still carries both: the redeem script is the
-  // final scriptSig's last push and the witness script the final witness's
-  // last item. They are read from there only when their own field is absent,
-  // and only kept if they hash to what the previous output commits to, so a
-  // final field cannot swap in a different script (the crate does the same
-  // for #866). Without this, a finalized wrapped or P2WSH input had no digest:
-  // its RFC 6979 check was skipped and a reused nonce was never confirmed.
+  // A final field can hold any script; only the hash the witness UTXO commits
+  // to ties one to this spend.
   try {
     let isP2sh = outputScript.length === 23 && outputScript[0] === 169 && outputScript[1] === 20 && outputScript[22] === 135;
     if (isP2sh) {
