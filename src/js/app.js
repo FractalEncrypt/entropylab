@@ -8303,7 +8303,7 @@ function hodlUpdateMsigAccount() {
   if (kind === "p2sh" && purpose === 45) {
     field.value = "";
     hodlSyncDerivationPrime(field);
-    field.placeholder = "Not applicable";
+    field.placeholder = hodlTText("Not applicable");
     field.dataset.state = "not-applicable";
     if (help) help.textContent = hodlTText("BIP45 purpose keys do not contain an account number.");
     if (warning) {
@@ -8324,16 +8324,16 @@ function hodlUpdateMsigAccount() {
   let summary = hodlSummarizeMultisigAccounts(accountNumbers), message = hodlMultisigAccountWarning(summary);
   field.value = summary.mixed ? "Mixed" : summary.account == null ? "" : String(summary.account);
   hodlSyncDerivationPrime(field);
-  field.placeholder = "Derived from keys";
+  field.placeholder = hodlTText("Derived from keys");
   field.dataset.state = summary.mixed ? "mixed" : summary.account == null ? "empty" : "account";
   if (help) {
-    let mode = hardening.account ? "Hardened" : "Unhardened";
-    help.textContent = summary.mixed ? `Account index · ${mode} · Co-signer key origins use different account numbers.` : summary.account == null ? `Account index · ${mode} · Derived from co-signer key origins.` : `Account index · ${mode} · Derived from the co-signer account paths.`;
+    let vars = { hardening: hardening.account ? hodlTText("Hardened") : hodlTText("Unhardened") };
+    help.textContent = summary.mixed ? hodlTText("Account index · {hardening} · Co-signer key origins use different account numbers.", vars) : summary.account == null ? hodlTText("Account index · {hardening} · Derived from co-signer key origins.", vars) : hodlTText("Account index · {hardening} · Derived from the co-signer account paths.", vars);
   }
   if (warning) {
-
+    // The warning is a note, formatted here: assigned as is, it read "[object Object]".
     warning.hidden = !message;
-    warning.textContent = message || "";
+    warning.textContent = message ? hodlFormatNote(message) : "";
   }
   return summary;
 }
