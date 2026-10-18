@@ -41,6 +41,24 @@ test("labels passed to the field helpers are translation sources", async () => {
   assert.deepEqual(labels.filter((label) => !known.has(label)), []);
 });
 
+// hodlFormatNote paints a { key, vars } note through hodlTText(key), but the
+// collector reads only the translating calls' first argument. A note written
+// as an object literal therefore never reached the catalogs: 34 of them (the
+// seed-phrase checks, dice and card input, the PSBT session line) read in
+// English in every language. Notes are built with hodlNote(), whose first
+// argument is collected; a literal may carry only text something else
+// already collects.
+test("a note object's English is a source the collector reads", async () => {
+  const sources = await collectSources(root), known = new Set(sources instanceof Map ? sources.keys() : sources);
+  const app = readFileSync(join(root, "src/js/app.js"), "utf8");
+  const texts = [...app.matchAll(/\{ key: "((?:[^"\\]|\\.)*)"(?=[ ,}])/g)]
+    .map((match) => JSON.parse(`"${match[1]}"`))
+    .filter((text) => /[A-Za-z]{2,} [A-Za-z]{2,}/.test(text));
+  assert.deepEqual(texts.filter((text) => !known.has(text)), []);
+  assert.ok(known.has("Type or paste your seed phrase."), "the seed-phrase prompt is a source");
+  assert.ok(known.has("Session key: BIP39 seed + passphrase. Kept in page memory only."), "the session line is a source");
+});
+
 test("module translator imports and aliases are translation sources", async (context) => {
   const fixture = mkdtempSync(join(tmpdir(), "entropylab-i18n-sources-"));
   context.after(() => rmSync(fixture, { recursive: true, force: true }));
