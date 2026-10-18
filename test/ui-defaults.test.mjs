@@ -242,7 +242,8 @@ test("key and multisig derivation use an indexed address window with an estimate
   assert.match(appSource, /function hodlSyncAddressRangeLimit\(prefix = ""\)/);
   assert.match(appSource, /Math\.min\(hodlMaxAddressRange, hodlMaxAddressIndex - start \+ 1\)/);
   assert.match(appSource, /if \(\/\^\\d\+\$\/\.test\(rangeRaw\)[^\n]*range > maximum\) rangeInput\.value = String\(maximum\)/);
-  assert.match(appSource, /Max \$\{maximum\.toLocaleString\(\)\}/);
+  assert.match(appSource, /count = range\.toLocaleString\(\), max = maximum\.toLocaleString\(\)/);
+  assert.match(appSource, /receive and \{count\} change addresses · Max \{max\}/);
   assert.match(appSource, /for \(let index = startIndex; index < startIndex \+ count; index\+\+\)/);
   assert.match(appSource, /function hodlInitAddressBenchmark\(\)/);
   assert.match(appSource, /requestIdleCallback\(run, \{ timeout: 750 \}\)/);
@@ -509,7 +510,7 @@ test("Cards offers isolated hashed and direct word-selection methods", () => {
   assert.match(appSource, /direct \? "" : `<div class="card-suit-pad"/);
   assert.match(appSource, /hodlDirectCardRanks = \["A", "2", "3", "4", "5", "6", "7", "8"\]/);
   assert.match(appSource, /dealt-card dealt-card-rank-only/);
-  assert.match(appSource, /For each of the first \$\{config\.partialWords\} words/);
+  assert.match(appSource, /For each of the first \{n\} words[^"]*", \{ n: config\.partialWords \}/);
   assert.match(appSource, /placeholder = direct \? "A284 37A2/);
   assert.match(appSource, /input\.onbeforeinput = direct \? \(event\) => hodlHandleGroupedSeparatorDelete/);
   assert.match(appSource, /else hodlHandleGroupedSeparatorDelete\(input, event\);/);
@@ -532,8 +533,10 @@ test("seed phrase mode has a lowercase Jade-style on-screen keyboard", () => {
   assert.match(app, /function hodlSeedKeyboardToggleMarkup\(\)/);
   assert.match(app, /function hodlPassphraseKeyboardToggleMarkup\(\)/);
   assert.match(app, /function hodlPrivateKeyKeyboardToggleMarkup\(\)/);
-  assert.match(app, /"passphrase-keyboard-toggle","on-screen passphrase keyboard"/);
-  assert.match(app, /"private-keyboard-toggle","on-screen private key keyboard"/);
+  assert.match(appSource, /hodlKeyboardToggleMarkup\("passphrase-keyboard-toggle", "passphrase-keyboard"\)/);
+  assert.match(appSource, /hodlKeyboardToggleMarkup\("private-keyboard-toggle", "private-keyboard"\)/);
+  assert.match(appSource, /open \? hodlTText\("Hide on-screen passphrase keyboard"\) : hodlTText\("Show on-screen passphrase keyboard"\)/);
+  assert.match(appSource, /open \? hodlTText\("Hide on-screen private key keyboard"\) : hodlTText\("Show on-screen private key keyboard"\)/);
   assert.match(app, /function hodlSetOnScreenKeyboardOpen\(open\)/);
   assert.match(app, /querySelectorAll\("\[data-on-screen-keyboard-toggle\]"\)/);
   assert.match(app, /querySelectorAll\("\[data-on-screen-keyboard\]"\)/);
@@ -639,8 +642,8 @@ test("seed phrase mode has a lowercase Jade-style on-screen keyboard", () => {
   assert.match(app, /function hodlBrainWalletTrimEnabled\(\)/);
   // Borderless, and the title takes the shared label style rather than a bare
   // <strong>, like every other checkbox in this card.
-  assert.match(app, /<span class="label">Build passphrase from BIP39 words<\/span>/);
-  assert.match(app, /<span class="label">Autocomplete BIP39 words<\/span>/);
+  assert.match(appSource, /<span class="label">\$\{hodlT\("Build passphrase from BIP39 words"\)\}<\/span>/);
+  assert.match(appSource, /<span class="label">\$\{hodlT\("Autocomplete BIP39 words"\)\}<\/span>/);
   // The chrome is the card's shared switch, asserted once; a component states
   // only how it sits in its own container.
   // The one with an explanation gets two rows, and the checkbox points at the
@@ -826,7 +829,7 @@ test("derived wallets offer an address match check", () => {
   assert.match(app, /function hodlAddressMatchMarkup\(\)/);
   assert.match(app, /id="address-match"/);
   assert.match(app, /id="address-match-status"/);
-  assert.match(app, /<div class="address-match-field"><p class="label" id="address-match-label">Check an address<\/p>/);
+  assert.match(appSource, /<div class="address-match-field"><p class="label" id="address-match-label">\$\{hodlT\("Check an address"\)\}<\/p>/);
   assert.match(app, /id="address-match" aria-labelledby="address-match-label" aria-describedby="address-match-note"/);
   assert.match(app, /Paste an address shown by another wallet/);
   assert.match(app, /even if the index is beyond the table above/);
@@ -2016,7 +2019,7 @@ test("each static tool tab points at a tab panel the shell has", () => {
 test("Key Station stays put and a derived key opens a fingerprint tab with a summary", () => {
   assert.match(appSource, /function hodlNewLabState\(\) \{/);
   assert.match(appSource, /hodlNewKeyState\("Key Station", 0, 0\)/);
-  assert.match(appSource, /name = state\.isLab \? "Key Station"/);
+  assert.match(appSource, /name = state\.isLab \? hodlTText\("Key Station"\)/);
   assert.match(appSource, /path\.setAttribute\("d", hodlKeySilhouette\)/);
   assert.match(appSource, /function hodlCommitDerivedKey\(action = "derive"\) \{/);
   assert.match(appSource, /function hodlSelectLab\(\) \{/);
@@ -2047,10 +2050,13 @@ test("Key Station stays put and a derived key opens a fingerprint tab with a sum
   assert.match(appSource, /if \(edit\) edit\.onclick = hodlEditKeyInputs;/);
 });
 
-test("derived-key summaries put the selected sub-method after the method", () => {
-  const source = appSource.match(/(function hodlKeySummaryMethod\(state\) \{[\s\S]*?\n\})\nfunction hodlKeySummaryScript/);
+test("derived-key summaries put the selected sub-method after the method", async () => {
+  // The method and variant names live in i18n-labels.js, so translations
+  // can follow them; the summary itself stays English for the key file.
+  const labels = await import("../src/js/i18n-labels.js");
+  const source = appSource.match(/(function hodlKeySummaryMethodParts\(state\) \{[\s\S]*?\n\}\nfunction hodlKeySummaryMethod\(state\) \{[\s\S]*?\n\})\n/);
   assert.ok(source, "key summary method formatter");
-  const summary = new Function(`${source[1]}; return hodlKeySummaryMethod;`)();
+  const summary = new Function("hodlKeyModeLabels", "hodlKeySummarySubmethodLabels", `${source[1]}; return hodlKeySummaryMethod;`)(labels.hodlKeyModeLabels, labels.hodlKeySummarySubmethodLabels);
   assert.equal(summary({ mode: "dice", diceMethod: "coldcard" }), "Dice rolls: Base 10 [1-6] / Hashed rolls");
   assert.equal(summary({ mode: "dice", diceMethod: "coleman" }), "Dice rolls: Base 6 [0-5] / Hashed rolls");
   assert.equal(summary({ mode: "dice", diceMethod: "bitbox" }), "Dice rolls: BitBox diceware / Direct word selection");
@@ -2214,7 +2220,7 @@ test("BIP-85 and SP Stations can bring in compatible existing roots", () => {
 test("MS Station stays put and a derived wallet opens its own results tab", () => {
   assert.match(appSource, /function hodlNewMsigLabState\(\) \{/);
   assert.match(appSource, /hodlNewMsigState\("MS Station", 0, 0\)/);
-  assert.match(appSource, /name = state\.isLab \? "MS Station"/);
+  assert.match(appSource, /name = state\.isLab \? hodlTText\("MS Station"\)/);
   assert.match(appSource, /button\.append\(hodlCreateMsigTabMark\(state\), label\)/);
   assert.match(appSource, /function hodlCommitDerivedMsig\(action = "derive"\) \{/);
   assert.match(appSource, /function hodlSelectMsigLab\(\) \{/);
@@ -2395,7 +2401,7 @@ test("the private recovery section lists the BIP39 passphrase beside the seed ph
   assert.match(appSource, /\{ entropy: null, passphraseUsed: false, passphrase: null, seed: null,/);
   // Rendered right after the words, through the same masked private field as
   // the entropy and seed hex; absent when no passphrase is in use.
-  assert.match(appSource, /fields\.push\(hodlSeedPhraseField\(`Your seed phrase[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(wallet\.passphraseUsed && wallet\.passphrase\?\.length\) fields\.push\(hodlPrivateKeyFieldHtml\("BIP39 passphrase", [^\n]*\(\) => hodlResultPassphrase\(wallet\)\)\);\n\s*if \(wallet\.entropy\)/);
+  assert.match(appSource, /fields\.push\(hodlSeedPhraseField\(hodlTText\("Your seed phrase · \{count\} words", \{ count \}\)[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(wallet\.passphraseUsed && wallet\.passphrase\?\.length\) fields\.push\(hodlPrivateKeyFieldHtml\("BIP39 passphrase", [^\n]*\(\) => hodlResultPassphrase\(wallet\)\)\);\n\s*if \(wallet\.entropy\)/);
 });
 
 // The estimate's grey note is hidden while there is no valid prefix, so it

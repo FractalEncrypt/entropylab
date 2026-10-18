@@ -226,6 +226,63 @@ test("a language switch says the Vanity status and error again in the new langua
   assert.match(appSlice("hodlRenderVanityOut"), /let actionHeader = run\.sourceKind === "bip85" \? hodlTText\("Child status"\) : hodlTText\("Update Key"\);/);
 });
 
+test("a language switch paints filled-in Key Station text again", () => {
+  // "5436d724, selected. Activate or press F2 to rename.", "Seed phrase:
+  // Direct word entry" and "Purpose index · Unhardened · …" are no catalog
+  // keys, so the static sweep cannot carry them across a switch: the station
+  // tabs, the key summary and the hardening notes render again. The notes go
+  // before the estimate and the multisig account, which overwrite some of them.
+  const apply = appSlice("hodlApplyLocale");
+  assert.match(apply, /hodlRenderKeyTabs\(\);\s*hodlRenderMsigTabs\(\);\s*hodlRenderStationTabs\(hodlBip85Tabs\);\s*hodlRenderStationTabs\(hodlSpTabs\);\s*hodlPaintKeySummary\(\);/);
+  assert.match(apply, /hodlUpdateHardeningHelp\(\);\s*hodlUpdateHardeningHelp\("msig-"\);\s*hodlUpdateAddressEstimate\(\);[\s\S]*hodlUpdateMsigAccount\(\);/);
+});
+
+test("the multisig account note, placeholder and warning follow the page language", () => {
+  // hodlApplyLocale runs this after the hardening notes, so it has the last
+  // word on #msig-account-help; whatever it writes must be translated, and
+  // the mismatch warning is a note it formats (assigned as is, it read
+  // "[object Object]").
+  let locale = "en", summary, kind = "p2wsh", purpose = 48;
+  const element = () => ({ value: "", placeholder: "", textContent: "", hidden: true, dataset: {} });
+  const elements = { "msig-account": element(), "msig-account-help": element(), "msig-account-warning": element() };
+  const update = new Function(
+    "document", "hodlTText", "hodlScriptKind", "hodlReadHardening", "hodlReadMsigPurpose", "hodlStandardMsigPurpose", "hodlSyncDerivationPrime", "hodlReadMsigXpubs", "hodlSummarizeMultisigAccounts",
+    `${appSlice("hodlNote")}
+     ${appSlice("hodlFormatNote")}
+     ${appSlice("hodlMultisigAccountWarning")}
+     ${appSlice("hodlUpdateMsigAccount")}
+     return hodlUpdateMsigAccount;`,
+  )(
+    { getElementById: (id) => elements[id] ?? null },
+    (key, vars) => `<${locale}>` + key.replace(/\{(\w+)\}/g, (whole, name) => (vars?.[name] == null ? whole : String(vars[name]))),
+    () => kind, () => ({ account: true }), () => purpose, () => purpose, () => {}, () => [], () => summary,
+  );
+  const help = () => elements["msig-account-help"].textContent, warning = elements["msig-account-warning"], field = elements["msig-account"];
+
+  summary = { mixed: true, consistent: false, accounts: [0, 1], account: null };
+  update();
+  assert.equal(help(), "<en>Account index · <en>Hardened · Co-signer key origins use different account numbers.");
+  assert.equal(field.placeholder, "<en>Derived from keys");
+  assert.equal(warning.textContent, "<en>Co-signer account numbers do not match (0, 1). The Account field is shown as Mixed.");
+  assert.equal(warning.hidden, false);
+  locale = "de";
+  update();
+  assert.equal(help(), "<de>Account index · <de>Hardened · Co-signer key origins use different account numbers.", "the note follows a switch");
+  assert.equal(warning.textContent, "<de>Co-signer account numbers do not match (0, 1). The Account field is shown as Mixed.", "the warning follows a switch");
+
+  summary = { mixed: false, consistent: true, accounts: [3], account: 3 };
+  update();
+  assert.equal(help(), "<de>Account index · <de>Hardened · Derived from the co-signer account paths.");
+  assert.equal(warning.textContent, "");
+  assert.equal(warning.hidden, true);
+
+  kind = "p2sh";
+  purpose = 45;
+  update();
+  assert.equal(field.placeholder, "<de>Not applicable");
+  assert.equal(help(), "<de>BIP45 purpose keys do not contain an account number.");
+});
+
 test("Silent Payment custom characters constrain only the first free character", () => {
   const filter = new Function(`${appSlice("hodlFilterVanityPrefix")}; return hodlFilterVanityPrefix;`)();
   const silentPayment = { prefix: "sp1qq", bech32: true, firstFree: "gf2tvdw0" };
