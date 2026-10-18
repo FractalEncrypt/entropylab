@@ -50,7 +50,7 @@ const DECLARED = new Set([
   // Real imports (same modules app.js imports from).
   "hodlSha256", "hodlHash160", "hodlSecp256k1", "hodlHex", "p2shScript", "p2wshScript", "addressFromScript",
   "parseRawTx", "serializeTx", "hodlWasm", "hodlWasmIn", "hodlWasmOut", "psbtInspectDoc",
-  "hodlT", "hodlTText", "matchOwnership", "indexHdKey", "indexSingleKey", "pathLabel",
+  "hodlT", "hodlTText", "hodlTAttr", "matchOwnership", "indexHdKey", "indexSingleKey", "pathLabel",
   "hodlTapKeySigs", "hodlTapScriptSigs", "hodlTapSighashProblems",
   "inspectPsbtInscriptions", "describeEnvelope", "parseOpReturn", "describeOpReturn",
   "hodlPublicValueHtml",
@@ -69,6 +69,7 @@ const DECLARED_VARS = [
   "hodlJournalStateRefreshQueued", "hodlJournalKeys", "hodlJournalDoc", "hodlKeys",
   "hodlRecoverySheetText", "hodlMsigs", "hodlBip85Children", "hodlSpKeys",
   "hodlPsbtNonceHistory", "hodlJournalSnapshot", "hodlJournalStamp", "hodlJournal",
+  "hodlPsbtLast", "hodlNonceLast",
 ];
 DECLARED_VARS.forEach((name) => {
   assert.ok(!app.includes(`function ${name}(`), `${name} is an app.js function now — the closure must slice it, not redeclare it`);
@@ -110,7 +111,7 @@ import { p2shScript, p2wshScript, addressFromScript } from "../src/js/addresses.
 import { parseRawTx, serializeTx } from "../src/js/tx.js";
 import { wasmExports as hodlWasm, withInput as hodlWasmIn, withOutput as hodlWasmOut } from "../src/js/entropylab-wasm.js";
 import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
-import { tHtml as hodlT, t as hodlTText } from "../src/js/i18n.js";
+import { tHtml as hodlT, t as hodlTText, tAttr as hodlTAttr } from "../src/js/i18n.js";
 import { matchOwnership, indexHdKey, indexSingleKey, pathLabel } from "../src/js/ownership.js";
 import { hodlTapKeySigs, hodlTapScriptSigs, hodlTapSighashProblems } from "../src/js/psbt-schnorr.js";
 import { inspectPsbtInscriptions, describeEnvelope } from "../src/js/inscription.js";

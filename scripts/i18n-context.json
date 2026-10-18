@@ -1320,5 +1320,31 @@
     "exact": {
       "pt": "Primeiro índice de {branches} a derivar · {hardening} · 0 a 2.147.483.647"
     }
+  },
+  "ISSUES FOUND — ANALYSIS ALSO INCOMPLETE": {
+    "note": "The PSBT security report's overall verdict, shown as a banner in capital letters. Keep it in capitals."
+  },
+  "ISSUES FOUND": {
+    "note": "The PSBT security report's overall verdict, shown as a banner in capital letters. Keep it in capitals."
+  },
+  "ANALYSIS INCOMPLETE": {
+    "note": "The PSBT security report's overall verdict, shown as a banner in capital letters. Keep it in capitals."
+  },
+  "LISTED CHECKS COMPLETE": {
+    "note": "The PSBT security report's overall verdict, shown as a banner in capital letters. Keep it in capitals."
+  },
+  "Completed": {
+    "note": "The status a check row in the PSBT security report shows when its check ran on the data available. The note under the list (\"Completed means only that…\") names this status: use the same word in both."
+  },
+  "Completed means only that the named check ran on the information available here. It does not prove that the PSBT claims are true or that the transaction is safe to sign.": {
+    "note": "\"Completed\" is the status a check row above shows (the separate string \"Completed\"); use the same word for it here."
+  },
+  "RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Jade anti-exfil is secp256k1-zkp sign-to-contract and needs the USB host nonce plus signer opening; QR / sign_psbt Jade does not run it yet. BitBox anti-klepto is a different construction. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.": {
+    "note": "\"Low-r grind\" is Bitcoin Core's term of art: it signs again until the signature's r value is low, which saves one byte. It is not milling or crushing. Keep the term in English, as this catalog's other low-r strings do.",
+    "noteByLanguage": {
+      "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing.",
+      "es": "This English sentence says \"low-r grinding\"; Spanish writes the term \"el low-r grind\", as its other low-r strings do (\"comprobar RFC 6979 y el low-r grind\"). \"molienda\" means milling.",
+      "pt": "Portuguese writes the term \"o grind low-r\", as its other low-r strings do; \"moagem\" means milling."
+    }
   }
 }
