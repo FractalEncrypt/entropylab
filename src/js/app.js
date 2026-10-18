@@ -7742,12 +7742,12 @@ function hodlMultisigScriptText(kind) {
 function hodlOriginScriptError(origin, kind, network, purpose, coinType = hodlCoinTypeFromNetwork(network), hardening = { purpose: true, coinType: true, account: true, address: false }) {
   let steps = hodlNormalizeOriginPath(origin.path).split("/");
   let expectedPurpose = `${purpose}${hardening.purpose ? "h" : ""}`;
-  if (steps[0] !== expectedPurpose) return `This key origin uses purpose ${steps[0] || "none"}; the selected Purpose is ${expectedPurpose}.`;
+  if (steps[0] !== expectedPurpose) return hodlNote("This key origin uses purpose {step}; the selected Purpose is {purpose}.", { step: steps[0] || "none", purpose: expectedPurpose });
   if (kind === "p2tr" || purpose === 87) {
     let coin = `${coinType}${hardening.coinType ? "h" : ""}`;
-    if (steps[1] !== coin) return `This key origin should use ${coin} as the selected coin type.`;
-    if (steps.length !== 3) return `${purpose === 87 ? "A BIP87" : "A Taproot"} origin must contain purpose, coin type, and account.`;
-    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (steps[1] !== coin) return hodlNote("This key origin should use {coin} as the selected coin type.", { coin });
+    if (steps.length !== 3) return hodlNote(purpose === 87 ? "A BIP87 origin must contain purpose, coin type, and account." : "A Taproot origin must contain purpose, coin type, and account.");
+    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     return ""
   }
   // BIP44/49/84 account keys double as co-signers in their script type's
@@ -7756,30 +7756,30 @@ function hodlOriginScriptError(origin, kind, network, purpose, coinType = hodlCo
   // purposes is refused and needs Custom (audit A1-1).
   if (purpose === 44 || purpose === 49 || purpose === 84) {
     let mapped = purpose === 44 ? "p2sh" : purpose === 49 ? "p2sh-p2wsh" : "p2wsh";
-    if (kind !== mapped) return `A BIP${purpose} origin belongs to ${hodlMultisigScriptLabel(mapped)} multisig; the selected script type is ${hodlMultisigScriptLabel(kind)}.`;
+    if (kind !== mapped) return hodlNote("A BIP{purpose} origin belongs to {mapped} multisig; the selected script type is {kind}.", { purpose, mapped: hodlMultisigScriptLabel(mapped), kind: hodlMultisigScriptLabel(kind) });
     let coin = `${coinType}${hardening.coinType ? "h" : ""}`;
-    if (steps[1] !== coin) return `This key origin should use ${coin} as the selected coin type.`;
-    if (steps.length !== 3) return `A BIP${purpose} origin must contain purpose, coin type, and account.`;
-    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (steps[1] !== coin) return hodlNote("This key origin should use {coin} as the selected coin type.", { coin });
+    if (steps.length !== 3) return hodlNote("A BIP{purpose} origin must contain purpose, coin type, and account.", { purpose });
+    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     return "";
   }
   if (kind === "p2wsh" || kind === "p2sh-p2wsh") {
     let coin = `${coinType}${hardening.coinType ? "h" : ""}`;
-    if (steps[1] !== coin) return `This key origin should use ${coin} as the selected coin type.`;
-    if (steps.length !== 4) return "SegWit multisig origin must contain purpose, coin type, account, and script type.";
-    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (steps[1] !== coin) return hodlNote("This key origin should use {coin} as the selected coin type.", { coin });
+    if (steps.length !== 4) return hodlNote("SegWit multisig origin must contain purpose, coin type, account, and script type.");
+    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     let last = kind === "p2wsh" ? "2h" : "1h";
     if (steps[3] !== last) return hodlNote("This script type's origin must end in {last}.", { last });
     return "";
   }
   if (purpose !== 45) {
     let coin = `${coinType}${hardening.coinType ? "h" : ""}`;
-    if (steps[1] !== coin) return `This key origin should use ${coin} as the selected coin type.`;
-    if (steps.length !== 3) return "Account-based Legacy origin must contain purpose, coin type, and account.";
-    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (steps[1] !== coin) return hodlNote("This key origin should use {coin} as the selected coin type.", { coin });
+    if (steps.length !== 3) return hodlNote("Account-based Legacy origin must contain purpose, coin type, and account.");
+    if (!new RegExp(`^\\d+${hardening.account ? "h" : ""}$`).test(steps[2])) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     return "";
   }
-  if (steps.length !== 1) return `Legacy purpose 45 uses the BIP45 purpose key at m/${expectedPurpose} without an account.`;
+  if (steps.length !== 1) return hodlNote("Legacy purpose 45 uses the BIP45 purpose key at m/{purpose} without an account.", { purpose: expectedPurpose });
   return "";
 }
 function hodlMsigOriginHardening(origin, hardening) {
@@ -9352,8 +9352,8 @@ function hodlMultisigPrefixCompatible(parsed, kind, purpose) {
 function hodlMultisigAccountKeyError(parsed, kind, purpose, hardening = { purpose: true, coinType: true, account: true, address: false }) {
   if (kind === "p2tr" || purpose === 87 || purpose === 44 || purpose === 49 || purpose === 84) {
     let standard = purpose === 87 ? "BIP87" : kind === "p2tr" ? "Taproot" : `BIP${purpose}`;
-    if (parsed.depth !== 3) return `${standard} requires a depth-3 account key at m/purposeh/coinh/accounth; this key is depth ${parsed.depth}.`;
-    if ((parsed.childNumber >= 0x80000000) !== hardening.account) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (parsed.depth !== 3) return hodlNote("{standard} requires a depth-3 account key at m/purposeh/coinh/accounth; this key is depth {depth}.", { standard, depth: parsed.depth });
+    if ((parsed.childNumber >= 0x80000000) !== hardening.account) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     return ""
   }
   if (kind === "p2wsh" || kind === "p2sh-p2wsh") {
@@ -9363,13 +9363,13 @@ function hodlMultisigAccountKeyError(parsed, kind, purpose, hardening = { purpos
     return "";
   }
   if (purpose !== 45) {
-    if (parsed.depth !== 3) return `Account-based Legacy derivation requires a depth-3 key at m/purposeh/coinh/accounth; this key is depth ${parsed.depth}.`;
-    if ((parsed.childNumber >= 2147483648) !== hardening.account) return `The account index must be ${hardening.account ? "hardened" : "unhardened"}.`;
+    if (parsed.depth !== 3) return hodlNote("Account-based Legacy derivation requires a depth-3 key at m/purposeh/coinh/accounth; this key is depth {depth}.", { depth: parsed.depth });
+    if ((parsed.childNumber >= 2147483648) !== hardening.account) return hodlNote(hardening.account ? "The account index must be hardened." : "The account index must be unhardened.");
     return "";
   }
-  if (parsed.depth !== 1) return `Legacy P2SH requires the depth-1 BIP45 purpose key at m/45h; this key is depth ${parsed.depth}.`;
+  if (parsed.depth !== 1) return hodlNote("Legacy P2SH requires the depth-1 BIP45 purpose key at m/45h; this key is depth {depth}.", { depth: parsed.depth });
   let expected = hardening.purpose ? 2147483648 + 45 : 45; // 45h when hardened
-  if (parsed.childNumber !== expected) return `Legacy P2SH requires the ${hardening.purpose ? "hardened" : "unhardened"} BIP45 purpose child at m/${hodlPathComponent(45, hardening.purpose)}.`;
+  if (parsed.childNumber !== expected) return hodlNote(hardening.purpose ? "Legacy P2SH requires the hardened BIP45 purpose child at m/{path}." : "Legacy P2SH requires the unhardened BIP45 purpose child at m/{path}.", { path: hodlPathComponent(45, hardening.purpose) });
   return "";
 }
 function hodlMsigDerivedNode(parsed) {
@@ -9692,31 +9692,34 @@ function hodlMsigAddr(pubkeys, m, network, kind, sorted = !0) {
 }
 function hodlValidatedMsigInputs() {
   let coinType = hodlReadCoinType(document.getElementById("msig-network")), network = hodlNetworkFromCoinType(coinType), addressWindow = hodlReadAddressWindow("msig-"), branchWindow = hodlReadBranchWindow("msig-"), count = addressWindow.range, addressStart = addressWindow.start, branchStart = branchWindow.start, branchRange = branchWindow.range, hardening = hodlReadHardening("msig-"), n = Number(document.getElementById("msig-n")?.value), m = Number(document.getElementById("msig-m")?.value);
-  if (hardening.branch) throw new Error("Hardened address branches cannot be derived from the supplied multisig extended public keys. Turn off Harden for Starting address branch index.");
-  if (hardening.address) throw new Error("Hardened address indexes cannot be derived from multisig extended public keys. Turn off Harden for Starting address index.");
-  if (!(m >= 1 && n >= 1 && m <= n && n <= 15)) throw new Error("Pick how many signatures out of how many keys.");
+  if (hardening.branch) throw hodlError("Hardened address branches cannot be derived from the supplied multisig extended public keys. Turn off Harden for Starting address branch index.");
+  if (hardening.address) throw hodlError("Hardened address indexes cannot be derived from multisig extended public keys. Turn off Harden for Starting address index.");
+  if (!(m >= 1 && n >= 1 && m <= n && n <= 15)) throw hodlError("Pick how many signatures out of how many keys.");
   let kind = hodlScriptKind(), purpose = hodlReadMsigPurpose(), nodes = [], xpubs = [], keyTokens = [], accountNumbers = [], specs = [], customCosigners = [];
   if (kind === "mixed") throw hodlError("Co-signer keys indicate different script types. Export every key for the same multisig script type before deriving.");
   for (let index = 0; index < n; index++) {
     let field = document.getElementById("msig-x-" + index), row = field?.closest(".msig-key-row"), raw = row ? hodlMsigRowValue(row, true) : "";
     if (!raw) throw hodlError("Paste an origin and extended public key for co-signer {n}.", { n: index + 1 });
     let parsed = hodlParseMultisigCosigner(raw), spec = hodlMsigRowSpec(row), specPurpose = hodlMsigSpec(spec)?.purpose ?? null;
-    if (parsed.isPrivate) throw new Error("Co-signer " + (index + 1) + " is an extended private key. Paste only an extended public key.");
-    if (parsed.network !== network) throw new Error(`Co-signer ${index + 1}'s ${parsed.prefix} is for ${parsed.network}, but this multisig is set to ${network}.`);
-    if (!hodlMultisigPrefixCompatible(parsed, kind, specPurpose)) throw new Error(parsed.scope === "singlesig" ? `Co-signer ${index + 1} uses a singlesig ${parsed.prefix}. Use a generic ${hodlExtendedKeyVersions[network].x.pubName}, or the proper uppercase multisig export for this script type.` : `Co-signer ${index + 1}'s ${parsed.prefix} does not match the selected multisig script type.`);
-    if (!parsed.origin) throw new Error(`Co-signer ${index + 1} needs a key origin so a signer can recognize this key. Paste ${hodlMultisigKeyPlaceholder(kind, network, purpose, coinType, hardening)} as exported by the device.`);
+    if (parsed.isPrivate) throw hodlError("Co-signer {n} is an extended private key. Paste only an extended public key.", { n: index + 1 });
+    if (parsed.network !== network) throw hodlError("Co-signer {n}'s {prefix} is for {keyNetwork}, but this multisig is set to {walletNetwork}.", { n: index + 1, prefix: parsed.prefix, keyNetwork: parsed.network, walletNetwork: network });
+    if (!hodlMultisigPrefixCompatible(parsed, kind, specPurpose)) {
+      if (parsed.scope === "singlesig") throw hodlError("Co-signer {n} uses a singlesig {prefix}. Use a generic {xpub}, or the proper uppercase multisig export for this script type.", { n: index + 1, prefix: parsed.prefix, xpub: hodlExtendedKeyVersions[network].x.pubName });
+      throw hodlError("Co-signer {n}'s {prefix} does not match the selected multisig script type.", { n: index + 1, prefix: parsed.prefix });
+    }
+    if (!parsed.origin) throw hodlError("Co-signer {n} needs a key origin so a signer can recognize this key. Paste {placeholder} as exported by the device.", { n: index + 1, placeholder: hodlMultisigKeyPlaceholder(kind, network, purpose, coinType, hardening) });
     hodlMultisigPurposeIndex(parsed.origin);
     let originError = hodlOriginMatchesParsedKey(parsed.origin, parsed);
-    if (originError) throw new Error(`Co-signer ${index + 1}: ${hodlFormatNote(originError)}`);
+    if (originError) throw hodlError("Co-signer {n}: {reason}", { n: index + 1, reason: hodlFormatNote(originError) });
     // Each co-signer is held to its card's spec. A Custom card makes the
     // wallet a custom spec; only a spec path has an account number to compare.
     specs.push(spec);
     if (spec === "custom") customCosigners.push(index + 1);
     else {
       let foreign = hodlMsigForeignSpecNote(parsed.origin, kind);
-      if (foreign) throw new Error(`Co-signer ${index + 1}: ${foreign}`);
+      if (foreign) throw hodlError("Co-signer {n}: {reason}", { n: index + 1, reason: foreign });
       let departure = hodlMsigCustomPathReason(parsed, kind, network, specPurpose, coinType, hardening);
-      if (departure) throw new Error(`Co-signer ${index + 1}: ${departure}`);
+      if (departure) throw hodlError("Co-signer {n}: {reason}", { n: index + 1, reason: departure });
       let accountNumber = hodlMultisigAccountNumber(parsed.origin, kind, specPurpose, hodlMsigOriginHardening(parsed.origin, hardening).account);
       if (accountNumber != null) accountNumbers.push(accountNumber);
     }
