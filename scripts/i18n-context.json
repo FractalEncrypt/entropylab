@@ -1344,7 +1344,425 @@
     "noteByLanguage": {
       "fr": "French writes the term \"grind low-r\" (\"le grind low-r\", \"au grind low-r\"); \"meulage\" means grinding with a wheel and \"broyage\" crushing.",
       "es": "This English sentence says \"low-r grinding\"; Spanish writes the term \"el low-r grind\", as its other low-r strings do (\"comprobar RFC 6979 y el low-r grind\"). \"molienda\" means milling.",
-      "pt": "Portuguese writes the term \"o grind low-r\", as its other low-r strings do; \"moagem\" means milling."
+      "pt": "Portuguese writes the term \"o grind low-r\", as its other low-r strings do; \"moagem\" means milling. Portuguese names the receive branch with the noun \"recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"receber\" is the verb. Return exactly: A comparação RFC 6979 atualmente cobre assinaturas SegWit v0 P2WPKH e P2WSH usando SIGHASH_ALL, incluindo o grind low-r estilo Bitcoin Core; uma assinatura em um script contendo OP_CODESEPARATOR é relatada como não verificável em vez de comparada. O anti-exfil do Jade é secp256k1-zkp sign-to-contract e precisa do nonce do host USB mais a abertura do signatário; QR / sign_psbt Jade ainda não o executa. O anti-klepto do BitBox é uma construção diferente. A detecção de reutilização de nonce compara valores r para o mesmo ponto secp256k1, incluindo assinaturas carregadas por campos scriptSig/witness finalizados, codificações compactadas e não compactadas, e DER não estrito recuperável; o mesmo valor r reivindicado sob duas chaves públicas diferentes é sinalizado como um campo rotulado incorretamente em vez de ser ignorado. Um veredito limpo não é emitido quando uma assinatura não pode ser inspecionada. A detecção de inscrição lê envelopes OP_FALSE OP_IF \"ord\" em scripts tap-leaf e witnesses finalizados; ela não numera sats. A propriedade da saída é derivada da chave de sessão: contas 0–2, 50 de recebimento + 50 de troco, todos os quatro tipos de script. Ela não se comunica com a cadeia.",
+      "de": "German writes the term \"Low-r-Grinding\", as in \"mit Low-r-Grinding im Stil von Bitcoin Core\". The session key is \"Sitzungsschlüssel\" and an output \"Ausgabe\", as elsewhere in this catalog. Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. Return exactly: Der RFC 6979-Vergleich deckt derzeit SegWit v0 P2WPKH- und P2WSH-Signaturen mit SIGHASH_ALL ab, einschließlich Low-r-Grinding im Stil von Bitcoin Core; eine Signatur auf einem Skript, das OP_CODESEPARATOR enthält, wird als nicht verifizierbar gemeldet anstatt verglichen. Jade Anti-Exfil ist secp256k1-zkp sign-to-contract und benötigt die USB-Host-Nonce plus die Eröffnung des Signierers; QR / sign_psbt Jade führt dies noch nicht aus. BitBox Anti-Klepto ist eine andere Konstruktion. Die Nonce-Wiederverwendungs-Erkennung vergleicht r-Werte für denselben secp256k1-Punkt, einschließlich Signaturen, die von finalisierten scriptSig/witness-Feldern getragen werden, komprimierte und unkomprimierte Kodierungen sowie wiederherstellbare non-strict DER; derselbe r-Wert, der unter zwei verschiedenen öffentlichen Schlüsseln beansprucht wird, wird als falsch beschriftetes Feld gekennzeichnet, anstatt übersprungen zu werden. Ein eindeutiges Urteil wird nicht abgegeben, wenn eine Signatur nicht inspiziert werden kann. Die Inschriften-Erkennung liest OP_FALSE OP_IF „ord“-Umschläge in Tap-Leaf-Skripten und finalisierten Witnesses; sie nummeriert keine Sats. Der Ausgabe-Besitz wird vom Sitzungsschlüssel abgeleitet: Konten 0–2, 50 Empfang + 50 Wechsel, alle vier Skripttypen. Sie kommuniziert nicht mit der Kette."
+    },
+    "retranslate": {
+      "de": "Der RFC 6979-Vergleich deckt derzeit SegWit v0 P2WPKH- und P2WSH-Signaturen mit SIGHASH_ALL ab, einschließlich des Bitcoin Core-Stils „low-r grinding“; eine Signatur auf einem Skript, das OP_CODESEPARATOR enthält, wird als nicht verifizierbar gemeldet anstatt verglichen. Jade Anti-Exfil ist secp256k1-zkp sign-to-contract und benötigt die USB-Host-Nonce plus die Eröffnung des Signierers; QR / sign_psbt Jade führt dies noch nicht aus. BitBox Anti-Klepto ist eine andere Konstruktion. Die Nonce-Wiederverwendungs-Erkennung vergleicht r-Werte für denselben secp256k1-Punkt, einschließlich Signaturen, die von finalisierten scriptSig/witness-Feldern getragen werden, komprimierte und unkomprimierte Kodierungen sowie wiederherstellbare non-strict DER; derselbe r-Wert, der unter zwei verschiedenen öffentlichen Schlüsseln beansprucht wird, wird als falsch beschriftetes Feld gekennzeichnet, anstatt übersprungen zu werden. Ein eindeutiges Urteil wird nicht abgegeben, wenn eine Signatur nicht inspiziert werden kann. Die Inschriften-Erkennung liest OP_FALSE OP_IF „ord“-Umschläge in Tap-Leaf-Skripten und finalisierten Witnesses; sie nummeriert keine Sats. Der Output-Besitz wird vom Session-Schlüssel abgeleitet: Konten 0–2, 50 Empfang + 50 Wechselgeld, alle vier Skripttypen. Sie kommuniziert nicht mit der Kette.",
+      "pt": "A comparação RFC 6979 atualmente cobre assinaturas SegWit v0 P2WPKH e P2WSH usando SIGHASH_ALL, incluindo o grind low-r estilo Bitcoin Core; uma assinatura em um script contendo OP_CODESEPARATOR é relatada como não verificável em vez de comparada. O anti-exfil do Jade é secp256k1-zkp sign-to-contract e precisa do nonce do host USB mais a abertura do signatário; QR / sign_psbt Jade ainda não o executa. O anti-klepto do BitBox é uma construção diferente. A detecção de reutilização de nonce compara valores r para o mesmo ponto secp256k1, incluindo assinaturas carregadas por campos scriptSig/witness finalizados, codificações compactadas e não compactadas, e DER não estrito recuperável; o mesmo valor r reivindicado sob duas chaves públicas diferentes é sinalizado como um campo rotulado incorretamente em vez de ser ignorado. Um veredito limpo não é emitido quando uma assinatura não pode ser inspecionada. A detecção de inscrição lê envelopes OP_FALSE OP_IF \"ord\" em scripts tap-leaf e witnesses finalizados; ela não numera sats. A propriedade da saída é derivada da chave de sessão: contas 0–2, 50 recebem + 50 de troco, todos os quatro tipos de script. Ela não se comunica com a cadeia."
+    },
+    "exact": {
+      "de": "Der RFC 6979-Vergleich deckt derzeit SegWit v0 P2WPKH- und P2WSH-Signaturen mit SIGHASH_ALL ab, einschließlich Low-r-Grinding im Stil von Bitcoin Core; eine Signatur auf einem Skript, das OP_CODESEPARATOR enthält, wird als nicht verifizierbar gemeldet anstatt verglichen. Jade Anti-Exfil ist secp256k1-zkp sign-to-contract und benötigt die USB-Host-Nonce plus die Eröffnung des Signierers; QR / sign_psbt Jade führt dies noch nicht aus. BitBox Anti-Klepto ist eine andere Konstruktion. Die Nonce-Wiederverwendungs-Erkennung vergleicht r-Werte für denselben secp256k1-Punkt, einschließlich Signaturen, die von finalisierten scriptSig/witness-Feldern getragen werden, komprimierte und unkomprimierte Kodierungen sowie wiederherstellbare non-strict DER; derselbe r-Wert, der unter zwei verschiedenen öffentlichen Schlüsseln beansprucht wird, wird als falsch beschriftetes Feld gekennzeichnet, anstatt übersprungen zu werden. Ein eindeutiges Urteil wird nicht abgegeben, wenn eine Signatur nicht inspiziert werden kann. Die Inschriften-Erkennung liest OP_FALSE OP_IF „ord“-Umschläge in Tap-Leaf-Skripten und finalisierten Witnesses; sie nummeriert keine Sats. Der Ausgabe-Besitz wird vom Sitzungsschlüssel abgeleitet: Konten 0–2, 50 Empfang + 50 Wechsel, alle vier Skripttypen. Sie kommuniziert nicht mit der Kette.",
+      "pt": "A comparação RFC 6979 atualmente cobre assinaturas SegWit v0 P2WPKH e P2WSH usando SIGHASH_ALL, incluindo o grind low-r estilo Bitcoin Core; uma assinatura em um script contendo OP_CODESEPARATOR é relatada como não verificável em vez de comparada. O anti-exfil do Jade é secp256k1-zkp sign-to-contract e precisa do nonce do host USB mais a abertura do signatário; QR / sign_psbt Jade ainda não o executa. O anti-klepto do BitBox é uma construção diferente. A detecção de reutilização de nonce compara valores r para o mesmo ponto secp256k1, incluindo assinaturas carregadas por campos scriptSig/witness finalizados, codificações compactadas e não compactadas, e DER não estrito recuperável; o mesmo valor r reivindicado sob duas chaves públicas diferentes é sinalizado como um campo rotulado incorretamente em vez de ser ignorado. Um veredito limpo não é emitido quando uma assinatura não pode ser inspecionada. A detecção de inscrição lê envelopes OP_FALSE OP_IF \"ord\" em scripts tap-leaf e witnesses finalizados; ela não numera sats. A propriedade da saída é derivada da chave de sessão: contas 0–2, 50 de recebimento + 50 de troco, todos os quatro tipos de script. Ela não se comunica com a cadeia."
     }
+  },
+  "change · {path}": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. Return exactly: Wechsel · {path}"
+    },
+    "retranslate": {
+      "de": "Wechselgeld · {path}"
+    },
+    "exact": {
+      "de": "Wechsel · {path}"
+    }
+  },
+  "change · {path} (verified)": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. Return exactly: Wechsel · {path} (verifiziert)"
+    },
+    "retranslate": {
+      "de": "Wechselgeld · {path} (verifiziert)"
+    },
+    "exact": {
+      "de": "Wechsel · {path} (verifiziert)"
+    }
+  },
+  "receive (this wallet) · {path}": {
+    "noteByLanguage": {
+      "de": "The receive branch is \"Empfang\", as in \"0 ist Empfang · 1 ist Wechsel\". Return exactly: Empfang (diese Wallet) · {path}",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Return exactly: recepción (esta billetera) · {path}",
+      "fr": "The receive branch is the noun \"réception\", as in \"Dérive les branches Réception et Monnaie\"; \"recevoir\" is the verb. Return exactly: réception (ce portefeuille) · {path}",
+      "pt": "Portuguese names the receive branch with the noun \"recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"receber\" is the verb. Return exactly: recebimento (esta carteira) · {path}"
+    },
+    "retranslate": {
+      "de": "Empfangen (diese Wallet) · {path}",
+      "es": "recibir (esta billetera) · {path}",
+      "fr": "recevoir (ce portefeuille) · {path}",
+      "pt": "receber (esta carteira) · {path}"
+    },
+    "exact": {
+      "de": "Empfang (diese Wallet) · {path}",
+      "es": "recepción (esta billetera) · {path}",
+      "fr": "réception (ce portefeuille) · {path}",
+      "pt": "recebimento (esta carteira) · {path}"
+    }
+  },
+  "not in this wallet (accounts 0–2, 50 receive + 50 change, four script types)": {
+    "noteByLanguage": {
+      "de": "The receive branch is \"Empfang\", as in \"0 ist Empfang · 1 ist Wechsel\". Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. Return exactly: nicht in dieser Wallet (Konten 0–2, 50 Empfang + 50 Wechsel, vier Skripttypen)",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Return exactly: no en esta billetera (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos de script)",
+      "fr": "The receive branch is the noun \"réception\", as in \"Dérive les branches Réception et Monnaie\"; \"recevoir\" is the verb. Return exactly: pas dans ce portefeuille (comptes 0-2, 50 réception + 50 monnaie, quatre types de scripts)",
+      "pt": "Portuguese names the receive branch with the noun \"recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"receber\" is the verb. Return exactly: não está nesta carteira (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos de script)"
+    },
+    "retranslate": {
+      "de": "nicht in dieser Wallet (Konten 0–2, 50 Empfangen + 50 Wechselgeld, vier Skripttypen)",
+      "es": "no en esta billetera (cuentas 0–2, 50 recibir + 50 cambio, cuatro tipos de script)",
+      "fr": "pas dans ce portefeuille (comptes 0-2, 50 recevoir + 50 monnaie, quatre types de scripts)",
+      "pt": "não está nesta carteira (contas 0–2, 50 receber + 50 troco, quatro tipos de script)"
+    },
+    "exact": {
+      "de": "nicht in dieser Wallet (Konten 0–2, 50 Empfang + 50 Wechsel, vier Skripttypen)",
+      "es": "no en esta billetera (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos de script)",
+      "fr": "pas dans ce portefeuille (comptes 0-2, 50 réception + 50 monnaie, quatre types de scripts)",
+      "pt": "não está nesta carteira (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos de script)"
+    }
+  },
+  "This output is not in the session wallet (accounts 0–2, 50 receive + 50 change, four script types).": {
+    "noteByLanguage": {
+      "de": "The receive branch is \"Empfang\", as in \"0 ist Empfang · 1 ist Wechsel\". Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. Return exactly: Diese Ausgabe befindet sich nicht in der Sitzungs-Wallet (Konten 0–2, 50 Empfang + 50 Wechsel, vier Skripttypen).",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Return exactly: Esta salida no está en la billetera de sesión (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos de script).",
+      "fr": "The receive branch is the noun \"réception\", as in \"Dérive les branches Réception et Monnaie\"; \"recevoir\" is the verb. Return exactly: Cette sortie n'est pas dans le portefeuille de session (comptes 0-2, 50 réception + 50 monnaie, quatre types de scripts).",
+      "pt": "Portuguese names the receive branch with the noun \"recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"receber\" is the verb. Return exactly: Esta saída não está na carteira de sessão (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos de script)."
+    },
+    "retranslate": {
+      "de": "Diese Ausgabe befindet sich nicht in der Sitzungs-Wallet (Konten 0–2, 50 Empfangen + 50 Wechselgeld, vier Skripttypen).",
+      "es": "Esta salida no está en la billetera de sesión (cuentas 0–2, 50 recibir + 50 cambio, cuatro tipos de script).",
+      "fr": "Cette sortie n'est pas dans le portefeuille de session (comptes 0-2, 50 recevoir + 50 monnaie, quatre types de scripts).",
+      "pt": "Esta saída não está na carteira de sessão (contas 0–2, 50 receber + 50 troco, quatro tipos de script)."
+    },
+    "exact": {
+      "de": "Diese Ausgabe befindet sich nicht in der Sitzungs-Wallet (Konten 0–2, 50 Empfang + 50 Wechsel, vier Skripttypen).",
+      "es": "Esta salida no está en la billetera de sesión (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos de script).",
+      "fr": "Cette sortie n'est pas dans le portefeuille de session (comptes 0-2, 50 réception + 50 monnaie, quatre types de scripts).",
+      "pt": "Esta saída não está na carteira de sessão (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos de script)."
+    }
+  },
+  "Session key: outputs compared against {count} derived scripts (accounts 0–2, 50 receive + 50 change, four types).": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change is \"Wechsel\" in this catalog, as in \"0 ist Empfang · 1 ist Wechsel\" and \"Wechseladressen\"; \"Wechselgeld\" is not used for it. \"Änderung\" means a modification. Return exactly: Sitzungsschlüssel: Ausgaben verglichen mit {count} abgeleiteten Skripten (Konten 0–2, 50 Empfang + 50 Wechsel, vier Typen).",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Return exactly: Clave de sesión: salidas comparadas contra {count} scripts derivados (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos).",
+      "fr": "The receive branch is the noun \"réception\", as in \"Dérive les branches Réception et Monnaie\"; \"recevoir\" is the verb. Return exactly: Clé de session : sorties comparées à {count} scripts dérivés (comptes 0-2, 50 réception + 50 monnaie, quatre types).",
+      "pt": "Portuguese names the receive branch with the noun \"recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"receber\" is the verb. Return exactly: Chave de sessão: saídas comparadas com {count} scripts derivados (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos)."
+    },
+    "retranslate": {
+      "de": "Sitzungsschlüssel: Ausgaben verglichen mit {count} abgeleiteten Skripten (Konten 0–2, 50 Empfang + 50 Änderung, vier Typen).",
+      "es": "Clave de sesión: salidas comparadas contra {count} scripts derivados (cuentas 0–2, 50 recibir + 50 cambio, cuatro tipos).",
+      "fr": "Clé de session : sorties comparées à {count} scripts dérivés (comptes 0-2, 50 recevoir + 50 monnaie, quatre types).",
+      "pt": "Chave de sessão: saídas comparadas com {count} scripts derivados (contas 0–2, 50 receber + 50 troco, quatro tipos)."
+    },
+    "exact": {
+      "de": "Sitzungsschlüssel: Ausgaben verglichen mit {count} abgeleiteten Skripten (Konten 0–2, 50 Empfang + 50 Wechsel, vier Typen).",
+      "es": "Clave de sesión: salidas comparadas contra {count} scripts derivados (cuentas 0–2, 50 de recepción + 50 de cambio, cuatro tipos).",
+      "fr": "Clé de session : sorties comparées à {count} scripts dérivés (comptes 0-2, 50 réception + 50 monnaie, quatre types).",
+      "pt": "Chave de sessão: saídas comparadas com {count} scripts derivados (contas 0–2, 50 de recebimento + 50 de troco, quatro tipos)."
+    }
+  },
+  "If you expected change, do not sign. A destination-swap can replace both the payment and the change.": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change output is a \"Wechselausgabe\" here (\"Ausgabe\" is this catalog's output, \"Wechsel\" its change); \"Wechselgeld\" is not used for it. Return exactly: Wenn Sie eine Wechselausgabe erwartet haben, signieren Sie nicht. Ein Ziel-Swap kann sowohl die Zahlung als auch die Wechselausgabe ersetzen."
+    },
+    "retranslate": {
+      "de": "Wenn Sie Wechselgeld erwartet haben, signieren Sie nicht. Ein Ziel-Swap kann sowohl die Zahlung als auch das Wechselgeld ersetzen."
+    },
+    "exact": {
+      "de": "Wenn Sie eine Wechselausgabe erwartet haben, signieren Sie nicht. Ein Ziel-Swap kann sowohl die Zahlung als auch die Wechselausgabe ersetzen."
+    }
+  },
+  "input {n} declares {witness} BTC in its witness UTXO but {nonWitness} BTC in its non-witness UTXO (checked against the embedded previous transaction). Neither amount is trusted and the fee is left unknown.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: la entrada {n} declara {witness} BTC en su UTXO de testigo pero {nonWitness} BTC en su UTXO sin testigo (verificado contra la transacción anterior incrustada). Ninguna cantidad es de confianza y la comisión se deja desconocida."
+    },
+    "retranslate": {
+      "es": "la entrada {n} declara {witness} BTC en su UTXO de testigo pero {nonWitness} BTC en su UTXO sin testigo (verificado contra la transacción anterior incrustada). Ninguna cantidad es de confianza y la tarifa se deja desconocida."
+    },
+    "exact": {
+      "es": "la entrada {n} declara {witness} BTC en su UTXO de testigo pero {nonWitness} BTC en su UTXO sin testigo (verificado contra la transacción anterior incrustada). Ninguna cantidad es de confianza y la comisión se deja desconocida."
+    }
+  },
+  "input {n} names different previous-output scripts in its witness UTXO and its non-witness UTXO (the non-witness side checked against the embedded previous transaction). Neither claim is trusted and the fee is left unknown.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: La entrada {n} nombra diferentes scripts de salida previa en su UTXO de testigo y su UTXO no de testigo (el lado no de testigo se verifica contra la transacción previa incrustada). Ninguna reclamación es de confianza y la comisión se desconoce."
+    },
+    "retranslate": {
+      "es": "La entrada {n} nombra diferentes scripts de salida previa en su UTXO de testigo y su UTXO no de testigo (el lado no de testigo se verifica contra la transacción previa incrustada). Ninguna reclamación es de confianza y la tarifa se desconoce."
+    },
+    "exact": {
+      "es": "La entrada {n} nombra diferentes scripts de salida previa en su UTXO de testigo y su UTXO no de testigo (el lado no de testigo se verifica contra la transacción previa incrustada). Ninguna reclamación es de confianza y la comisión se desconoce."
+    }
+  },
+  "Fee unknown": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Comisión desconocida"
+    },
+    "retranslate": {
+      "es": "Tarifa desconocida"
+    },
+    "exact": {
+      "es": "Comisión desconocida"
+    }
+  },
+  "Unverified fee (PSBT previous-output claims)": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Comisión no verificada (reclamaciones de salida previa de PSBT)"
+    },
+    "retranslate": {
+      "es": "Tarifa no verificada (reclamaciones de salida previa de PSBT)"
+    },
+    "exact": {
+      "es": "Comisión no verificada (reclamaciones de salida previa de PSBT)"
+    }
+  },
+  "Fee unknown — some inputs do not include a claimed previous-output amount.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Comisión desconocida: algunas entradas no incluyen una cantidad de salida previa reclamada."
+    },
+    "retranslate": {
+      "es": "Tarifa desconocida: algunas entradas no incluyen una cantidad de salida previa reclamada."
+    },
+    "exact": {
+      "es": "Comisión desconocida: algunas entradas no incluyen una cantidad de salida previa reclamada."
+    }
+  },
+  "Previous outputs and fee": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. \"Previous\" qualifies the outputs only. Return exactly: Salidas anteriores y comisión"
+    },
+    "retranslate": {
+      "es": "Salidas y tarifa anteriores"
+    },
+    "exact": {
+      "es": "Salidas anteriores y comisión"
+    }
+  },
+  "Amounts and fee were calculated from PSBT-provided witness UTXO claims, but those claims were not checked against previous transactions or the blockchain.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Las cantidades y la comisión se calcularon a partir de las reclamaciones de UTXO de testigo proporcionadas por la PSBT, pero esas reclamaciones no se verificaron contra transacciones anteriores ni contra la cadena de bloques."
+    },
+    "retranslate": {
+      "es": "Las cantidades y la tarifa se calcularon a partir de las reclamaciones de UTXO de testigo proporcionadas por la PSBT, pero esas reclamaciones no se verificaron contra transacciones anteriores ni contra la cadena de bloques."
+    },
+    "exact": {
+      "es": "Las cantidades y la comisión se calcularon a partir de las reclamaciones de UTXO de testigo proporcionadas por la PSBT, pero esas reclamaciones no se verificaron contra transacciones anteriores ni contra la cadena de bloques."
+    }
+  },
+  "Not a PSBT. Input amounts and fee are unknown without previous outputs. RFC 6979 cannot be checked here. This is the last look before broadcast.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: No es una PSBT. Las cantidades de entrada y la comisión son desconocidas sin salidas anteriores. RFC 6979 no se puede verificar aquí. Esta es la última vista antes de la transmisión."
+    },
+    "retranslate": {
+      "es": "No es una PSBT. Las cantidades de entrada y la tarifa son desconocidas sin salidas anteriores. RFC 6979 no se puede verificar aquí. Esta es la última vista antes de la transmisión."
+    },
+    "exact": {
+      "es": "No es una PSBT. Las cantidades de entrada y la comisión son desconocidas sin salidas anteriores. RFC 6979 no se puede verificar aquí. Esta es la última vista antes de la transmisión."
+    }
+  },
+  "Version {version} · locktime {locktime} · segwit. Fee unknown — previous output amounts are not in a raw transaction.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Versión {version} · locktime {locktime} · segwit. Comisión desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    },
+    "retranslate": {
+      "es": "Versión {version} · locktime {locktime} · segwit. Tarifa desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    },
+    "exact": {
+      "es": "Versión {version} · locktime {locktime} · segwit. Comisión desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    }
+  },
+  "Version {version} · locktime {locktime}. Fee unknown — previous output amounts are not in a raw transaction.": {
+    "noteByLanguage": {
+      "es": "A transaction fee is \"comisión\" in this catalog, as in \"Comisiones de Tx\"; \"tarifa\" means a price list. Return exactly: Versión {version} · locktime {locktime}. Comisión desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    },
+    "retranslate": {
+      "es": "Versión {version} · locktime {locktime}. Tarifa desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    },
+    "exact": {
+      "es": "Versión {version} · locktime {locktime}. Comisión desconocida — las cantidades de salida anteriores no están en una transacción sin procesar."
+    }
+  },
+  "A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: Se detectó un nonce ECDSA repetido; abre el Inspector de Nonce para las firmas afectadas."
+    },
+    "retranslate": {
+      "es": "Se detectó un nonce ECDSA repetido; abra el Inspector de Nonce para las firmas afectadas."
+    },
+    "exact": {
+      "es": "Se detectó un nonce ECDSA repetido; abre el Inspector de Nonce para las firmas afectadas."
+    }
+  },
+  "A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: No se pudo confirmar un posible nonce ECDSA repetido para la misma clave pública desde este archivo; abre el Inspector de Nonce y verifica las firmas de forma independiente."
+    },
+    "retranslate": {
+      "es": "No se pudo confirmar un posible nonce ECDSA repetido para la misma clave pública desde este archivo; abra el Inspector de Nonce y verifique las firmas de forma independiente."
+    },
+    "exact": {
+      "es": "No se pudo confirmar un posible nonce ECDSA repetido para la misma clave pública desde este archivo; abre el Inspector de Nonce y verifica las firmas de forma independiente."
+    }
+  },
+  "input {n} declares a malformed sighash policy. Do not sign until its policy is known.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: La entrada {n} declara una política de sighash mal formada. No firmes hasta que se conozca su política."
+    },
+    "retranslate": {
+      "es": "La entrada {n} declara una política de sighash mal formada. No firme hasta que se conozca su política."
+    },
+    "exact": {
+      "es": "La entrada {n} declara una política de sighash mal formada. No firmes hasta que se conozca su política."
+    }
+  },
+  "input {n} carries a Schnorr signature that is not valid under BIP341 (64 bytes, or 65 with a defined sighash byte). Do not sign until its policy is known.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: La entrada {n} lleva una firma Schnorr que no es válida según BIP341 (64 bytes, o 65 con un byte de sighash definido). No firmes hasta que se conozca su política."
+    },
+    "retranslate": {
+      "es": "La entrada {n} lleva una firma Schnorr que no es válida según BIP341 (64 bytes, o 65 con un byte de sighash definido). No firme hasta que se conozca su política."
+    },
+    "exact": {
+      "es": "La entrada {n} lleva una firma Schnorr que no es válida según BIP341 (64 bytes, o 65 con un byte de sighash definido). No firmes hasta que se conozca su política."
+    }
+  },
+  "input {n}: {problem} Do not sign until its policy is known.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: Entrada {n}: {problem} No firmes hasta que se conozca su política."
+    },
+    "retranslate": {
+      "es": "Entrada {n}: {problem} No firme hasta que se conozca su política."
+    },
+    "exact": {
+      "es": "Entrada {n}: {problem} No firmes hasta que se conozca su política."
+    }
+  },
+  "input {n} requests {policy}; that policy does not commit to all shown inputs. Do not accept the displayed outputs as what a signature will authorize.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: La entrada {n} solicita {policy}; esa política no se compromete con todas las entradas mostradas. No aceptes las salidas mostradas como lo que una firma autorizará."
+    },
+    "retranslate": {
+      "es": "La entrada {n} solicita {policy}; esa política no se compromete con todas las entradas mostradas. No acepte las salidas mostradas como lo que una firma autorizará."
+    },
+    "exact": {
+      "es": "La entrada {n} solicita {policy}; esa política no se compromete con todas las entradas mostradas. No aceptes las salidas mostradas como lo que una firma autorizará."
+    }
+  },
+  "input {n} requests {policy}; that policy does not commit to all shown outputs. Do not accept the displayed outputs as what a signature will authorize.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: La entrada {n} solicita {policy}; esa política no se compromete con todas las salidas mostradas. No aceptes las salidas mostradas como lo que una firma autorizará."
+    },
+    "retranslate": {
+      "es": "La entrada {n} solicita {policy}; esa política no se compromete con todas las salidas mostradas. No acepte las salidas mostradas como lo que una firma autorizará."
+    },
+    "exact": {
+      "es": "La entrada {n} solicita {policy}; esa política no se compromete con todas las salidas mostradas. No aceptes las salidas mostradas como lo que una firma autorizará."
+    }
+  },
+  "input {n} requests {policy}; that policy is not a defined sighash policy. Do not accept the displayed outputs as what a signature will authorize.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: La entrada {n} solicita {policy}; esa política no es una política de sighash definida. No aceptes las salidas mostradas como lo que una firma autorizará."
+    },
+    "retranslate": {
+      "es": "La entrada {n} solicita {policy}; esa política no es una política de sighash definida. No acepte las salidas mostradas como lo que una firma autorizará."
+    },
+    "exact": {
+      "es": "La entrada {n} solicita {policy}; esa política no es una política de sighash definida. No aceptes las salidas mostradas como lo que una firma autorizará."
+    }
+  },
+  "The same r value appears on different message digests. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: El mismo valor r aparece en diferentes resúmenes de mensaje. Si ambas firmas son válidas, se puede recuperar la clave privada. No transmitas esta transacción."
+    },
+    "retranslate": {
+      "es": "El mismo valor r aparece en diferentes resúmenes de mensaje. Si ambas firmas son válidas, se puede recuperar la clave privada. No transmita esta transacción."
+    },
+    "exact": {
+      "es": "El mismo valor r aparece en diferentes resúmenes de mensaje. Si ambas firmas son válidas, se puede recuperar la clave privada. No transmitas esta transacción."
+    }
+  },
+  "The message digests could not both be reconstructed, so verify these signatures independently before treating this as a key leak.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: Los resúmenes de mensaje no pudieron ser reconstruidos ambos, así que verifica estas firmas de forma independiente antes de tratar esto como una fuga de clave."
+    },
+    "retranslate": {
+      "es": "Los resúmenes de mensaje no pudieron ser reconstruidos ambos, así que verifique estas firmas de forma independiente antes de tratar esto como una fuga de clave."
+    },
+    "exact": {
+      "es": "Los resúmenes de mensaje no pudieron ser reconstruidos ambos, así que verifica estas firmas de forma independiente antes de tratar esto como una fuga de clave."
+    }
+  },
+  "{count} pair(s) share an r value but name different keys — a mislabeled signature field can hide real nonce reuse this way. Verify every signature against its input's key independently before signing or broadcasting.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: {count} par(es) comparten un valor r pero nombran claves diferentes — un campo de firma mal etiquetado puede ocultar la reutilización real del nonce de esta manera. Verifica cada firma contra la clave de su entrada de forma independiente antes de firmar o transmitir."
+    },
+    "retranslate": {
+      "es": "{count} par(es) comparten un valor r pero nombran claves diferentes — un campo de firma mal etiquetado puede ocultar la reutilización real del nonce de esta manera. Verifique cada firma contra la clave de su entrada de forma independiente antes de firmar o transmitir."
+    },
+    "exact": {
+      "es": "{count} par(es) comparten un valor r pero nombran claves diferentes — un campo de firma mal etiquetado puede ocultar la reutilización real del nonce de esta manera. Verifica cada firma contra la clave de su entrada de forma independiente antes de firmar o transmitir."
+    }
+  },
+  "Message digests cannot be rebuilt from a raw transaction without prevouts, so treat this as a warning and do not broadcast until the signatures are checked independently.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: Los resúmenes de mensajes no se pueden reconstruir a partir de una transacción sin procesar sin prevouts, así que trata esto como una advertencia y no lo transmitas hasta que las firmas se verifiquen de forma independiente."
+    },
+    "retranslate": {
+      "es": "Los resúmenes de mensajes no se pueden reconstruir a partir de una transacción sin procesar sin prevouts, así que trate esto como una advertencia y no lo transmita hasta que las firmas se verifiquen de forma independiente."
+    },
+    "exact": {
+      "es": "Los resúmenes de mensajes no se pueden reconstruir a partir de una transacción sin procesar sin prevouts, así que trata esto como una advertencia y no lo transmitas hasta que las firmas se verifiquen de forma independiente."
+    }
+  },
+  "A key association in a raw transaction is read from the script, not verified; verify these signatures independently before broadcast.": {
+    "noteByLanguage": {
+      "es": "This catalog addresses the user as \"tú\" (\"Pega una dirección\", \"Carga una clave de sesión\"), not \"usted\". Return exactly: Una asociación de clave en una transacción sin procesar se lee del script, no se verifica; verifica estas firmas de forma independiente antes de la transmisión."
+    },
+    "retranslate": {
+      "es": "Una asociación de clave en una transacción sin procesar se lee del script, no se verifica; verifique estas firmas de forma independiente antes de la transmisión."
+    },
+    "exact": {
+      "es": "Una asociación de clave en una transacción sin procesar se lee del script, no se verifica; verifica estas firmas de forma independiente antes de la transmisión."
+    }
+  },
+  "Compared with the loaded session key only within accounts 0–2, 50 receive and 50 change addresses, and four supported script types; outputs outside that range remain unclassified.": {
+    "noteByLanguage": {
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\"; \"changement\" means modifying. Return exactly: Comparé avec la clé de session chargée uniquement dans les comptes 0-2, 50 adresses de réception et 50 adresses de monnaie, et quatre types de scripts pris en charge ; les sorties en dehors de cette plage restent non classifiées."
+    },
+    "retranslate": {
+      "fr": "Comparé avec la clé de session chargée uniquement dans les comptes 0-2, 50 adresses de réception et 50 adresses de changement, et quatre types de scripts pris en charge ; les sorties en dehors de cette plage restent non classifiées."
+    },
+    "exact": {
+      "fr": "Comparé avec la clé de session chargée uniquement dans les comptes 0-2, 50 adresses de réception et 50 adresses de monnaie, et quatre types de scripts pris en charge ; les sorties en dehors de cette plage restent non classifiées."
+    }
+  },
+  "No session key was loaded, so output ownership and change derivation were not checked.": {
+    "noteByLanguage": {
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\"; \"changement\" means modifying. Return exactly: Aucune clé de session n'a été chargée, la propriété des sorties et la dérivation de la monnaie n'ont donc pas été vérifiées."
+    },
+    "retranslate": {
+      "fr": "Aucune clé de session n'a été chargée, la propriété des sorties et la dérivation des changements n'ont donc pas été vérifiées."
+    },
+    "exact": {
+      "fr": "Aucune clé de session n'a été chargée, la propriété des sorties et la dérivation de la monnaie n'ont donc pas été vérifiées."
+    }
+  },
+  "PSBT lies:": {
+    "noteByLanguage": {
+      "es": "\"lies\" is the verb: the PSBT lies about this output. It claims a derivation path the loaded session key does not produce for it (the sentence after the label, \"claims {path} but …\", says so). Not the noun \"lies\". This catalog writes \"la PSBT\". Return exactly: La PSBT miente:",
+      "fr": "\"lies\" is the verb: the PSBT lies about this output. It claims a derivation path the loaded session key does not produce for it (the sentence after the label, \"claims {path} but …\", says so). Not the noun \"lies\". This catalog writes \"la PSBT\". Return exactly: La PSBT ment :",
+      "pt": "\"lies\" is the verb: the PSBT lies about this output. It claims a derivation path the loaded session key does not produce for it (the sentence after the label, \"claims {path} but …\", says so). Not the noun \"lies\". This catalog writes \"o PSBT\". Return exactly: O PSBT mente:"
+    },
+    "retranslate": {
+      "es": "Mentiras de PSBT:",
+      "fr": "Mensonges PSBT :",
+      "pt": "Mentiras do PSBT:"
+    },
+    "exact": {
+      "es": "La PSBT miente:",
+      "fr": "La PSBT ment :",
+      "pt": "O PSBT mente:"
+    },
+    "note": "\"lies\" is the verb: the PSBT lies about this output. It claims a derivation path the loaded session key does not produce for it (the sentence after the label, \"claims {path} but …\", says so). Not the noun \"lies\"."
+  },
+  "claims {path} but this session key does not produce this output. Do not sign.": {
+    "note": "\"claims {path}\": the PSBT states that this output is the session wallet's address at derivation path {path}; the session key derives a different output there, so the claim is false."
   }
 }
