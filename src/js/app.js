@@ -11921,6 +11921,7 @@ function hodlSpDeriveVinKeys(vins) {
         }
         path = hit.path;
       }
+      if (/^m'?$/.test(path)) throw new Error(`Input ${i}: path must name a child of the session root ("m/…").`);
       if (!/^m(\/|$)/.test(path)) throw new Error(`Input ${i}: path must start at the session root ("m/…").`);
       let node = null, nodePrivateKey = null;
       try {
@@ -11953,7 +11954,9 @@ function hodlSpDeriveVinKeys(vins) {
         return resolved;
       } finally {
         if (nodePrivateKey) nodePrivateKey.fill(0);
-        if (node) node.wipePrivateData();
+        // The root belongs to the session; never wipe it as if it were a
+        // disposable child.
+        if (node && node !== root) node.wipePrivateData();
       }
     });
     complete = true;
