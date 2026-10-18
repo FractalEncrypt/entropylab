@@ -18,7 +18,8 @@
 //   - a separate audit call reviews each translation for meaning changes
 //     (dropped negations, receive/change swaps, missing clauses); flagged
 //     keys fall back to "missing" — the safe English path — and are never
-//     written;
+//     written. The one exception is a value equal to its `exact` correction:
+//     that text was reviewed in the context file, so it skips the audit;
 //   - every translated value passes the catalog validator the moment it
 //     arrives, and the final catalog + sidecar must validate or the run fails
 //     and writes nothing for that language;
@@ -330,7 +331,13 @@ export async function translateLanguage({ root, lang, outDir, client, limit, log
         }
         accepted[key] = value;
       }
-      const acceptedKeys = Object.keys(accepted);
+      // A value with an `exact` correction has already been required to equal
+      // it, so it is the committed text a pull request reviewed. The audit has
+      // nothing to add, and it has rejected such values as different from the
+      // identical required text, so a reviewed correction never landed.
+      const reviewed = Object.keys(accepted).filter((key) => forLanguage(contextEntry(context, key)?.exact, lang) !== undefined);
+      for (const key of reviewed) translated[key] = accepted[key];
+      const acceptedKeys = Object.keys(accepted).filter((key) => !reviewed.includes(key));
       if (acceptedKeys.length) {
         const audit = await client.chat({
           name: "audit",
