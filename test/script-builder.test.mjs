@@ -115,3 +115,13 @@ test("the editor renders the builder on every output row and wires it", () => {
   assert.match(editor, /buildOutputScript\(text, \{ network: network\(\), mode \}\)/);
   const css = read("src/css/styles.css");
 });
+
+// Audit M7: address intent is not a full-regex exercise. A mistyped bech32 or
+// Base58 address must error, not silently become OP_RETURN text or a raw
+// script (which would pay an unspendable or unrelated output).
+test("a malformed address-shaped string is an error, never OP_RETURN or raw script", () => {
+  assert.throws(() => buildOutputScript("bc1q" + "1".repeat(38)), /does not decode on mainnet/);
+  assert.throws(() => buildOutputScript("1" + "a".repeat(51)), /does not decode on mainnet/);
+  assert.throws(() => buildOutputScript("1" + "A".repeat(30)), /does not decode on mainnet/);
+  assert.throws(() => buildOutputScript("tb1q" + "1".repeat(38), { network: "testnet" }), /does not decode on testnet/);
+});

@@ -73,8 +73,12 @@ export const assembleScriptAsm = (text) => {
   return bytesToHex(script);
 };
 
+// Address intent is decided by the prefix and alphabet, not by a full regex
+// that a single mistyped character can fall out of. A string that starts like
+// a bech32 or Base58 address but does not decode is an error; it must never
+// become OP_RETURN text or a raw script (audit M7).
 const looksLikeAddress = (text) =>
-  /^(?:bc1|tb1|bcrt1)[02-9ac-hj-np-z]{6,}$/i.test(text) || /^[123mn][1-9A-HJ-NP-Za-km-z]{20,50}$/.test(text);
+  /^(?:bc1|tb1|bcrt1)/i.test(text) || /^[123mn][1-9A-HJ-NP-Za-km-z]{20,}$/.test(text);
 
 const scriptFromAddress = (text, network) => {
   const decoded = BtcAddress(network === "testnet" ? BTC_TESTNET : BTC_MAINNET).decode(text);
