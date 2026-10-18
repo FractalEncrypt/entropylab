@@ -54,9 +54,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Keyless Sigstore attestation of the exact wallet HTML (issue #58).
-      id-token: write
-      attestations: write
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
@@ -65,6 +62,7 @@ jobs:
         # input (scripts/build-commit.mjs), which a shallow clone cannot see
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -92,11 +90,6 @@ jobs:
             > WASM-SHA256SUMS.txt
       - name: Generate the IPFS CID name
         run: node scripts/cid.mjs entropylab.html > CID.txt
-      - name: Attest the wallet artifact
-        if: github.ref == 'refs/heads/rock' && github.event_name == 'push'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: entropylab.html
       - name: Upload the checksum manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -135,6 +128,32 @@ jobs:
           path: _site
           retention-days: 7
 
+  # Keyless Sigstore attestation of the exact tested wallet HTML. This is a
+  # separate push-only job: a pull request must never run PR-controlled code
+  # with id-token/attestations write permissions (audit H1).
+  attest:
+    name: Attest · wallet artifact
+    needs: [build]
+    if: github.ref == 'refs/heads/rock' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the tested candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: entropylab-candidate
+          path: candidate
+      - name: Verify the candidate digest
+        run: echo "${{ needs.build.outputs.sha256 }}  candidate/entropylab.html" | sha256sum -c -
+      - name: Attest the wallet artifact
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: candidate/entropylab.html
+
   # The WASM artifacts (src/js/entropylab-wasm-b64.js, src/js/psbt-wasm-b64.js,
   # src/js/vanity-wasm-b64.js) are built from the pinned Rust crates
   # (entropylab-wasm/, psbt-wasm/, vanity-wasm/, each
@@ -154,6 +173,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -235,6 +256,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -268,6 +291,7 @@ jobs:
         # input (scripts/build-commit.mjs), which a shallow clone cannot see
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}

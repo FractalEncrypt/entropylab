@@ -171,3 +171,33 @@ test("every job that pushes to rock uses the maintainer push token", () => {
     assert.ok(pushes.length > 0, "expected at least one protected push site");
   }
 });
+
+test("the dev image verifies every remote tool download against a pinned digest", () => {
+  const dockerfile = read("Dockerfile");
+  assert.match(dockerfile, /^ARG NODE_SHA256=[0-9a-f]{64}$/m);
+  assert.match(dockerfile, /^ARG FIREFOX_SHA512=[0-9a-f]{128}$/m);
+  assert.match(dockerfile, /^ARG RUSTUP_INIT_SHA256=[0-9a-f]{64}$/m);
+  assert.match(dockerfile, /echo "\$\{NODE_SHA256\}  node-\$\{NODE_VERSION\}-linux-x64\.tar\.xz" \| sha256sum -c -/);
+  assert.match(dockerfile, /echo "\$\{FIREFOX_SHA512\}  firefox-\$\{FIREFOX_VERSION\}\.tar\.xz" \| sha512sum -c -/);
+  assert.match(dockerfile, /echo "\$\{RUSTUP_INIT_SHA256\}  rustup-init" \| sha256sum -c -/);
+  assert.doesNotMatch(dockerfile, /curl -fsS https:\/\/sh\.rustup\.rs \| sh/, "rustup is installed from a verified binary");
+  assert.match(dockerfile, /EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796/, "the Chrome signing key fingerprint is pinned");
+});
+
+test("attestation permissions stay on the push-only job", () => {
+  const workflow = read(".github/workflows/ci-cd.yml");
+  const job = (name) => workflow.match(new RegExp(`^  ${name}:\\n[\\s\\S]*?(?=^  [\\w-]+:)`, "m"))?.[0] ?? "";
+  const build = job("build");
+  assert.ok(build, "the build job exists");
+  assert.doesNotMatch(build, /id-token: write|attestations: write/, "a PR build must not hold attestation permissions");
+  assert.match(build, /persist-credentials: false/, "the PR build checkout must not persist its token");
+  for (const name of ["build-wasm", "test-ci", "test-browser"]) {
+    assert.match(job(name), /persist-credentials: false/, `${name} must not persist the checkout token`);
+  }
+  const attest = job("attest");
+  assert.ok(attest, "a separate attestation job exists");
+  assert.match(attest, /github\.ref == 'refs\/heads\/rock' && github\.event_name == 'push'/);
+  assert.match(attest, /id-token: write/);
+  assert.match(attest, /attestations: write/);
+  assert.match(attest, /subject-path: candidate\/entropylab\.html/);
+});
