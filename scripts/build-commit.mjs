@@ -55,6 +55,9 @@ export function buildCommit(root) {
   // A dirty build input is not any commit: stamping the last committed one
   // would claim provenance the bytes do not have. Generated WASM modules are
   // excluded because CI deliberately refreshes them from the same sources.
+  // Untracked files under a build input count as dirty too (an editor backup
+  // under src/, say), so a local build with one stamps "unknown" — remove or
+  // ignore the stray file and the stamp returns.
   let dirty;
   try {
     dirty = git("status", "--porcelain", "--", ...BUILD_INPUTS)

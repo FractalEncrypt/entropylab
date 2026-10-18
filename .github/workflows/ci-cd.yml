@@ -76,6 +76,11 @@ jobs:
           path: src/js
       - name: Build static site
         run: npm run build
+      # A release page must name its source commit. "unknown" means a build
+      # input was dirty in CI, which must never happen on a push build.
+      - name: Check the footer stamped a source commit
+        if: github.event_name == 'push'
+        run: grep -q 'data-commit="[0-9a-f]\{40\}"' entropylab.html
       # SHA256SUMS.txt names only the HTML, so `sha256sum -c` works for anyone
       # holding just the downloaded file. The WASM modules get their own
       # manifest, checked from a checkout of the release commit.

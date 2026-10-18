@@ -126,6 +126,13 @@ test("a dirty build input stamps unknown instead of a trusted commit", { timeout
   });
 });
 
+test("an untracked file under a build input stamps unknown too", { timeout: 120000 }, () => {
+  withRepo(({ dir, repo, sources }) => {
+    writeFileSync(join(repo, "src/css/styles.css.bak"), "/* editor backup */\n");
+    assert.equal(buildStamp(repo, join(dir, "out-untracked")).stamp, "unknown", "untracked input files are not any commit either");
+  });
+});
+
 test("a build refuses a shallow clone, release and test-hook staging alike", { timeout: 120000 }, () => {
   withRepo(({ dir, repo }) => {
     writeFileSync(join(repo, "NOTES.md"), "docs\n");
