@@ -11978,7 +11978,15 @@ function hodlPaintSpVerify() {
   out.innerHTML = `<p class="psbt-ok">${matches.rows.length} matching output${matches.rows.length === 1 ? "" : "s"}.</p>${bar}` + matches.rows.map((row, index) => {
     let address = p2trAddressFromXonly(row.pub_key, matches.network);
     // The spend key is only computed while revealed.
-    let spend = revealed && hodlSpKeys ? hodlSpBytesToHex(spendPrivForOutput(hodlSpKeys.spendPriv, row.priv_key_tweak)) : "";
+    let spend = "";
+    if (revealed && hodlSpKeys) {
+      let spendBytes = spendPrivForOutput(hodlSpKeys.spendPriv, row.priv_key_tweak);
+      try {
+        spend = hodlSpBytesToHex(spendBytes);
+      } finally {
+        spendBytes.fill(0);
+      }
+    }
     let labelNote = row.label === null ? "" : ` · label m = ${row.label}${row.label === 0 ? " (change)" : ""}`;
     return hodlSpCopyGroupHtml(hodlT("Matched output {n}", { n: index + 1 }) + labelNote, "", address,
       `${hodlPrivateFieldHtml("BIP-352 tweak", row.priv_key_tweak, undefined, "label", true)}${hodlPrivateFieldMarkup(`${hodlT("Spend private key")}${hodlPrivacyEyeMarkup(revealed)}`, hodlPrivateValue(spend, undefined, revealed), { revealed })}`);
@@ -16036,7 +16044,8 @@ function hodlJournalShowWork() {
     let keyManagerNote = document.querySelector(".journal-keymanager-encryption-note");
     if (keyManagerNote) keyManagerNote.textContent = hodlTText(passwordProtected ? "Encrypted with the Journal password" : "Encoded for this Journal \u00b7 No password protection");
   }
-  hodlJournalFillLifehash(document.getElementById("journal-lifehash"), hodlJournalKeys?.verify);
+  // Do not render a verifier derived from the Journal KDF output: a captured
+  // icon would let an attacker test password guesses offline (audit L7).
   hodlJournalRenderList();
 }
 function hodlJournalRenderList() {
