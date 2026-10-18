@@ -181,7 +181,15 @@ test("the dev image verifies every remote tool download against a pinned digest"
   assert.match(dockerfile, /echo "\$\{FIREFOX_SHA512\}  firefox-\$\{FIREFOX_VERSION\}\.tar\.xz" \| sha512sum -c -/);
   assert.match(dockerfile, /echo "\$\{RUSTUP_INIT_SHA256\}  rustup-init" \| sha256sum -c -/);
   assert.doesNotMatch(dockerfile, /curl -fsS https:\/\/sh\.rustup\.rs \| sh/, "rustup is installed from a verified binary");
+  // A versioned archive URL keeps the pinned hash valid across rustup
+  // releases; the dist/ URL serves whatever release is current.
+  assert.match(dockerfile, /^ARG RUSTUP_VERSION=\d+\.\d+\.\d+$/m);
+  assert.match(dockerfile, /rustup\/archive\/\$\{RUSTUP_VERSION\}\/x86_64-unknown-linux-gnu\/rustup-init/, "rustup-init comes from the versioned archive");
+  assert.doesNotMatch(dockerfile, /rustup\/dist\/x86_64-unknown-linux-gnu\/rustup-init/, "the rolling dist URL defeats the hash pin on the next rustup release");
   assert.match(dockerfile, /EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796/, "the Chrome signing key fingerprint is pinned");
+  // apt trusts every primary in a signed-by keyring, so the key file must
+  // hold exactly one primary, not only contain the pinned one.
+  assert.match(dockerfile, /\[ "\$\(gpg --show-keys --with-colons \/usr\/share\/keyrings\/google-chrome\.gpg \| grep -c '\^pub:'\)" = "1" \]/, "the Chrome keyring must contain exactly one primary key");
 });
 
 test("attestation permissions stay on the push-only job", () => {
@@ -191,8 +199,18 @@ test("attestation permissions stay on the push-only job", () => {
   assert.ok(build, "the build job exists");
   assert.doesNotMatch(build, /id-token: write|attestations: write/, "a PR build must not hold attestation permissions");
   assert.match(build, /persist-credentials: false/, "the PR build checkout must not persist its token");
-  for (const name of ["build-wasm", "test-ci", "test-browser"]) {
-    assert.match(job(name), /persist-credentials: false/, `${name} must not persist the checkout token`);
+  // Every job that runs on a pull request (all but the push-only ones:
+  // attest, artifact, timestamp, deploy) keeps GITHUB_TOKEN out of the
+  // checkout. There is no reason for a PR-run checkout to hold it.
+  const pushOnly = new Set(["attest", "artifact", "timestamp", "deploy"]);
+  const jobsBlock = workflow.slice(workflow.indexOf("\njobs:"));
+  for (const name of jobsBlock.match(/^  [a-z][a-z-]*(?=:\n)/gm).map((s) => s.trim())) {
+    if (pushOnly.has(name)) continue;
+    const block = job(name);
+    const checkouts = block.split(/(?=uses: actions\/checkout@[0-9a-f]{40})/).filter((s) => s.startsWith("uses: actions/checkout@"));
+    for (const checkout of checkouts) {
+      assert.match(checkout, /persist-credentials: false/, `${name} must not persist the checkout token`);
+    }
   }
   const attest = job("attest");
   assert.ok(attest, "a separate attestation job exists");

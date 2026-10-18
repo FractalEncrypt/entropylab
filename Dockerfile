@@ -32,6 +32,7 @@ FROM --platform=linux/amd64 ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca78744
 
 ARG NODE_VERSION=v22.23.2
 ARG FIREFOX_VERSION=140.14.0esr
+ARG RUSTUP_VERSION=1.29.1
 ARG UBUNTU_SNAPSHOT=20260916T000000Z
 ARG CLANG_VERSION=1:18.0-59~exp2
 ARG CLANG18_VERSION=1:18.1.3-1ubuntu1
@@ -118,9 +119,11 @@ RUN curl -fsSLO "https://archive.mozilla.org/pub/firefox/releases/${FIREFOX_VERS
 
 # Chrome from Google's official apt repository (amd64). Chrome covers the
 # whole Chromium family: Microsoft Edge is a Chromium fork that shares its
-# engine and headless code path.
+# engine and headless code path. apt trusts every primary in a signed-by
+# keyring, so the key file must hold exactly one — the pinned Google key.
 RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
         | gpg --dearmor --yes -o /usr/share/keyrings/google-chrome.gpg \
+    && [ "$(gpg --show-keys --with-colons /usr/share/keyrings/google-chrome.gpg | grep -c '^pub:')" = "1" ] \
     && gpg --show-keys --with-colons /usr/share/keyrings/google-chrome.gpg | grep -q '^fpr:::::::::EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796:' \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb stable main" \
         > /etc/apt/sources.list.d/google-chrome.list \
@@ -139,7 +142,7 @@ RUN groupmod -n dev ubuntu && usermod -l dev ubuntu && usermod -d /home/dev -m d
 # rust-toolchain.toml. The dependency graphs of all three crates are
 # fetched into the shared CARGO_HOME so the first `npm run build:wasm`
 # needs no network.
-RUN curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+RUN curl -fsSLO "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
     && echo "${RUSTUP_INIT_SHA256}  rustup-init" | sha256sum -c - \
     && chmod +x rustup-init \
     && ./rustup-init -y --profile minimal --default-toolchain none \
