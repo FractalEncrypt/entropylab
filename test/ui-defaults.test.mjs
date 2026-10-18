@@ -143,7 +143,10 @@ test("the network picker sets the network every tool defaults to", () => {
   assert.match(appSource, /hodlSyncSelect\(select, hodlNetworkDefault\)/);
   assert.match(appSource, /select\.dispatchEvent\(new Event\("change", \{ bubbles: true \}\)\)/);
   assert.match(appSource, /document\.dispatchEvent\(new CustomEvent\("hodl:network-default"\)\)/);
-  assert.match(appSource, /let network = hodlNetworkDefault,/);
+  // The inspectors read the header network at each run; a repaint after a
+  // language switch reuses that run's network instead of re-reading it.
+  assert.match(appSource, /let network = options\?\.network \?\? hodlNetworkDefault,/);
+  assert.equal(appSource.match(/let parsed = kind === "psbt" \? hodlParsePsbt\(bytes\) : parseRawTx\(bytes\), network = hodlNetworkDefault/g)?.length, 2);
   // The choice is never stored: every load opens on mainnet again.
   assert.doesNotMatch(appSource, /localStorage\.setItem\([^)]*network/i);
   // The coin takes the Bitcoin Core network colours — yellow mainnet, green
