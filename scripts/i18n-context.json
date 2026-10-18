@@ -737,5 +737,588 @@
     "exact": {
       "es": "Actualizar clave"
     }
+  },
+  "Hardened": {
+    "noteByLanguage": {
+      "de": "Hardened derivation is \"Gehärtet\" and unhardened \"Ungehärtet\" in this catalog, as in \"Zweck-Index · Gehärtet\" and \"Erster abzuleitender Adressindex · Ungehärtet\". Return exactly: Gehärtet",
+      "fr": "Hardened derivation is \"Durci\" and unhardened \"Non endurci\" in this catalog, as in \"Index d'objectif · Durci\" and \"Premier index de réception et de monnaie à dériver · Non endurci\". Return exactly: Durci"
+    },
+    "retranslate": {
+      "de": "Abgehärtet",
+      "fr": "Hardened"
+    },
+    "exact": {
+      "de": "Gehärtet",
+      "fr": "Durci"
+    }
+  },
+  "Unhardened": {
+    "noteByLanguage": {
+      "de": "Hardened derivation is \"Gehärtet\" and unhardened \"Ungehärtet\" in this catalog, as in \"Zweck-Index · Gehärtet\" and \"Erster abzuleitender Adressindex · Ungehärtet\". Return exactly: Ungehärtet",
+      "fr": "Hardened derivation is \"Durci\" and unhardened \"Non endurci\" in this catalog, as in \"Index d'objectif · Durci\" and \"Premier index de réception et de monnaie à dériver · Non endurci\". Return exactly: Non endurci"
+    },
+    "retranslate": {
+      "de": "Nicht gehärtet",
+      "fr": "Non durci"
+    },
+    "exact": {
+      "de": "Ungehärtet",
+      "fr": "Non endurci"
+    }
+  },
+  "Purpose index · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "de": "This catalog writes \"Zweck-Index\" and \"Konto-Index\" with a hyphen. Return exactly: Zweck-Index · {hardening} · 0 bis 2.147.483.647",
+      "fr": "This catalog writes \"Index d'objectif\" and \"Index du compte\". Return exactly: Index d'objectif · {hardening} · 0 à 2 147 483 647"
+    },
+    "retranslate": {
+      "de": "Zweckindex · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Index de but · {hardening} · 0 à 2 147 483 647"
+    },
+    "exact": {
+      "de": "Zweck-Index · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Index d'objectif · {hardening} · 0 à 2 147 483 647"
+    }
+  },
+  "Account index · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "de": "This catalog writes \"Zweck-Index\" and \"Konto-Index\" with a hyphen. Return exactly: Konto-Index · {hardening} · 0 bis 2.147.483.647",
+      "fr": "This catalog writes \"Index d'objectif\" and \"Index du compte\". Return exactly: Index du compte · {hardening} · 0 à 2 147 483 647",
+      "pt": "This catalog writes \"Índice da conta\". Return exactly: Índice da conta · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "de": "Kontoindex · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Index de compte · {hardening} · 0 à 2 147 483 647",
+      "pt": "Índice de conta · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "de": "Konto-Index · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Index du compte · {hardening} · 0 à 2 147 483 647",
+      "pt": "Índice da conta · {hardening} · 0 a 2.147.483.647"
+    }
+  },
+  "Account index · {hardening} · Derived from co-signer key origins.": {
+    "noteByLanguage": {
+      "de": "This catalog writes \"Zweck-Index\" and \"Konto-Index\" with a hyphen. Return exactly: Konto-Index · {hardening} · Abgeleitet von den Ursprüngen der Co-Signer-Schlüssel.",
+      "fr": "This catalog writes \"Index d'objectif\" and \"Index du compte\". Return exactly: Index du compte · {hardening} · Dérivé des origines de clé du co-signataire.",
+      "pt": "This catalog writes \"Índice da conta\". Return exactly: Índice da conta · {hardening} · Derivado das origens das chaves do co-signatário."
+    },
+    "retranslate": {
+      "de": "Kontoindex · {hardening} · Abgeleitet von den Ursprüngen der Co-Signer-Schlüssel.",
+      "fr": "Index de compte · {hardening} · Dérivé des origines de clé du co-signataire.",
+      "pt": "Índice de conta · {hardening} · Derivado das origens das chaves do co-signatário."
+    },
+    "exact": {
+      "de": "Konto-Index · {hardening} · Abgeleitet von den Ursprüngen der Co-Signer-Schlüssel.",
+      "fr": "Index du compte · {hardening} · Dérivé des origines de clé du co-signataire.",
+      "pt": "Índice da conta · {hardening} · Derivado das origens das chaves do co-signatário."
+    }
+  },
+  "Account index · {hardening} · Co-signer key origins use different account numbers.": {
+    "noteByLanguage": {
+      "de": "This catalog writes \"Zweck-Index\" and \"Konto-Index\" with a hyphen. Return exactly: Konto-Index · {hardening} · Co-Signer-Schlüsselursprünge verwenden unterschiedliche Kontonummern.",
+      "pt": "This catalog calls a co-signer \"co-signatário\"; \"coassinante\" is not used. Return exactly: Índice da conta · {hardening} · Origens de chaves de co-signatário usam números de conta diferentes."
+    },
+    "retranslate": {
+      "de": "Kontoindex · {hardening} · Co-Signer-Schlüsselursprünge verwenden unterschiedliche Kontonummern.",
+      "pt": "Índice da conta · {hardening} · Origens de chaves de coassinante usam números de conta diferentes."
+    },
+    "exact": {
+      "de": "Konto-Index · {hardening} · Co-Signer-Schlüsselursprünge verwenden unterschiedliche Kontonummern.",
+      "pt": "Índice da conta · {hardening} · Origens de chaves de co-signatário usam números de conta diferentes."
+    }
+  },
+  "Account index · {hardening} · Derived from the co-signer account paths.": {
+    "noteByLanguage": {
+      "de": "This catalog writes \"Zweck-Index\" and \"Konto-Index\" with a hyphen. Return exactly: Konto-Index · {hardening} · Abgeleitet von den Co-Signer-Kontopfaden.",
+      "pt": "This catalog calls a co-signer \"co-signatário\"; \"coassinante\" is not used. Return exactly: Índice da conta · {hardening} · Derivado dos caminhos da conta do co-signatário."
+    },
+    "retranslate": {
+      "de": "Kontoindex · {hardening} · Abgeleitet von den Co-Signer-Kontopfaden.",
+      "pt": "Índice da conta · {hardening} · Derivado dos caminhos da conta do coassinante."
+    },
+    "exact": {
+      "de": "Konto-Index · {hardening} · Abgeleitet von den Co-Signer-Kontopfaden.",
+      "pt": "Índice da conta · {hardening} · Derivado dos caminhos da conta do co-signatário."
+    }
+  },
+  "First address branch to derive · 0 is Receive · 1 is Change · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "de": "The branches are \"Empfang\" and \"Wechsel\", as in \"Leitet die Zweige Empfang und Wechsel ab\". Return exactly: Erster abzuleitender Adresszweig · 0 ist Empfang · 1 ist Wechsel · {hardening} · 0 bis 2.147.483.647",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. This catalog writes \"Primera rama de direcciones a derivar · 0 es Recepción · 1 es Cambio\". Return exactly: Primera rama de direcciones a derivar · 0 es Recepción · 1 es Cambio · {hardening} · 0 a 2.147.483.647",
+      "fr": "The receive branch is the noun \"Réception\"; \"Recevoir\" is the verb. Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. This catalog writes \"Première branche d'adresses à dériver · 0 = Réception · 1 = Monnaie\". Return exactly: Première branche d'adresses à dériver · 0 = Réception · 1 = Monnaie · {hardening} · 0 à 2 147 483 647",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. This catalog writes \"Primeiro ramo de endereços a derivar · 0 é Recebimento · 1 é Troco\". Return exactly: Primeiro ramo de endereços a derivar · 0 é Recebimento · 1 é Troco · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "de": "Erster abzuleitender Adresszweig · 0 ist Empfangen · 1 ist Wechselgeld · {hardening} · 0 bis 2.147.483.647",
+      "es": "Primera rama de dirección a derivar · 0 es Recibir · 1 es Cambio · {hardening} · 0 a 2.147.483.647",
+      "fr": "Première branche d'adresse à dériver · 0 est Recevoir · 1 est Changer · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro ramo de endereço a derivar · 0 é Receber · 1 é Troca · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "de": "Erster abzuleitender Adresszweig · 0 ist Empfang · 1 ist Wechsel · {hardening} · 0 bis 2.147.483.647",
+      "es": "Primera rama de direcciones a derivar · 0 es Recepción · 1 es Cambio · {hardening} · 0 a 2.147.483.647",
+      "fr": "Première branche d'adresses à dériver · 0 = Réception · 1 = Monnaie · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro ramo de endereços a derivar · 0 é Recebimento · 1 é Troco · {hardening} · 0 a 2.147.483.647"
+    }
+  },
+  "Derives Receive and Change hardened branches · Max {max}": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet die gehärteten Zweige Empfang und Wechsel ab · Max. {max}",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva ramas endurecidas de recepción y cambio · Máx. {max}",
+      "fr": "The receive branch is the noun \"Réception\"; \"Recevoir\" is the verb. Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive les branches durcies Réception et Monnaie · Max {max}",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva os ramos endurecidos de Recebimento e Troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet gehärtete Empfangs- und Wechselgeldzweige ab · Max {max}",
+      "es": "Deriva ramas endurecidas de Recibir y Cambio · Máx {max}",
+      "fr": "Dérive les branches durcies Recevoir et Changer · Max {max}",
+      "pt": "Deriva ramos endurecidos de Receber e Troca · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet die gehärteten Zweige Empfang und Wechsel ab · Max. {max}",
+      "es": "Deriva ramas endurecidas de recepción y cambio · Máx. {max}",
+      "fr": "Dérive les branches durcies Réception et Monnaie · Max {max}",
+      "pt": "Deriva os ramos endurecidos de Recebimento e Troco · Máx. {max}"
+    }
+  },
+  "Derives Receive and Change branches · Max {max}": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet die Zweige Empfang und Wechsel ab · Max. {max}",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva ramas de recepción y cambio · Máx. {max}",
+      "fr": "The receive branch is the noun \"Réception\"; \"Recevoir\" is the verb. Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive les branches Réception et Monnaie · Max {max}",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva os ramos de Recebimento e Troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet Empfangs- und Wechselgeldzweige ab · Max {max}",
+      "es": "Deriva ramas de Recibir y Cambio · Máx {max}",
+      "fr": "Dérive les branches Recevoir et Changer · Max {max}",
+      "pt": "Deriva ramos de Receber e Troca · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet die Zweige Empfang und Wechsel ab · Max. {max}",
+      "es": "Deriva ramas de recepción y cambio · Máx. {max}",
+      "fr": "Dérive les branches Réception et Monnaie · Max {max}",
+      "pt": "Deriva os ramos de Recebimento e Troco · Máx. {max}"
+    }
+  },
+  "Derives Change hardened branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet gehärteten Wechselzweig ab · Max. {max}",
+      "es": "Bitcoin's change is the noun \"cambio\", as in \"Primer índice de recepción y cambio a derivar\"; \"cambiar\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama endurecida de cambio · Máx. {max}",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive la branche durcie Monnaie · Max {max}",
+      "pt": "Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo endurecido de Troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet gehärteten Wechselgeldzweig ab · Max {max}",
+      "es": "Deriva rama endurecida de Cambio · Máx {max}",
+      "fr": "Dérive la branche durcie Changer · Max {max}",
+      "pt": "Deriva ramo endurecido de Troca · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet gehärteten Wechselzweig ab · Max. {max}",
+      "es": "Deriva rama endurecida de cambio · Máx. {max}",
+      "fr": "Dérive la branche durcie Monnaie · Max {max}",
+      "pt": "Deriva ramo endurecido de Troco · Máx. {max}"
+    }
+  },
+  "Derives Change branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet Wechselzweig ab · Max. {max}",
+      "es": "Bitcoin's change is the noun \"cambio\", as in \"Primer índice de recepción y cambio a derivar\"; \"cambiar\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama de cambio · Máx. {max}",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive la branche Monnaie · Max {max}",
+      "pt": "Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo de Troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet Wechselgeldzweig ab · Max {max}",
+      "es": "Deriva rama de Cambio · Máx {max}",
+      "fr": "Dérive la branche Changer · Max {max}",
+      "pt": "Deriva ramo de Troca · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet Wechselzweig ab · Max. {max}",
+      "es": "Deriva rama de cambio · Máx. {max}",
+      "fr": "Dérive la branche Monnaie · Max {max}",
+      "pt": "Deriva ramo de Troco · Máx. {max}"
+    }
+  },
+  "Derives Receive hardened branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet gehärteten Empfangszweig ab · Max. {max}",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama endurecida de recepción · Máx. {max}",
+      "fr": "The receive branch is the noun \"Réception\"; \"Recevoir\" is the verb. Return exactly: Dérive la branche durcie Réception · Max {max}",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo endurecido de Recebimento · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet gehärteten Empfangszweig ab · Max {max}",
+      "es": "Deriva rama endurecida de Recibir · Máx {max}",
+      "fr": "Dérive la branche durcie Recevoir · Max {max}",
+      "pt": "Deriva ramo endurecido de Receber · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet gehärteten Empfangszweig ab · Max. {max}",
+      "es": "Deriva rama endurecida de recepción · Máx. {max}",
+      "fr": "Dérive la branche durcie Réception · Max {max}",
+      "pt": "Deriva ramo endurecido de Recebimento · Máx. {max}"
+    }
+  },
+  "Derives Receive branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet Empfangszweig ab · Max. {max}",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama de recepción · Máx. {max}",
+      "fr": "The receive branch is the noun \"Réception\"; \"Recevoir\" is the verb. Return exactly: Dérive la branche Réception · Max {max}",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo de Recebimento · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet Empfangszweig ab · Max {max}",
+      "es": "Deriva rama de Recibir · Máx {max}",
+      "fr": "Dérive la branche Recevoir · Max {max}",
+      "pt": "Deriva ramo de Receber · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet Empfangszweig ab · Max. {max}",
+      "es": "Deriva rama de recepción · Máx. {max}",
+      "fr": "Dérive la branche Réception · Max {max}",
+      "pt": "Deriva ramo de Recebimento · Máx. {max}"
+    }
+  },
+  "Derives {branches} hardened branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet gehärteten {branches}-Zweig ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama endurecida de {branches} · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo endurecido de {branches} · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet gehärteten {branches}-Zweig ab · Max {max}",
+      "es": "Deriva rama endurecida de {branches} · Máx {max}",
+      "pt": "Deriva ramo endurecido de {branches} · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet gehärteten {branches}-Zweig ab · Max. {max}",
+      "es": "Deriva rama endurecida de {branches} · Máx. {max}",
+      "pt": "Deriva ramo endurecido de {branches} · Máx. {max}"
+    }
+  },
+  "Derives {branches} branch · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {branches}-Zweig ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva rama de {branches} · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramo de {branches} · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {branches}-Zweig ab · Max {max}",
+      "es": "Deriva rama de {branches} · Máx {max}",
+      "pt": "Deriva ramo de {branches} · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {branches}-Zweig ab · Max. {max}",
+      "es": "Deriva rama de {branches} · Máx. {max}",
+      "pt": "Deriva ramo de {branches} · Máx. {max}"
+    }
+  },
+  "Derives {branches} hardened branches · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet gehärtete {branches}-Zweige ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva ramas endurecidas de {branches} · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramos endurecidos de {branches} · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet gehärtete {branches}-Zweige ab · Max {max}",
+      "es": "Deriva ramas endurecidas de {branches} · Máx {max}",
+      "pt": "Deriva ramos endurecidos de {branches} · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet gehärtete {branches}-Zweige ab · Max. {max}",
+      "es": "Deriva ramas endurecidas de {branches} · Máx. {max}",
+      "pt": "Deriva ramos endurecidos de {branches} · Máx. {max}"
+    }
+  },
+  "Derives {branches} branches · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {branches}-Zweige ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva ramas de {branches} · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva ramos de {branches} · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {branches}-Zweige ab · Max {max}",
+      "es": "Deriva ramas de {branches} · Máx {max}",
+      "pt": "Deriva ramos de {branches} · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {branches}-Zweige ab · Max. {max}",
+      "es": "Deriva ramas de {branches} · Máx. {max}",
+      "pt": "Deriva ramos de {branches} · Máx. {max}"
+    }
+  },
+  "Derives {count} receive and {count} change addresses · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {count} Empfangs- und {count} Wechseladressen ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {count} direcciones de recepción y {count} de cambio · Máx. {max}",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive {count} adresses de réception et {count} adresses de monnaie · Max {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {count} endereços de recebimento e {count} de troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {count} Empfangs- und {count} Wechseladressen ab · Max {max}",
+      "es": "Deriva {count} direcciones de recepción y {count} de cambio · Máx {max}",
+      "fr": "Dérive {count} adresses de réception et {count} adresses de changement · Max {max}",
+      "pt": "Deriva {count} endereços de recebimento e {count} de troco · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {count} Empfangs- und {count} Wechseladressen ab · Max. {max}",
+      "es": "Deriva {count} direcciones de recepción y {count} de cambio · Máx. {max}",
+      "fr": "Dérive {count} adresses de réception et {count} adresses de monnaie · Max {max}",
+      "pt": "Deriva {count} endereços de recebimento e {count} de troco · Máx. {max}"
+    }
+  },
+  "Derives {count} receive address · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {count} Empfangsadresse ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {count} dirección de recepción · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {count} endereço de recebimento · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {count} Empfangsadresse ab · Max {max}",
+      "es": "Deriva {count} dirección de recepción · Máx {max}",
+      "pt": "Deriva {count} endereço de recebimento · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {count} Empfangsadresse ab · Max. {max}",
+      "es": "Deriva {count} dirección de recepción · Máx. {max}",
+      "pt": "Deriva {count} endereço de recebimento · Máx. {max}"
+    }
+  },
+  "Derives {count} receive addresses · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {count} Empfangsadressen ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {count} direcciones de recepción · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {count} endereços de recebimento · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {count} Empfangsadressen ab · Max {max}",
+      "es": "Deriva {count} direcciones de recepción · Máx {max}",
+      "pt": "Deriva {count} endereços de recebimento · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {count} Empfangsadressen ab · Max. {max}",
+      "es": "Deriva {count} direcciones de recepción · Máx. {max}",
+      "pt": "Deriva {count} endereços de recebimento · Máx. {max}"
+    }
+  },
+  "Derives {count} change address · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {count} Wechseladresse ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {count} dirección de cambio · Máx. {max}",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive {count} adresse de monnaie · Max {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {count} endereço de troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {count} Wechseladresse ab · Max {max}",
+      "es": "Deriva {count} dirección de cambio · Máx {max}",
+      "fr": "Dérive {count} adresse de changement · Max {max}",
+      "pt": "Deriva {count} endereço de troco · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {count} Wechseladresse ab · Max. {max}",
+      "es": "Deriva {count} dirección de cambio · Máx. {max}",
+      "fr": "Dérive {count} adresse de monnaie · Max {max}",
+      "pt": "Deriva {count} endereço de troco · Máx. {max}"
+    }
+  },
+  "Derives {count} change addresses · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {count} Wechseladressen ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {count} direcciones de cambio · Máx. {max}",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Dérive {count} adresses de monnaie · Max {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {count} endereços de troco · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {count} Wechseladressen ab · Max {max}",
+      "es": "Deriva {count} direcciones de cambio · Máx {max}",
+      "fr": "Dérive {count} adresses de changement · Max {max}",
+      "pt": "Deriva {count} endereços de troco · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {count} Wechseladressen ab · Max. {max}",
+      "es": "Deriva {count} direcciones de cambio · Máx. {max}",
+      "fr": "Dérive {count} adresses de monnaie · Max {max}",
+      "pt": "Deriva {count} endereços de troco · Máx. {max}"
+    }
+  },
+  "Derives {list} address · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {list} Adresse ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {list} dirección · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {list} endereço · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {list} Adresse ab · Max {max}",
+      "es": "Deriva {list} dirección · Máx {max}",
+      "pt": "Deriva {list} endereço · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {list} Adresse ab · Max. {max}",
+      "es": "Deriva {list} dirección · Máx. {max}",
+      "pt": "Deriva {list} endereço · Máx. {max}"
+    }
+  },
+  "Derives {list} addresses · Max {max}": {
+    "noteByLanguage": {
+      "de": "German abbreviates the maximum as \"Max.\" with a period, as in \"Leitet die Zweige Empfang und Wechsel ab · Max. 2\". Return exactly: Leitet {list} Adressen ab · Max. {max}",
+      "es": "Spanish abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva ramas de recepción y cambio · Máx. 2\". Return exactly: Deriva {list} direcciones · Máx. {max}",
+      "pt": "Portuguese abbreviates the maximum as \"Máx.\" with a period, as in \"Deriva os ramos de Recebimento e Troco · Máx. 2\". Return exactly: Deriva {list} endereços · Máx. {max}"
+    },
+    "retranslate": {
+      "de": "Leitet {list} Adressen ab · Max {max}",
+      "es": "Deriva {list} direcciones · Máx {max}",
+      "pt": "Deriva {list} endereços · Máx {max}"
+    },
+    "exact": {
+      "de": "Leitet {list} Adressen ab · Max. {max}",
+      "es": "Deriva {list} direcciones · Máx. {max}",
+      "pt": "Deriva {list} endereços · Máx. {max}"
+    }
+  },
+  "First receive and change index to derive · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. Return exactly: Erster abzuleitender Empfangs- und Wechselindex · {hardening} · 0 bis 2.147.483.647",
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Bitcoin's change is the noun \"cambio\", as in \"Primer índice de recepción y cambio a derivar\"; \"cambiar\" is the verb. Return exactly: Primer índice de recepción y cambio a derivar · {hardening} · 0 a 2.147.483.647",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Premier index de réception et de monnaie à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. This catalog writes \"a derivar\", as in \"Primeiro índice de endereço a derivar\". Return exactly: Primeiro índice de recebimento e troco a derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "de": "Erster abzuleitender Empfangs- und Wechselgeldindex · {hardening} · 0 bis 2.147.483.647",
+      "es": "Primer índice de recibir y cambiar a derivar · {hardening} · 0 a 2.147.483.647",
+      "fr": "Premier index de réception et de changement à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro índice de receber e trocar para derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "de": "Erster abzuleitender Empfangs- und Wechselindex · {hardening} · 0 bis 2.147.483.647",
+      "es": "Primer índice de recepción y cambio a derivar · {hardening} · 0 a 2.147.483.647",
+      "fr": "Premier index de réception et de monnaie à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro índice de recebimento e troco a derivar · {hardening} · 0 a 2.147.483.647"
+    }
+  },
+  "First change index to derive · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. Return exactly: Erster abzuleitender Wechselindex · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Premier index de monnaie à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Bitcoin's change is \"Troco\" in this catalog; \"Troca\" and \"trocar\" mean exchange. This catalog writes \"a derivar\", as in \"Primeiro índice de endereço a derivar\". Return exactly: Primeiro índice de troco a derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "de": "Erster abzuleitender Wechselgeldindex · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Premier index de changement à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro índice de troca para derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "de": "Erster abzuleitender Wechselindex · {hardening} · 0 bis 2.147.483.647",
+      "fr": "Premier index de monnaie à dériver · {hardening} · 0 à 2 147 483 647",
+      "pt": "Primeiro índice de troco a derivar · {hardening} · 0 a 2.147.483.647"
+    }
+  },
+  "Watch-only change descriptor": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. Return exactly: Nur-Anzeige-Wechseldeskriptor",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Descripteur de monnaie en lecture seule"
+    },
+    "retranslate": {
+      "de": "Nur-Anzeige-Änderungsdeskriptor",
+      "fr": "Descripteur de modification en lecture seule"
+    },
+    "exact": {
+      "de": "Nur-Anzeige-Wechseldeskriptor",
+      "fr": "Descripteur de monnaie en lecture seule"
+    }
+  },
+  "Spending change descriptor": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. Return exactly: Ausgaben-Wechseldeskriptor",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Descripteur de monnaie de dépense"
+    },
+    "retranslate": {
+      "de": "Ausgaben-Änderungsdeskriptor",
+      "fr": "Descripteur de modification de dépense"
+    },
+    "exact": {
+      "de": "Ausgaben-Wechseldeskriptor",
+      "fr": "Descripteur de monnaie de dépense"
+    }
+  },
+  "Change addresses": {
+    "noteByLanguage": {
+      "de": "Bitcoin's change branch is \"Wechsel\" in this catalog, as in \"Empfangs- und Wechselindex\" and \"Wechseladressen\"; \"Wechselgeld\" and \"Änderung\" are not used for it. Return exactly: Wechseladressen",
+      "fr": "Bitcoin's change is \"monnaie\" in this catalog, as in \"Dérive les branches Réception et Monnaie\" and \"0 = monnaie (ne pas partager)\"; \"modification\", \"changement\" and \"Changer\" mean modifying. Return exactly: Adresses de monnaie"
+    },
+    "retranslate": {
+      "de": "Adressen für Wechselgeld",
+      "fr": "Adresses de modification"
+    },
+    "exact": {
+      "de": "Wechseladressen",
+      "fr": "Adresses de monnaie"
+    }
+  },
+  "First receive index to derive · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "es": "Spanish names the receive branch with the noun \"recepción\", as in \"Deriva ramas de recepción y cambio\"; \"recibir\" is the verb. Return exactly: Primer índice de recepción a derivar · {hardening} · 0 a 2.147.483.647",
+      "pt": "Portuguese names the receive branch with the noun \"Recebimento\", as in \"Deriva os ramos de Recebimento e Troco\"; \"Receber\" is the verb. This catalog writes \"a derivar\", as in \"Primeiro índice de endereço a derivar\". Return exactly: Primeiro índice de recebimento a derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "es": "Primer índice de recibir a derivar · {hardening} · 0 a 2.147.483.647",
+      "pt": "Primeiro índice de receber para derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "es": "Primer índice de recepción a derivar · {hardening} · 0 a 2.147.483.647",
+      "pt": "Primeiro índice de recebimento a derivar · {hardening} · 0 a 2.147.483.647"
+    }
+  },
+  "Hide on-screen passphrase keyboard": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Masquer le clavier de phrase de passe à l'écran",
+      "pt": "The passphrase field is labelled \"Frase secreta (opcional)\" in this catalog, so this is the \"frase secreta\" keyboard; \"senha\" means password. Return exactly: Ocultar teclado de frase secreta na tela"
+    },
+    "retranslate": {
+      "fr": "Masquer le clavier de phrase secrète à l'écran",
+      "pt": "Ocultar teclado de senha na tela"
+    },
+    "exact": {
+      "fr": "Masquer le clavier de phrase de passe à l'écran",
+      "pt": "Ocultar teclado de frase secreta na tela"
+    }
+  },
+  "Show on-screen passphrase keyboard": {
+    "noteByLanguage": {
+      "fr": "\"Passphrase\" is the optional BIP39 passphrase. French calls it \"phrase de passe\"; \"phrase secrète\" is this catalog's word for the seed phrase. Return exactly: Afficher le clavier de phrase de passe à l'écran",
+      "pt": "The passphrase field is labelled \"Frase secreta (opcional)\" in this catalog, so this is the \"frase secreta\" keyboard; \"senha\" means password. Return exactly: Mostrar teclado de frase secreta na tela"
+    },
+    "retranslate": {
+      "fr": "Afficher le clavier de phrase secrète à l'écran",
+      "pt": "Mostrar teclado de senha na tela"
+    },
+    "exact": {
+      "fr": "Afficher le clavier de phrase de passe à l'écran",
+      "pt": "Mostrar teclado de frase secreta na tela"
+    }
+  },
+  "{method}: {submethod}": {
+    "noteByLanguage": {
+      "fr": "French puts a space before a colon, as everywhere in this catalog (\"État du réseau : en ligne\"). Return exactly: {method} : {submethod}"
+    },
+    "retranslate": {
+      "fr": "{method}: {submethod}"
+    },
+    "exact": {
+      "fr": "{method} : {submethod}"
+    }
+  },
+  "First {branches} index to derive · {hardening} · 0 to 2,147,483,647": {
+    "noteByLanguage": {
+      "pt": "This catalog writes \"a derivar\", as in \"Primeiro índice de endereço a derivar\". Return exactly: Primeiro índice de {branches} a derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "retranslate": {
+      "pt": "Primeiro índice de {branches} para derivar · {hardening} · 0 a 2.147.483.647"
+    },
+    "exact": {
+      "pt": "Primeiro índice de {branches} a derivar · {hardening} · 0 a 2.147.483.647"
+    }
   }
 }
