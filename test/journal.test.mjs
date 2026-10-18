@@ -485,3 +485,8 @@ test("nonce findings stay out of the activity log and session state follows the 
   assert.match(app, /getElementById\("nonce-text"\)\.addEventListener\("input", hodlPsbtResetNonceInspection\)/);
   assert.match(app, /hodlPsbtClearNonceHistory\(true\)/);
 });
+
+test("the Journal does not render its KDF verifier", () => {
+  const app = read("src/js/app.js");
+  assert.doesNotMatch(app, /hodlJournalFillLifehash\([^;]*verify/, "a captured LifeHash must not verify password guesses");
+});

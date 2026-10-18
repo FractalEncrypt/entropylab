@@ -322,3 +322,13 @@ test("P2TR tweak matches BIP-86 output scripts for both internal parities", () =
   }
   assert.deepEqual([...parities].sort(), [2, 3]);
 });
+
+// Audit M6: derive("m") returns the session root itself. The resolver's
+// finally used to wipe that root, so a pasted path of "m" broke every later
+// operation. Refuse the root path (and never wipe it defensively).
+test("a path of 'm' is refused instead of wiping the session root", () => {
+  setup();
+  assert.throws(() => hodlSpDeriveVinKeys([vinOf(OWNED_SCRIPT, { path: "m" })]), /path must name a child/);
+  assert.throws(() => hodlSpDeriveVinKeys([vinOf(OWNED_SCRIPT, { path: "m'" })]), /path must name a child/);
+  assert.equal(SESSION.hasPrivateKey, true, "the session root must survive a rejected path");
+});

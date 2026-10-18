@@ -894,8 +894,10 @@ async function vanityApplyHarness({ method, script, address = applyRecordedAddre
     hodlCommitDerivedKey: () => { const draft = context.hodlKeys[0]; Object.assign(source, { fields: draft.fields, accountId: draft.accountId, result: draft.result }); context.hodlKeys[0] = lab; context.hodlActiveKey = 1; },
     hodlJournalLog() {}, hodlSnapshotKeySummary() {}, hodlJournalCaptureDerivedKey() {}, hodlFocusWalletResult() {},
     hodlDeriveWithProgress: (_, derive) => derive({ setTotal() {}, step() {} }),
+    hodlVanityErrorNote: null,
   });
-  vm.runInContext(["hodlCalculateKey", "hodlVanityApplyMatch"].map(extract).join("\n"), context);
+  // The station's real error line: refusals land in #vanity-error as text.
+  vm.runInContext(["hodlNote", "hodlFormatNote", "hodlError", "hodlSetVanityError", "hodlCalculateKey", "hodlVanityApplyMatch"].map(extract).join("\n"), context);
   return { context, elements, match, source, run };
 }
 test("Vanity Update Key preserves the searched script and path across initial purpose matching", async () => {

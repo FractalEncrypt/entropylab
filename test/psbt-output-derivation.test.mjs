@@ -43,6 +43,7 @@ const source = [
   `import { hash160 as hodlHash160 } from "../src/js/hashes.js";`,
   `import { matchOwnership, pathLabel } from "../src/js/ownership.js";`,
   `import { addressFor, addressFromScript, p2shScript, p2wshScript } from "../src/js/addresses.js";`,
+  `import { tHtml as hodlT } from "../src/js/i18n.js";`,
   "let hodlPsbtHd = null;",
   "export function hodlSetSession(key) { hodlPsbtHd = key; }",
   slice("hodlFingerprintHex"),
