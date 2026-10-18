@@ -226,10 +226,15 @@ test("a language switch says the Vanity status and error again in the new langua
   assert.match(appSlice("hodlRenderVanityOut"), /let actionHeader = run\.sourceKind === "bip85" \? hodlTText\("Child status"\) : hodlTText\("Update Key"\);/);
 });
 
-test("a language switch renders the station tabs again, since their labels hold names", () => {
-  // "5436d724, selected. Activate or press F2 to rename." is no catalog key,
-  // so the static sweep cannot carry it across a switch; the tabs render again.
-  assert.match(appSlice("hodlApplyLocale"), /hodlRenderKeyTabs\(\);\s*hodlRenderMsigTabs\(\);\s*hodlRenderStationTabs\(hodlBip85Tabs\);\s*hodlRenderStationTabs\(hodlSpTabs\);/);
+test("a language switch paints filled-in Key Station text again", () => {
+  // "5436d724, selected. Activate or press F2 to rename.", "Seed phrase:
+  // Direct word entry" and "Purpose index · Unhardened · …" are no catalog
+  // keys, so the static sweep cannot carry them across a switch: the station
+  // tabs, the key summary and the hardening notes render again. The notes go
+  // before the estimate and the multisig account, which overwrite some of them.
+  const apply = appSlice("hodlApplyLocale");
+  assert.match(apply, /hodlRenderKeyTabs\(\);\s*hodlRenderMsigTabs\(\);\s*hodlRenderStationTabs\(hodlBip85Tabs\);\s*hodlRenderStationTabs\(hodlSpTabs\);\s*hodlPaintKeySummary\(\);/);
+  assert.match(apply, /hodlUpdateHardeningHelp\(\);\s*hodlUpdateHardeningHelp\("msig-"\);\s*hodlUpdateAddressEstimate\(\);[\s\S]*hodlUpdateMsigAccount\(\);/);
 });
 
 test("Silent Payment custom characters constrain only the first free character", () => {

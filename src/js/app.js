@@ -2677,8 +2677,8 @@ function hodlUpdateAddressEstimate(prefix = "") {
       : hodlTText(one ? "Derives {list} address · Max {max}" : "Derives {list} addresses · Max {max}", { list: branches.map((branch) => `${count} ${hodlAddressBranchLabel(branch).toLowerCase()}`).join(" and "), max });
     estimate.textContent = hodlAddressBenchmarkMs == null ? hodlTText("Measuring this device\u2026") : hodlTText("Estimated derivation time on this device: {time}.", { time: hodlFormatAddressEstimate(hodlAddressBenchmarkMs * range * branches.length * keyCount) });
   } catch (error) {
-    branchHelp.textContent = "Choose one or two valid address branches.";
-    help.textContent = "Choose a valid address range.";
+    branchHelp.textContent = hodlTText("Choose one or two valid address branches.");
+    help.textContent = hodlTText("Choose a valid address range.");
     estimate.textContent = error.message;
   }
 }
@@ -6623,7 +6623,7 @@ function hodlRenderKeyForm() {
       update();
       return;
     }
-    hodlFormEl.innerHTML = `${choices}<p class="label">${hodlT("Your {words}-word seed phrase", { words: config.words })}</p>${hodlSeedMetaRowMarkup("seed-meta", true)}<div class="passphrase-keyboard-tools">${hodlSwitchRowMarkup("seed-autocomplete", hodlT("Autocomplete BIP39 words"), { checked: autocompleteEnabled })}${hodlSeedKeyboardToggleMarkup()}</div><div class="dice-input-shell seed-input-shell"><pre class="dice-input-highlight" id="seed-highlight" translate="no" aria-hidden="true"></pre><textarea id="seed" placeholder="Enter exactly ${config.words} BIP39 words" aria-describedby="seed-meta" autocomplete="off" spellcheck="false" autocapitalize="off"></textarea></div>${hodlSeedKeyboardMarkup()}<div id="last-words" translate="no" class="row last-word-options"></div>`;
+    hodlFormEl.innerHTML = `${choices}<p class="label">${hodlT("Your {words}-word seed phrase", { words: config.words })}</p>${hodlSeedMetaRowMarkup("seed-meta", true)}<div class="passphrase-keyboard-tools">${hodlSwitchRowMarkup("seed-autocomplete", hodlT("Autocomplete BIP39 words"), { checked: autocompleteEnabled })}${hodlSeedKeyboardToggleMarkup()}</div><div class="dice-input-shell seed-input-shell"><pre class="dice-input-highlight" id="seed-highlight" translate="no" aria-hidden="true"></pre><textarea id="seed" placeholder="${hodlTAttr("Enter exactly {words} BIP39 words", { words: config.words })}" aria-describedby="seed-meta" autocomplete="off" spellcheck="false" autocapitalize="off"></textarea></div>${hodlSeedKeyboardMarkup()}<div id="last-words" translate="no" class="row last-word-options"></div>`;
     let input = document.getElementById("seed"), update = () => {
       let rawValue = input.value, value = rawValue.trim(), meta = hodlElement("#seed-meta"), picker = hodlElement("#last-words"), analysis = hodlRenderSeedInputState(input, config.words);
       if (hodlLooksExtendedKey(value)) {
@@ -11286,9 +11286,13 @@ function hodlCreateBip85Tab(index) {
     button.setAttribute("aria-label", active ? hodlTText("BIP-85 Station, selected") : hodlTText("BIP-85 Station. Activate to derive a BIP-85 child."));
     button.title = hodlTText("Derive a BIP-85 child");
   } else {
-    let kind = state.fingerprintKind === "master" ? "master fingerprint" : state.fingerprintKind === "key" ? "key fingerprint" : "child fingerprint";
-    button.setAttribute("aria-label", hodlBip85AppLabel(state.result?.app) + " " + hodlTText("child of parent {fingerprint}", { fingerprint: state.parentFingerprint }) + `, ${kind} ${name}${active ? ", selected" : ". Activate to select."}`);
-    button.title = `${hodlBip85AppLabel(state.result?.app)} · ${state.result?.path || ""}`;
+    let app = hodlTText(hodlBip85AppLabel(state.result?.app)), vars = { app, parent: state.parentFingerprint, name };
+    button.setAttribute("aria-label", state.fingerprintKind === "master"
+      ? hodlTText(active ? "{app} child of parent {parent}, master fingerprint {name}, selected" : "{app} child of parent {parent}, master fingerprint {name}. Activate to select.", vars)
+      : state.fingerprintKind === "key"
+      ? hodlTText(active ? "{app} child of parent {parent}, key fingerprint {name}, selected" : "{app} child of parent {parent}, key fingerprint {name}. Activate to select.", vars)
+      : hodlTText(active ? "{app} child of parent {parent}, child fingerprint {name}, selected" : "{app} child of parent {parent}, child fingerprint {name}. Activate to select.", vars));
+    button.title = `${app} · ${state.result?.path || ""}`;
   }
   return button;
 }
@@ -17843,6 +17847,9 @@ function hodlApplyLocale() {
   hodlRenderKeyForm();
   if (state) hodlRestoreFormFields(state);
   hodlUpdateSeedLengthControl();
+  // Filled-in help notes are no catalog keys the sweep could carry across.
+  hodlUpdateHardeningHelp();
+  hodlUpdateHardeningHelp("msig-");
   hodlUpdateAddressEstimate();
   hodlUpdateAddressEstimate("msig-");
   hodlUpdateCoinTypeHelp();
@@ -17860,6 +17867,7 @@ function hodlApplyLocale() {
   hodlRenderMsigTabs();
   hodlRenderStationTabs(hodlBip85Tabs);
   hodlRenderStationTabs(hodlSpTabs);
+  hodlPaintKeySummary();
   hodlApplyTheme(hodlReadThemeMode());
   hodlRefreshWorkspaceErrors();
   hodlSecurityLog?.refresh();
