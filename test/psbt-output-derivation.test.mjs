@@ -300,3 +300,44 @@ test("no session key declares nothing", () => {
     hodlSetSession(hd);
   }
 });
+
+// Audit M3: the output-derivation walk is attacker-controlled. The render
+// budget must stop before deriving an oversized path, and every private node
+// the walk creates must be wiped even when the claim is later verified.
+test("an output derivation path over budget is left unverified, not derived", () => {
+  const calls = [];
+  const original = HDKey.prototype.deriveChild;
+  HDKey.prototype.deriveChild = function (index) {
+    calls.push(index);
+    return original.call(this, index);
+  };
+  try {
+    hodlSetSession(hd);
+    const result = hodlDeclaredOutput([validChangeRecord], changeScript, "mainnet", { remaining: 2 });
+    assert.equal(result.state, "unknown");
+    assert.equal(result.budget, true);
+    assert.equal(calls.length, 0, "no CKD step may run for an over-budget path");
+  } finally {
+    HDKey.prototype.deriveChild = original;
+  }
+});
+
+test("every private node created by an output derivation is wiped", () => {
+  const created = [];
+  const original = HDKey.prototype.deriveChild;
+  HDKey.prototype.deriveChild = function (index) {
+    const node = original.call(this, index);
+    created.push(node);
+    return node;
+  };
+  try {
+    hodlSetSession(hd);
+    const result = hodlDeclaredOutput([validChangeRecord], changeScript, "mainnet", { remaining: 100 });
+    assert.equal(result.state, "ours");
+    assert.ok(created.length >= changePath.length, "the path's nodes were created");
+    for (const node of created) assert.equal(node.hasPrivateKey, false, "a derived private node survived the walk");
+    assert.equal(hd.hasPrivateKey, true, "the session root is not a disposable node");
+  } finally {
+    HDKey.prototype.deriveChild = original;
+  }
+});

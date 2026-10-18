@@ -1048,3 +1048,16 @@ test("crafted PUSHDATA4 scripts can neither hang nor trap the module (#525)", as
     assert.ok(codes.includes("partial_sig_invalid"), `${name}: the sighash ran to completion, got [${codes}]`);
   }
 });
+
+test("a PSBT with more than 100,000 total pairs is refused before JSON expansion (audit M5)", () => {
+  const le32 = (n) => Uint8Array.of(n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255);
+  const tx = [2, 0, 0, 0, 11];
+  for (let i = 0; i < 11; i++) tx.push(...new Uint8Array(32).fill(i), 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff);
+  tx.push(1, 0xe8, 0x03, 0, 0, 0, 0, 0, 0, 1, 0x51, 0, 0, 0, 0);
+  const pair = (j) => [Uint8Array.from([0x99, ...le32(j)]), Uint8Array.of(0)];
+  const maps = [[[Uint8Array.of(0x00), Uint8Array.from(tx)]]];
+  for (let map = 0; map < 10; map++) maps.push(Array.from({ length: 10_000 }, (_, j) => pair(j)));
+  maps.push([pair(0)]);
+  maps.push([]);
+  assert.throws(() => psbtInspectDoc(joinPsbtMaps(maps)), /too many key-value pairs to inspect safely/);
+});
