@@ -124,4 +124,17 @@ test("a malformed address-shaped string is an error, never OP_RETURN or raw scri
   assert.throws(() => buildOutputScript("1" + "a".repeat(51)), /does not decode on mainnet/);
   assert.throws(() => buildOutputScript("1" + "A".repeat(30)), /does not decode on mainnet/);
   assert.throws(() => buildOutputScript("tb1q" + "1".repeat(38), { network: "testnet" }), /does not decode on testnet/);
+  // The error points at the way out when the input was meant as text.
+  assert.throws(() => buildOutputScript("bc1 rocks"), /OP_RETURN-text mode/);
+});
+
+// The Base58 arm stops at 60 characters (just past the longest real
+// Base58Check address), so long 0x-less raw hex keeps its raw-script reading.
+test("long raw hex starting with 1, 2 or 3 stays a raw script", () => {
+  const hex62 = "1" + "a".repeat(61);
+  assert.deepEqual(buildOutputScript(hex62), { scriptHex: hex62, kind: "raw", note: "raw script (31 bytes)" });
+  const hex70 = "3" + "b".repeat(69);
+  assert.deepEqual(buildOutputScript(hex70), { scriptHex: hex70, kind: "raw", note: "raw script (35 bytes)" });
+  // 60 characters is still address-shaped and errors rather than degrading.
+  assert.throws(() => buildOutputScript("1" + "a".repeat(59)), /does not decode on mainnet/);
 });
