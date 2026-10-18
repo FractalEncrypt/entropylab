@@ -1185,10 +1185,11 @@ test("changing the language outside Keys keeps the selected key's wallet", async
     Object.assign(context, {
       Event: class { constructor(type) { this.type = type; } }, hodlWorkspaceTabs: [], hodlKeyModeLabels: {},
       hodlKeyModeSelectEl: { options: [], dispatchEvent() {} }, hodlNetworkPickerRender: null, hodlReadThemeMode: () => "system",
+      hodlBip85Tabs: {}, hodlSpTabs: {},
     });
     for (const name of ["hodlRenderKeyForm", "hodlRestoreFormFields", "hodlUpdateSeedLengthControl", "hodlUpdateAddressEstimate",
       "hodlUpdateCoinTypeHelp", "hodlUpdateDerivationPathPreview", "hodlUpdateMsigScriptDetection",
-      "hodlUpdateMsigAccount", "hodlShowMsig", "hodlRefreshKeyResult", "hodlRefreshPsbtLocale", "hodlRefreshVanityLocale", "hodlRefreshStationKeyPickers", "hodlApplyTheme", "hodlRefreshWorkspaceErrors"])
+      "hodlUpdateMsigAccount", "hodlShowMsig", "hodlRefreshKeyResult", "hodlRefreshPsbtLocale", "hodlRefreshVanityLocale", "hodlRefreshStationKeyPickers", "hodlRenderKeyTabs", "hodlRenderMsigTabs", "hodlRenderStationTabs", "hodlApplyTheme", "hodlRefreshWorkspaceErrors"])
       context[name] = () => {};
     let logRefreshes = 0;
     context.hodlSecurityLog = { refresh: () => logRefreshes++ };

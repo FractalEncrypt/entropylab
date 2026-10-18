@@ -226,6 +226,12 @@ test("a language switch says the Vanity status and error again in the new langua
   assert.match(appSlice("hodlRenderVanityOut"), /let actionHeader = run\.sourceKind === "bip85" \? hodlTText\("Child status"\) : hodlTText\("Update Key"\);/);
 });
 
+test("a language switch renders the station tabs again, since their labels hold names", () => {
+  // "5436d724, selected. Activate or press F2 to rename." is no catalog key,
+  // so the static sweep cannot carry it across a switch; the tabs render again.
+  assert.match(appSlice("hodlApplyLocale"), /hodlRenderKeyTabs\(\);\s*hodlRenderMsigTabs\(\);\s*hodlRenderStationTabs\(hodlBip85Tabs\);\s*hodlRenderStationTabs\(hodlSpTabs\);/);
+});
+
 test("Silent Payment custom characters constrain only the first free character", () => {
   const filter = new Function(`${appSlice("hodlFilterVanityPrefix")}; return hodlFilterVanityPrefix;`)();
   const silentPayment = { prefix: "sp1qq", bech32: true, firstFree: "gf2tvdw0" };
