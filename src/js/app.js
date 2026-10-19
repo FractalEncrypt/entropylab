@@ -16076,6 +16076,12 @@ function hodlJournalWipeNotebook() {
   hodlJournalKeys = null;
   hodlJournalFileText = "";
   hodlJournalFileRead = null;
+  // A wipe also forgets a pending passwordless acknowledgement (audit L6):
+  // the armed token is a full copy of the file's bytes, and the ready row
+  // must not outlive the notebook state it vouched for.
+  hodlJournalOpenReadyFor = "";
+  let openReady = document.getElementById("journal-open-ready");
+  if (openReady) openReady.hidden = true;
   hodlJournalDirty = false;
   hodlJournalReveal = false;
   hodlJournalEditingId = null;
