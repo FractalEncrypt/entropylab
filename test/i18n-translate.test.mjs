@@ -305,15 +305,22 @@ test("a value-only correction becomes a catalog-only diff that the translation g
   const tree = await gappedRoot(0);
   try {
     // A UI change can add English strings that rock's catalogs do not hold
-    // yet; the next run would translate those too and move the sidecar. Give
-    // this tree's es catalog every source, so the correction is all it does.
-    const { missing } = await languageWorkload(tree, "es");
-    if (missing.length) {
+    // yet, or retire strings they still hold; the next run would translate the
+    // first and prune the second, and either moves the sidecar. Give this
+    // tree's es catalog exactly the live sources, so the correction is all it
+    // does.
+    const { sources, missing, dead } = await languageWorkload(tree, "es");
+    if (missing.length || dead) {
       const catalog = JSON.parse(readFileSync(join(tree, "src/locales/es.json"), "utf8"));
       const sidecar = JSON.parse(readFileSync(join(tree, "src/locales/.sources/es.json"), "utf8"));
       for (const source of missing) {
         catalog[source] = source;
         sidecar[source] = hashSource(source);
+      }
+      for (const key of Object.keys(catalog)) {
+        if (sources.has(key)) continue;
+        delete catalog[key];
+        delete sidecar[key];
       }
       writeFileSync(join(tree, "src/locales/es.json"), JSON.stringify(catalog, null, 2) + "\n");
       writeFileSync(join(tree, "src/locales/.sources/es.json"), JSON.stringify(sidecar, null, 2) + "\n");
