@@ -6455,6 +6455,48 @@
     assert(!dat.includes("walletdescriptorkey"), "Watch-only wallet.dat leaked private key records");
   });
 
+  await test("Key Station Core JSON follows the selected script and stays watch-only when revealed", async () => {
+    const originalScript = document.querySelector('#acct-tabs [aria-pressed="true"]').dataset.account;
+    const birthday = document.querySelector('#out [data-wallet-dat-birthday]') || document.querySelector('[data-wallet-dat-birthday]');
+    const originalBirthday = birthday.value;
+    try {
+      for (const script of ["bip44", "bip49", "bip84", "bip86"]) {
+        document.getElementById(`account-tab-${script}`).click();
+        const save = document.getElementById("key-save-importdescriptors");
+        assert(save, "selected account has no Core JSON export");
+        state.lastBlob = null;
+        save.click();
+        const text = await (await until(() => state.lastBlob, "Core watch-only JSON")).text();
+        equal(state.downloadName, "entropylab-importdescriptors.json");
+        const entries = JSON.parse(text);
+        equal(JSON.stringify(entries.map(entry => entry.internal)), "[false,true]");
+        assert(entries.every(entry => entry.active && entry.timestamp === 0 && entry.range[0] === 0), "Core import metadata is wrong");
+        const prefix = { bip44: "pkh(", bip49: "sh(wpkh(", bip84: "wpkh(", bip86: "tr(" }[script];
+        assert(entries.every(entry => entry.desc.startsWith(prefix) && entry.desc.includes("tpub") && /#[a-z0-9]{8}$/.test(entry.desc)), "selected script or public descriptor encoding is wrong");
+        equal(await copiedBy(document.getElementById("key-copy-importdescriptors")), text);
+      }
+      birthday.value = "now";
+      birthday.dispatchEvent(new Event("change", { bubbles: true }));
+      const reveal = document.getElementById("reveal");
+      reveal.checked = true;
+      reveal.dispatchEvent(new Event("change", { bubbles: true }));
+      const text = await copiedBy(document.getElementById("key-copy-importdescriptors"));
+      assert(JSON.parse(text).every(entry => entry.timestamp === "now"), "birthday was lost during reveal");
+      assert(!/[xtyzuvYZUV]prv|abandon/.test(text), "Core JSON leaked private recovery material");
+      state.lastBlob = null;
+      document.getElementById("key-save-importdescriptors").click();
+      equal(await (await until(() => state.lastBlob, "Core JSON while revealed")).text(), text);
+    } finally {
+      const reveal = document.getElementById("reveal");
+      reveal.checked = false;
+      reveal.dispatchEvent(new Event("change", { bubbles: true }));
+      const currentBirthday = document.querySelector('[data-wallet-dat-birthday]');
+      currentBirthday.value = originalBirthday;
+      currentBirthday.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById(`account-tab-${originalScript}`).click();
+    }
+  });
+
   await test("private export contains complete recovery material", async () => {
     const reveal = document.getElementById("reveal");
     reveal.checked = true;

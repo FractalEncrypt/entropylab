@@ -3,11 +3,14 @@
 // Run with: node --test test/core-importdescriptors.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "url";
 import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync } from "@scure/bip39";
+import { NETWORK, TEST_NETWORK, p2pkh, p2sh, p2tr, p2wpkh } from "@scure/btc-signer";
+import { BITCOIND, CHAIN_FIXTURES, withChainNode } from "./bitcoind-harness.mjs";
 import {
   CORE_IMPORT_RANGE_END,
   assertMatchingWatchDescriptors,
@@ -41,8 +44,90 @@ const change = `${changeBody}#${descriptorChecksum(changeBody)}`;
 
 const parse = (json) => JSON.parse(json);
 
+// Exercise the application adapter with independently derived public fixtures.
+function keyExportHarness() {
+  const source = read("src/js/app.js");
+  const context = vm.createContext({ buildImportDescriptorsJson, hodlBase58Check: codec,
+    hodlWalletDatBirthday: "genesis", hodlAccountId: "bip84", hodlWalletResult: null });
+  for (const name of ["hodlMsigCoreImportCodec", "hodlMsigDisplayedAddressEnd", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson"]) {
+    const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
+    assert.ok(match, `application export adapter ${name} exists`);
+    vm.runInContext(match[0], context);
+  }
+  return context;
+}
+
+test("Key Station exports only the selected public account with the existing birthday and range rules", () => {
+  const ui = keyExportHarness();
+  const accounts = [44, 49, 84, 86].map((purpose) => {
+    const node = master.derive(`m/${purpose}'/0'/0'`);
+    const wrap = body => purpose === 49 ? `sh(wpkh(${body}))` : `${purpose === 44 ? "pkh" : purpose === 86 ? "tr" : "wpkh"}(${body})`;
+    const descriptor = branch => {
+      const body = wrap(`[${fingerprint}/${purpose}h/0h/0h]${node.publicExtendedKey}/${branch}/*`);
+      return `${body}#${harnessChecksum(body)}`;
+    };
+    return { def: { id: `bip${purpose}` }, receiveDescriptor: descriptor(0), changeDescriptor: descriptor(1),
+      addressBranches: [{ branch: 0, rows: [{ index: 5000 }] }, { branch: 1, rows: [{ index: 5002 }] }],
+      get privateNode() { throw new Error("private material read"); } };
+  });
+  ui.hodlWalletResult = { kind: "hd", accounts, get seed() { throw new Error("seed read"); } };
+  for (const account of accounts) for (const birthday of ["genesis", "now"]) {
+    ui.hodlAccountId = account.def.id;
+    ui.hodlWalletDatBirthday = birthday;
+    ui.hodlRevealPrivate = true;
+    assert.deepEqual(parse(ui.hodlCoreImportDescriptorsJson("calc")), [false, true].map(internal => ({
+      desc: internal ? account.changeDescriptor : account.receiveDescriptor,
+      active: true, internal, timestamp: birthday === "now" ? "now" : 0, range: [0, 6002],
+    })));
+  }
+  ui.hodlAccountId = "stale-account";
+  assert.equal(parse(ui.hodlCoreImportDescriptorsJson("calc"))[0].desc, accounts[2].receiveDescriptor, "fallback matches the displayed account");
+  accounts[2].receiveDescriptor = `wpkh(${master.privateExtendedKey}/0/*)`;
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /private key/);
+  ui.hodlWalletResult = null;
+  assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
+  ui.hodlWalletResult = { kind: "single" };
+  assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
+});
+
 test("checksum matches the independent Core reference", () => {
   assert.equal(descriptorChecksum(receiveBody), harnessChecksum(receiveBody));
+});
+
+test("Key Station handles imported watch-only keys and never reuses a previous wallet's export", () => {
+  const ui = keyExportHarness();
+  const makeAccount = (node) => {
+    const descriptor = branch => {
+      const body = `wpkh(${node.publicExtendedKey}/${branch}/*)`;
+      return `${body}#${harnessChecksum(body)}`;
+    };
+    return { def: { id: "bip84" }, receiveDescriptor: descriptor(0), changeDescriptor: descriptor(1), receive: [{ index: 0 }] };
+  };
+  const first = makeAccount(master.derive("m/84'/0'/0'"));
+  const second = makeAccount(master.derive("m/84'/0'/1'"));
+  // An imported zpub carries the same public payload as its Core xpub.
+  const xpub = master.derive("m/84'/0'/0'").publicExtendedKey;
+  const raw = b58checkDecode(xpub);
+  raw.set([0x04, 0xb2, 0x47, 0x46]);
+  const zpub = b58checkEncode(raw);
+  const imported = { ...first };
+  for (const name of ["receiveDescriptor", "changeDescriptor"]) {
+    const body = stripDescriptorChecksum(first[name]).replace(xpub, zpub);
+    imported[name] = `${body}#${harnessChecksum(body)}`;
+  }
+  ui.hodlWalletResult = { kind: "hd", accounts: [imported] };
+  const beforeSwitch = parse(ui.hodlCoreImportDescriptorsJson("calc"));
+  assert.deepEqual(beforeSwitch.map(entry => entry.desc), [first.receiveDescriptor, first.changeDescriptor]);
+  ui.hodlWalletResult = { kind: "hd", accounts: [second] };
+  assert.equal(parse(ui.hodlCoreImportDescriptorsJson("calc"))[0].desc, second.receiveDescriptor);
+  assert.equal(ui.hodlCoreImportDescriptorsJson("msig"), "", "a stale multisig control cannot export the active key");
+  second.receive[0].index = 998999;
+  assert.deepEqual(parse(ui.hodlCoreImportDescriptorsJson("calc"))[0].range, [0, 999999]);
+  second.receive[0].index = 999000;
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /importdescriptors refuses a range span/);
+  ui.hodlWalletResult = { kind: "msig", receiveDescriptor: receive, changeDescriptor: change };
+  assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "", "a stale key control cannot export the active multisig");
+  assert.equal(parse(ui.hodlCoreImportDescriptorsJson("msig"))[0].desc, receive);
 });
 
 test("JSON.parse of the export is an array of length 2", () => {
@@ -250,8 +335,8 @@ test("MS Station result markup renders every documented export; no new workspace
   // policy sheet (print + save) and the BIP 388 policy (copy + save); every
   // one of those controls must appear in the markup hodlShowMsig renders, and
   // hodlShowMsig must interpolate each builder, not a copy of it.
-  assert.match(app, /id="msig-copy-importdescriptors"/);
-  assert.match(app, /id="msig-save-importdescriptors"/);
+  assert.match(app, /id="\$\{prefix\}-copy-importdescriptors"/);
+  assert.match(app, /id="\$\{prefix\}-save-importdescriptors"/);
   assert.match(app, /id="msig-download-wallet-dat"/);
   assert.match(app, /id="msig-print-policy-sheet"/);
   assert.match(app, /id="msig-save-policy-sheet"/);
@@ -260,6 +345,7 @@ test("MS Station result markup renders every documented export; no new workspace
   assert.match(app, /hodlT\("Copy Core importdescriptors"\)/);
   assert.match(app, /hodlT\("Save Core Watch-only JSON"\)/);
   assert.match(app, /buildImportDescriptorsJson/);
+  assert.match(app, /hodlCoreImportDescriptorsButtons\("msig"\)/);
   const showStart = app.indexOf("function hodlShowMsig(");
   const show = app.slice(showStart, app.indexOf("\nvar ", showStart));
   assert.match(show, /\$\{hodlMsigCoreImportDescriptorsMarkup\(\)\}/);
@@ -276,3 +362,53 @@ test("wallet.dat export accepts watch-only msig and still ignores private materi
   assert.match(source, /multiKey: true/);
   assert.match(source, /privateDescriptor: null/);
 });
+
+// Core is the consumer of this JSON. Independently derived scure addresses
+// check both branches, including index 0 when the displayed window starts at 2.
+for (const network of Object.keys(CHAIN_FIXTURES)) {
+  test(`Bitcoin Core imports Key Station JSON on ${network}`, { skip: !BITCOIND, timeout: 120000 }, async () => {
+    const ui = keyExportHarness(), mainnet = network === "mainnet";
+    const net = mainnet ? NETWORK : { ...TEST_NETWORK, bech32: network === "regtest" ? "bcrt" : "tb" };
+    const versions = mainnet ? undefined : { public: 0x043587cf, private: 0x04358394 };
+    await withChainNode(network, (cli) => {
+      const rpc = (...args) => JSON.parse(cli(args).stdout);
+      for (const purpose of [44, 49, 84, 86]) {
+        const node = HDKey.fromMasterSeed(seed, versions).derive(`m/${purpose}'/${mainnet ? 0 : 1}'/0'`);
+        const descriptor = branch => {
+          const key = `${node.publicExtendedKey}/${branch}/*`;
+          const body = purpose === 49 ? `sh(wpkh(${key}))` : `${purpose === 44 ? "pkh" : purpose === 86 ? "tr" : "wpkh"}(${key})`;
+          return `${body}#${harnessChecksum(body)}`;
+        };
+        const expected = (branch, index) => {
+          const key = node.deriveChild(branch).deriveChild(index).publicKey;
+          return (purpose === 44 ? p2pkh(key, net) : purpose === 49 ? p2sh(p2wpkh(key, net), net) : purpose === 86 ? p2tr(key.slice(1), undefined, net) : p2wpkh(key, net)).address;
+        };
+        ui.hodlAccountId = `bip${purpose}`;
+        ui.hodlRevealPrivate = true;
+        ui.hodlWalletResult = { kind: "hd", accounts: [{ def: { id: ui.hodlAccountId },
+          receiveDescriptor: descriptor(0), changeDescriptor: descriptor(1), receive: [{ index: 2 }], change: [{ index: 2 }],
+          get privateNode() { throw new Error("private material read"); } }] };
+        for (const birthday of ["genesis", "now"]) {
+          ui.hodlWalletDatBirthday = birthday;
+          const name = `key-${purpose}-${birthday}`, wallet = `-rpcwallet=${name}`;
+          rpc("-named", "createwallet", `wallet_name=${name}`, "disable_private_keys=true", "blank=true");
+          assert.ok(rpc(wallet, "importdescriptors", ui.hodlCoreImportDescriptorsJson("calc")).every(entry => entry.success));
+          const stored = rpc(wallet, "listdescriptors").descriptors;
+          assert.equal(stored.length, 2);
+          assert.equal(rpc(wallet, "getwalletinfo").private_keys_enabled, false);
+          for (const entry of stored) {
+            assert.deepEqual(entry.range, [0, 1002]);
+            // Core v31.1 rpc/backup.cpp clamps 0 to 1 and resolves "now"
+            // to the current chain tip's median time, not the wall clock.
+            assert.equal(entry.timestamp, birthday === "genesis" ? 1 : rpc("getblockchaininfo").mediantime);
+            assert.equal(rpc("getdescriptorinfo", entry.desc).hasprivatekeys, false);
+            assert.deepEqual(rpc("deriveaddresses", entry.desc, "[2,2]"), [expected(entry.internal ? 1 : 0, 2)]);
+          }
+          const type = { 44: "legacy", 49: "p2sh-segwit", 84: "bech32", 86: "bech32m" }[purpose];
+          assert.equal(cli([wallet, "getnewaddress", "", type]).stdout.trim(), expected(0, 0));
+          assert.equal(cli([wallet, "getrawchangeaddress", type]).stdout.trim(), expected(1, 0));
+        }
+      }
+    });
+  });
+}
