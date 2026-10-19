@@ -1257,7 +1257,7 @@ test("saving a vanity passphrase match to its key zeroes the wallet the key had"
     hodlScriptTypes: applyParts.hodlScriptTypes,
     hodlVanityMatchAddress: applyParts.hodlVanityMatchAddress,
     hodlVanityMatches: [{ passphrase: "vanity passphrase", index: null, address: honestAddress, savedTo: "" }], hodlVanityRun: run, hodlVanityApplying: false,
-    hodlVanityPlan: () => ({ node: null, pathPrefix: [], path: run.path }), hodlWorkspace: "vanity", hodlSpSource: "", hodlBip85Source: "",
+    hodlVanityPlan: () => ({ node: null, pathPrefix: [], path: run.path }), hodlWorkspace: "vanity", hodlSpSource: "", hodlBip85Source: "", hodlPsbtSource: "",
     hodlRenderVanityOut() {}, hodlVanitySyncControls() {}, hodlVanityKeyLabel: () => "key", hodlVanitySetStatus() {}, hodlVanitySyncSource() {},
     hodlPickSpSessionKey() {}, hodlPickBip85SessionKey() {},
     // The station's error line keeps a note; here it shows the note's English key.
