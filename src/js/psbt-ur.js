@@ -242,7 +242,7 @@ function hodlUrReassemble(raw, emptyMessage, acceptType) {
   if (parsed.some((part) => part.count !== count)) throw new Error("UR fragment counts do not match.");
   if (count === 1) {
     if (parsed.length !== 1) throw new Error("A single-part UR should be pasted once.");
-    return { type, message: parsed[0].payload, parts: 1 };
+    return { type, message: parsed[0].payload, parts: 1, wholeMessageVerified: true };
   }
   // Retain only supplied fragments, never allocate from an untrusted count.
   const slots = new Map();
@@ -282,18 +282,22 @@ function hodlUrReassemble(raw, emptyMessage, acceptType) {
     if (crc32Number(message) !== standard.checksum) {
       throw new Error("UR message checksum failed: the reassembled message is not the one the fragments belong to.");
     }
-    return { type, message, parts: count };
+    return { type, message, parts: count, wholeMessageVerified: true };
   }
   if (ordered.some((part) => part.part)) throw new Error("Mixed UR fragment formats: some parts carry MUR metadata and some do not.");
   // Legacy pre-MUR fragments: raw chunks tied only by per-chunk checksums.
-  return { type, message: concatBytes(...ordered.map((part) => part.payload)), parts: count };
+  // BCR-2020-005 legacy sequencing carries no whole-message checksum, so a
+  // reassembly of same-length fragments spliced across payloads cannot be
+  // refused here — the result says so instead of implying verification
+  // (audit L2).
+  return { type, message: concatBytes(...ordered.map((part) => part.payload)), parts: count, wholeMessageVerified: false };
 }
 
 export function hodlUrDecodePsbt(raw) {
   const assembled = hodlUrReassemble(raw, "Paste a UR crypto-psbt.", (type) => {
     if (type !== "crypto-psbt" && type !== "psbt") throw new Error("This UR is " + type + ", not crypto-psbt.");
   });
-  return { type: assembled.type, psbt: hodlCborUnwrapPsbt(assembled.message), parts: assembled.parts };
+  return { type: assembled.type, psbt: hodlCborUnwrapPsbt(assembled.message), parts: assembled.parts, wholeMessageVerified: assembled.wholeMessageVerified };
 }
 
 // Watch-only descriptor and BIP-388 policy text. Same UR family as

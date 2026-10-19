@@ -387,6 +387,35 @@ test("a retranslation that matches its exact wording is written", async () => {
   }
 });
 
+test("an arrival equal to its exact correction lands even when the audit rejects it", async () => {
+  // The audit has rejected reviewed corrections as different from the
+  // identical text they had to equal (#918 es, #958 pt). An exact value is
+  // the committed, reviewed text, so it skips the audit; every other arrival
+  // in the same batch is still audited.
+  const outDir = tmp();
+  const tree = await gappedRoot(1);
+  try {
+    const { key, value } = await glossaryEntry(tree);
+    writeContext(tree, { [key]: { retranslate: { es: value }, exact: { es: `${key} [translated]` } } });
+    const { missing } = await languageWorkload(tree, "es");
+    const unpinned = missing.find((k) => k !== key);
+    assert.ok(unpinned, "the gapped tree has an unpinned missing key");
+    const client = stubClient({ auditFail: [key, unpinned] });
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, log: quiet });
+    const catalog = resultCatalog(outDir, tree);
+    assert.equal(catalog[key], `${key} [translated]`, "the reviewed correction is written");
+    assert.equal(catalog[unpinned], undefined, "an audit-rejected unpinned key stays missing");
+    assert.ok(report.dropped.some((d) => d.key === unpinned && /semantic audit/.test(d.problem)), "the unpinned key is dropped by the audit");
+    assert.ok(!report.dropped.some((d) => d.key === key), "the exact value is not dropped");
+    const audited = client.calls.filter((c) => c.name === "audit").flatMap((c) => JSON.parse(c.messages[1].content).pairs.map((p) => p.key));
+    assert.ok(!audited.includes(key), "the exact value is not sent to the audit");
+    assert.ok(audited.includes(unpinned), "the unpinned value still is");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
 test("chat(): wire format carries the strict JSON schema and bearer auth, and retries 5xx once", async () => {
   const seen = [];
   const server = createServer((req, res) => {

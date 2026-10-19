@@ -252,6 +252,26 @@ test("conflicting witness and non-witness claims render as a conflict, independe
   assert.ok(!agreed.includes("conflicting claims"), "agreement must not warn");
 });
 
+test("same-amount claims with different scripts still render as a conflict, in both map orders", () => {
+  // The consensus layer (psbt-wasm verify.rs, utxo_claim_conflict) treats a
+  // witness and non-witness claim as conflicting when the scriptPubKey
+  // differs, even at the same amount, and the inspector's own input table
+  // (app.js, audit C3-7) resolves agreement on amount AND script. The
+  // diagram must not silently pick one claim's address when the scripts
+  // disagree — that address is what a segwit signer's sighash basis would
+  // contradict.
+  const witness = { key: "01", value: "", name: "PSBT_IN_WITNESS_UTXO", decoded: { value: "1000", scriptPubKey: "0014" + "aa".repeat(20) } };
+  const nonWitness = { key: "00", value: "", name: "PSBT_IN_NON_WITNESS_UTXO", decoded: { txid: "00".repeat(32), outputCount: 1, prevout: { vout: 1, value: "1000", scriptPubKey: "0014" + "bb".repeat(20) } } };
+  const witnessAddress = addressFromScript(new Uint8Array(witness.decoded.scriptPubKey.match(/../g).map((b) => parseInt(b, 16))), "mainnet");
+  assert.ok(witnessAddress, "expected an address for the witness claim's script");
+  for (const pairs of [[witness, nonWitness], [nonWitness, witness]]) {
+    const html = psbtVizHtml(syntheticDoc({ inputs: [pairs] }), "mainnet");
+    assert.ok(html.includes("conflicting claims"), "conflict warning missing for equal-amount/different-script claims");
+    assert.ok(!html.includes(`conflicting claims: ${sats("1000")} vs ${sats("1000")} sats`), "equal amounts must not render as an amount-vs-amount conflict");
+    assert.ok(!html.includes(witnessAddress), "the witness claim's address must not be picked silently");
+  }
+});
+
 test("exotic witness programs render as bech32m addresses, matching the inspector (issue #354)", () => {
   // The diagram and the inspector share one renderer (rust-bitcoin via
   // addressFromScript), so scripts that used to fall back to hex here —

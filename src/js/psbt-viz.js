@@ -114,17 +114,20 @@ const scriptKind = (scriptHex, asm) => {
 
 // The amount an input claims to spend, resolved as a set so map order cannot
 // change the answer (issue #324): when both a witness UTXO and a verified
-// non-witness UTXO claim exist they must agree, otherwise the box shows a
-// conflict warning instead of picking one. The verified non-witness claim's
-// script wins the label when both are present and consistent. Pairs that
-// fail their typed decode claim nothing.
+// non-witness UTXO claim exist they must agree on amount AND scriptPubKey —
+// the consensus layer (psbt-wasm verify.rs, utxo_claim_conflict) treats a
+// same-amount/different-script pair as conflicting too — otherwise the box
+// shows a conflict warning instead of picking one. The verified non-witness
+// claim's script wins the label when both are present and consistent. Pairs
+// that fail their typed decode claim nothing.
 const claimedPrevout = (pairs) => {
   const witness = pairs.find((pair) => pair.name === "PSBT_IN_WITNESS_UTXO" && pair.decoded);
   const nonWitness = pairs.find((pair) => pair.name === "PSBT_IN_NON_WITNESS_UTXO" && pair.decoded?.prevout);
   const witnessClaim = witness && { value: witness.decoded.value, scriptPubKey: witness.decoded.scriptPubKey };
   const nonWitnessClaim = nonWitness && { value: nonWitness.decoded.prevout.value, scriptPubKey: nonWitness.decoded.prevout.scriptPubKey };
   if (witnessClaim && nonWitnessClaim) {
-    return witnessClaim.value === nonWitnessClaim.value ? nonWitnessClaim : { conflict: [witnessClaim.value, nonWitnessClaim.value] };
+    const agree = witnessClaim.value === nonWitnessClaim.value && witnessClaim.scriptPubKey === nonWitnessClaim.scriptPubKey;
+    return agree ? nonWitnessClaim : { conflict: [witnessClaim.value, nonWitnessClaim.value] };
   }
   return witnessClaim ?? nonWitnessClaim ?? null;
 };
@@ -187,7 +190,7 @@ const inputBox = (doc, index, network, copyIcon) => {
       ${address ? "" : `<span class="psbted-viz-id psbted-viz-in">${escapeHtml(label)}</span>`}
     </button>
     ${address ? publicValueHtml(address, { copyIcon, preview: label, className: "psbted-viz-id psbted-viz-in" }) : ""}
-    <p class="psbted-viz-amount psbt-amount">${conflict ? `<span class="psbted-note-bad">conflicting claims: ${groupSats(conflict[0])} vs ${groupSats(conflict[1])} sats</span>` : claim ? `${groupSats(claim.value)} sats` : `<span class="muted">no amount claim</span>`}</p>
+    <p class="psbted-viz-amount psbt-amount">${conflict ? `<span class="psbted-note-bad">conflicting claims: ${conflict[0] === conflict[1] ? "different previous output scripts" : `${groupSats(conflict[0])} vs ${groupSats(conflict[1])} sats`}</span>` : claim ? `${groupSats(claim.value)} sats` : `<span class="muted">no amount claim</span>`}</p>
     <p class="psbted-viz-sub" title="spends ${escapeHtml(input.txid)}:${escapeHtml(String(input.vout))}">${kind ? `<span class="psbted-viz-kind">${escapeHtml(kind)}</span> · ` : ""}<span class="psbted-viz-status ${status.tone}">${escapeHtml(status.text)}</span></p>
   </div>`;
 };

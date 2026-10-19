@@ -28,6 +28,18 @@ test("the CI workflow and the Dockerfile pin the same exact Node version", () =>
   assert.equal(workflow[1], dockerfile[1]);
 });
 
+// Every workflow that runs the toolchain must pin the same exact Node version
+// as ci-cd.yml: a floating major (translate.yml carried "22") makes the
+// translation jobs run a different Node than the builds they feed.
+test("every workflow pins the same exact Node version", () => {
+  const canonical = read(".github/workflows/ci-cd.yml").match(/^  NODE_VERSION: "([^"]+)"$/m)[1];
+  for (const path of [".github/workflows/translate.yml", ".github/workflows/jev-adversarial.yml"]) {
+    const pin = read(path).match(/^  NODE_VERSION: "([^"]+)"$/m);
+    assert.ok(pin, `${path} carries an exact NODE_VERSION pin`);
+    assert.equal(pin[1], canonical, `${path} drifts from ci-cd.yml's Node pin`);
+  }
+});
+
 test("all WASM crates and the dev image pin the same Rust channel", () => {
   const channels = buildCrates().map((crate) => {
     const channel = read(`${crate}/rust-toolchain.toml`).match(/^channel = "([^"]+)"$/m);
@@ -218,4 +230,19 @@ test("attestation permissions stay on the push-only job", () => {
   assert.match(attest, /id-token: write/);
   assert.match(attest, /attestations: write/);
   assert.match(attest, /subject-path: candidate\/entropylab\.html/);
+});
+
+// The scheduled workflows hold secrets (the adversarial API key, the
+// translation LLM secret, the App private key) and run unattended. Their
+// checkouts persisted the job's GITHUB_TOKEN into .git/config — one more
+// live credential a compromised step could read. Nothing in either workflow
+// pushes with that credential (translate's publish job mints its own App
+// token), so it must not survive the checkout.
+test("the scheduled workflows' checkouts do not persist their tokens", () => {
+  for (const path of [".github/workflows/jev-adversarial.yml", ".github/workflows/translate.yml"]) {
+    const blocks = read(path).split(/\n(?=      - uses: actions\/checkout@)/).slice(1)
+      .map((block) => block.split(/\n(?=      - )/)[0]);
+    assert.ok(blocks.length > 0, `${path} has checkout steps`);
+    for (const block of blocks) assert.match(block, /persist-credentials: false/, `${path}: a checkout persists the job's token`);
+  }
 });
