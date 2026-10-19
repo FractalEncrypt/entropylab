@@ -469,8 +469,7 @@ export async function deriveJournalKeys(password, iterations = JOURNAL_ITERATION
   try {
     const encKey = await subtle.importKey("raw", master.subarray(0, 32), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
     const ivKey = await subtle.importKey("raw", master.subarray(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const verify = new Uint8Array(await subtle.digest("SHA-256", master));
-    return { encKey, ivKey, verify, iterations, passwordProtected: password.length > 0 };
+    return { encKey, ivKey, iterations, passwordProtected: password.length > 0 };
   } finally {
     wipeBytes(master);
   }

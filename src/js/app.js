@@ -99,7 +99,6 @@ import {
   syncKeySnapshots as hodlJournalSyncKeySnapshots,
   snapshotFromKeyState as hodlJournalKeySnapshot,
   snapshotSession as hodlJournalSnapshot,
-  wipeBytes as hodlJournalWipeBytes,
   wipeDocument as hodlJournalWipeDocument,
   journalFromPlainText as hodlJournalFromPlainText,
   journalBip85ReferenceToken as hodlJournalBip85ReferenceToken,
@@ -16070,9 +16069,8 @@ function hodlJournalWipeNotebook() {
   hodlJournalGeneration++;
   hodlJournalWipeDocument(hodlJournalDoc);
   hodlJournalDoc = null;
-  // The AES-GCM and HMAC CryptoKeys are non-extractable, so the only wipeable
-  // bytes are the verify digest; nulling dereferences the keys themselves.
-  if (hodlJournalKeys) hodlJournalWipeBytes(hodlJournalKeys.verify);
+  // The AES-GCM and HMAC CryptoKeys are non-extractable: dropping the
+  // reference is the whole wipe.
   hodlJournalKeys = null;
   hodlJournalFileText = "";
   hodlJournalFileRead = null;
@@ -16089,12 +16087,10 @@ function hodlJournalWipeNotebook() {
   hodlJournalKeyEntries.clear();
 }
 // A notebook whose decryption outlived its session: the generation check in
-// create/unlock routes it here, so its plaintext and verify digest are wiped
-// instead of installed (the CryptoKeys themselves are non-extractable and are
-// simply dropped).
+// create/unlock routes it here, so its plaintext is wiped instead of installed
+// (the CryptoKeys themselves are non-extractable and are simply dropped).
 function hodlJournalDiscardOpened(opened) {
   hodlJournalWipeDocument(opened?.doc);
-  if (opened?.keys) hodlJournalWipeBytes(opened.keys.verify);
 }
 function hodlJournalClearFields() {
   for (let id of ["journal-create-password", "journal-create-confirm", "journal-open-password", "journal-input", "journal-phrase", "journal-label", "journal-entry-notes", "journal-search"]) {
