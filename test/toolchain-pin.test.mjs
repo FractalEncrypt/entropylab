@@ -219,3 +219,18 @@ test("attestation permissions stay on the push-only job", () => {
   assert.match(attest, /attestations: write/);
   assert.match(attest, /subject-path: candidate\/entropylab\.html/);
 });
+
+// The scheduled workflows hold secrets (the adversarial API key, the
+// translation LLM secret, the App private key) and run unattended. Their
+// checkouts persisted the job's GITHUB_TOKEN into .git/config — one more
+// live credential a compromised step could read. Nothing in either workflow
+// pushes with that credential (translate's publish job mints its own App
+// token), so it must not survive the checkout.
+test("the scheduled workflows' checkouts do not persist their tokens", () => {
+  for (const path of [".github/workflows/jev-adversarial.yml", ".github/workflows/translate.yml"]) {
+    const blocks = read(path).split(/\n(?=      - uses: actions\/checkout@)/).slice(1)
+      .map((block) => block.split(/\n(?=      - )/)[0]);
+    assert.ok(blocks.length > 0, `${path} has checkout steps`);
+    for (const block of blocks) assert.match(block, /persist-credentials: false/, `${path}: a checkout persists the job's token`);
+  }
+});
