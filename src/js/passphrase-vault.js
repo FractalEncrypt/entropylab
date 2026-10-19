@@ -23,7 +23,17 @@
 
 export const VAULT_MASK = "•";
 
-const codePoints = (text) => Array.from(String(text ?? ""), (char) => char.codePointAt(0));
+const codePoints = (text) => Array.from(String(text ?? ""), (char) => {
+  const point = char.codePointAt(0);
+  // Array.from already joins a surrogate pair into one point, so anything
+  // surrogate-shaped here is unpaired — a lone surrogate from a WTF-16
+  // clipboard or composition. It has no UTF-8 encoding: bytes() would emit
+  // the WTF-8 form (ED A0 80), which setBytes refuses, and a tab restore
+  // would then throw on the vault's own bytes. TextEncoder's contract is the
+  // one the rest of the app runs on: substitute U+FFFD, so bytes() only ever
+  // produces what setBytes accepts (follow-up review on audit L9).
+  return point >= 0xd800 && point <= 0xdfff ? 0xfffd : point;
+});
 
 export class PassphraseVault {
   #points = new Uint32Array(32);
@@ -70,32 +80,37 @@ export class PassphraseVault {
   setBytes(bytes) {
     this.clear();
     const points = [];
-    const data = bytes ?? new Uint8Array();
-    for (let i = 0; i < data.length;) {
-      const b = data[i];
-      const size = b < 0x80 ? 1 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
-      if (i + size > data.length) throw new Error("The stored passphrase is not valid UTF-8 (truncated sequence).");
-      let point, min;
-      if (size === 1) {
-        point = b;
-      } else {
-        point = b & (0xff >> (size + 1));
-        // Continuation range, narrowed by the lead on the FIRST byte only:
-        // E0/F0 and F4 forbid the overlong and beyond-U+10FFFF forms their
-        // ranges would otherwise spell; later continuations are plain.
-        const low = b === 0xe0 ? 0xa0 : b === 0xf0 ? 0x90 : 0x80;
-        const high = b === 0xed ? 0x9f : b === 0xf4 ? 0x8f : 0xbf;
-        for (let k = 1; k < size; k++) {
-          const c = data[i + k];
-          const cLow = k === 1 ? low : 0x80, cHigh = k === 1 ? high : 0xbf;
-          if (c < cLow || c > cHigh) throw new Error("The stored passphrase is not valid UTF-8.");
-          point = (point << 6) | (c & 0x3f);
+    try {
+      const data = bytes ?? new Uint8Array();
+      for (let i = 0; i < data.length;) {
+        const b = data[i];
+        const size = b < 0x80 ? 1 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
+        if (i + size > data.length) throw new Error("The stored passphrase is not valid UTF-8 (truncated sequence).");
+        let point, min;
+        if (size === 1) {
+          point = b;
+        } else {
+          point = b & (0xff >> (size + 1));
+          // Continuation range, narrowed by the lead on the FIRST byte only:
+          // E0/F0 and F4 forbid the overlong and beyond-U+10FFFF forms their
+          // ranges would otherwise spell; later continuations are plain.
+          const low = b === 0xe0 ? 0xa0 : b === 0xf0 ? 0x90 : 0x80;
+          const high = b === 0xed ? 0x9f : b === 0xf4 ? 0x8f : 0xbf;
+          for (let k = 1; k < size; k++) {
+            const c = data[i + k];
+            const cLow = k === 1 ? low : 0x80, cHigh = k === 1 ? high : 0xbf;
+            if (c < cLow || c > cHigh) throw new Error("The stored passphrase is not valid UTF-8.");
+            point = (point << 6) | (c & 0x3f);
+          }
+          min = size === 2 ? 0x80 : size === 3 ? 0x800 : 0x10000;
+          if (point < min || point > 0x10ffff) throw new Error("The stored passphrase is not valid UTF-8.");
         }
-        min = size === 2 ? 0x80 : size === 3 ? 0x800 : 0x10000;
-        if (point < min || point > 0x10ffff) throw new Error("The stored passphrase is not valid UTF-8.");
+        points.push(point);
+        i += size;
       }
-      points.push(point);
-      i += size;
+    } catch (error) {
+      points.fill(0); // the code points decoded so far are passphrase material
+      throw error;
     }
     if (points.length > this.#points.length) this.#points = new Uint32Array(points.length);
     this.#points.set(points);

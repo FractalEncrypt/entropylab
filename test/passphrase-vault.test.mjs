@@ -310,3 +310,43 @@ test("setBytes refuses malformed UTF-8 instead of poisoning the store (audit L9)
   assert.equal(vault.text(), "Grüße 🔑");
   assert.equal(hex(vault.bytes()), hex(utf8("Grüße 🔑")));
 });
+
+// The vault's ENTRY paths take DOM strings, and a Windows WTF-16 clipboard
+// can deliver a lone surrogate. The intake used to store it as a code point,
+// bytes() then emitted the WTF-8 form (ED A0 80), and the strict setBytes
+// refused the vault's own bytes — uncaught, out of hodlShowStoredPassphrase
+// during a tab restore (app.js). TextEncoder's contract is the authority the
+// rest of the app already runs on: a lone surrogate encodes as U+FFFD
+// (EF BF BD), so the intake substitutes it and bytes() only ever produces
+// what setBytes accepts (Kimi K3's follow-up review on audit L9).
+test("lone surrogates never enter the vault: the intake matches TextEncoder's contract", () => {
+  // Array.from splits an unpaired surrogate into its own point and joins a
+  // pair into one, so anything surrogate-shaped at intake is unpaired.
+  const vault = new PassphraseVault();
+  vault.setText("a\uD800b");
+  assert.equal(vault.length, 3, "the lone surrogate is one stored point");
+  assert.equal(hex(vault.bytes()), hex(utf8("a\uFFFDb")), "bytes() encodes U+FFFD, never the WTF-8 form");
+  assert.equal(vault.text(), "a\uFFFDb");
+  assert.doesNotThrow(() => vault.setBytes(vault.bytes()), "the vault must consume its own bytes()");
+  assert.equal(vault.text(), "a\uFFFDb", "the round trip through bytes() preserves the store");
+  // The same contract on replace(), the typing / paste / composition path.
+  const pasted = new PassphraseVault();
+  pasted.setText("keep");
+  pasted.replace(4, 4, "\uDEAD");
+  assert.equal(hex(pasted.bytes()), hex(utf8("keep\uFFFD")), "a surrogate pasted mid-text");
+  assert.doesNotThrow(() => pasted.setBytes(pasted.bytes()));
+  assert.equal(pasted.text(), "keep\uFFFD");
+});
+
+// The decode accumulates the passphrase as code points before the store is
+// touched; the success path zeroes that array, so a refusal must not abandon
+// the decoded-so-far bytes un-wiped. Wipe discipline here is checked at the
+// source, as the residue guards do (the array is a local — its state is not
+// observable from outside).
+test("every setBytes refusal wipes the code points decoded so far (source guard)", () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src/js/passphrase-vault.js"), "utf8");
+  const setBytes = source.slice(source.indexOf("setBytes(bytes)"), source.indexOf("get isAscii"));
+  assert.ok(setBytes.includes("setBytes(bytes)"), "the setBytes source was found");
+  assert.match(setBytes, /catch/, "the decode loop has no refusal path that wipes points");
+  assert.equal((setBytes.match(/points\.fill\(0\)/g) || []).length, 2, "exactly the success path and the refusal path zero points");
+});
