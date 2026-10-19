@@ -553,3 +553,16 @@ test("releasing or cancelling keyboard delete before the delay prevents a late d
     assert.equal(input.value, "abandon", `${stop} cancels the pending hold timer`);
   }
 });
+
+test("a language switch paints the co-signer labels, the BIP-85 child and the Silent Payments results again", () => {
+  // "Co-signer 2", "Move co-signer 2 up to position 1", the BIP-85 child's
+  // labels and every Silent Payments line fill values into their text, so
+  // the static sweep cannot carry them across a switch. A repaint redraws
+  // what each one kept: it never derives a key or scans again.
+  const apply = appSlice("hodlApplyLocale");
+  assert.match(apply, /hodlReindexMsigKeys\(\);\s*hodlRenderBip85Out\(\);\s*hodlRefreshSpLocale\(\);/);
+  const sp = appSlice("hodlRefreshSpLocale");
+  assert.match(sp, /hodlPaintSpSession\(\)/);
+  assert.match(sp, /if \(hodlSpSendLast\) hodlPaintSpSend\(\);\s*else if \(hodlSpVerifyMatches\) hodlPaintSpVerify\(\);/);
+  assert.doesNotMatch(sp, /hodlRenderSpSend|hodlRenderSpVerify|hodlSpDeriveVinKeys|hodlSpDeriveSessionKeys/, "a switch repaints; it never derives or scans");
+});

@@ -98,7 +98,7 @@ function raceHarness() {
     "hodlRestoreMsig"])
     context[name] = (...args) => { effects.push([name, ...args]); };
   vm.runInContext('class HodlDerivationCancelledError extends Error {}', context);
-  for (const name of ["hodlInvalidateDerivation", "hodlAssertDerivationActive", "hodlCalculateKey",
+  for (const name of ["hodlNote", "hodlInvalidateDerivation", "hodlAssertDerivationActive", "hodlCalculateKey",
     "hodlWipeActiveKey", "hodlJournalImportFile", "hodlKeyManagerImportFile", "hodlInitSecretFieldAutoClear",
     "hodlAccountAddressBranches", ...rowWipeHelpers.filter((name) => app.includes(`function ${name}(`))])
     vm.runInContext(functionSource(name), context);
@@ -342,7 +342,7 @@ test("Silent Payments private-bearing inputs and revealed output are cleared", (
   assert.match(lifecycle, /getElementById\("sp-out"\)/);
   assert.match(lifecycle, /spOut\.innerHTML\s*=\s*""/);
   assert.match(lifecycle, /spError\.textContent\s*=\s*""/);
-  assert.match(lifecycle, /spSession\.textContent\s*=\s*hodlSpNote/);
+  assert.match(lifecycle, /if \(spSession\) hodlPaintSpSession\(hodlSpNote\)/);
 });
 
 test("Silent Payments recipient, verify, and label fields are explicitly cleared", () => {
@@ -603,7 +603,7 @@ test("pagehide and persisted pageshow end the PSBT session, reports included", (
     hodlSetPsbtError: () => errors.push("psbt"), hodlSetNonceError: () => errors.push("nonce"),
     hodlPaintPsbtSession() {}, hodlRefreshStationKeyPickers() {}, hodlSyncPsbtControls() {},
   });
-  vm.runInContext(`${functionSource("hodlEndPsbtSession")}\nhodlEndPsbtSession();`, context);
+  vm.runInContext(`${functionSource("hodlNote")}\n${functionSource("hodlEndPsbtSession")}\nhodlEndPsbtSession();`, context);
   assert.equal(context.hodlPsbtLast, null, "session end left the parsed report state");
   // (vm realms: assert.keys rather than deepEqual against a home-realm {}.)
   assert.equal(Object.keys(context.hodlPsbtInspected || {}).length, 0, "session end left run stamps");
@@ -1189,7 +1189,7 @@ test("changing the language outside Keys keeps the selected key's wallet", async
     });
     for (const name of ["hodlRenderKeyForm", "hodlRestoreFormFields", "hodlUpdateSeedLengthControl", "hodlUpdateAddressEstimate",
       "hodlUpdateCoinTypeHelp", "hodlUpdateDerivationPathPreview", "hodlUpdateMsigScriptDetection",
-      "hodlUpdateMsigAccount", "hodlShowMsig", "hodlRefreshKeyResult", "hodlRefreshPsbtLocale", "hodlRefreshVanityLocale", "hodlRefreshStationKeyPickers", "hodlRenderKeyTabs", "hodlRenderMsigTabs", "hodlRenderStationTabs", "hodlPaintKeySummary", "hodlUpdateHardeningHelp", "hodlApplyTheme", "hodlRefreshWorkspaceErrors"])
+      "hodlUpdateMsigAccount", "hodlShowMsig", "hodlRefreshKeyResult", "hodlRefreshPsbtLocale", "hodlRefreshVanityLocale", "hodlRefreshStationKeyPickers", "hodlReindexMsigKeys", "hodlRenderBip85Out", "hodlRefreshSpLocale", "hodlRenderKeyTabs", "hodlRenderMsigTabs", "hodlRenderStationTabs", "hodlPaintKeySummary", "hodlUpdateHardeningHelp", "hodlApplyTheme", "hodlRefreshWorkspaceErrors"])
       context[name] = () => {};
     let logRefreshes = 0;
     context.hodlSecurityLog = { refresh: () => logRefreshes++ };
