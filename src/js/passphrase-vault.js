@@ -63,14 +63,37 @@ export class PassphraseVault {
   }
 
   // From UTF-8 bytes (a key tab's stored passphrase), without a string.
+  // Strictly: overlong forms, surrogates, code points above U+10FFFF,
+  // truncated sequences and stray continuation bytes are refused before the
+  // store is touched — a poisoned store would only surface later as a
+  // text() RangeError (audit L9). The refusal leaves the vault empty.
   setBytes(bytes) {
     this.clear();
     const points = [];
-    for (let i = 0; i < (bytes?.length ?? 0);) {
-      const b = bytes[i];
+    const data = bytes ?? new Uint8Array();
+    for (let i = 0; i < data.length;) {
+      const b = data[i];
       const size = b < 0x80 ? 1 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
-      let point = size === 1 ? b : b & (0xff >> (size + 1));
-      for (let k = 1; k < size; k++) point = (point << 6) | (bytes[i + k] & 0x3f);
+      if (i + size > data.length) throw new Error("The stored passphrase is not valid UTF-8 (truncated sequence).");
+      let point, min;
+      if (size === 1) {
+        point = b;
+      } else {
+        point = b & (0xff >> (size + 1));
+        // Continuation range, narrowed by the lead on the FIRST byte only:
+        // E0/F0 and F4 forbid the overlong and beyond-U+10FFFF forms their
+        // ranges would otherwise spell; later continuations are plain.
+        const low = b === 0xe0 ? 0xa0 : b === 0xf0 ? 0x90 : 0x80;
+        const high = b === 0xed ? 0x9f : b === 0xf4 ? 0x8f : 0xbf;
+        for (let k = 1; k < size; k++) {
+          const c = data[i + k];
+          const cLow = k === 1 ? low : 0x80, cHigh = k === 1 ? high : 0xbf;
+          if (c < cLow || c > cHigh) throw new Error("The stored passphrase is not valid UTF-8.");
+          point = (point << 6) | (c & 0x3f);
+        }
+        min = size === 2 ? 0x80 : size === 3 ? 0x800 : 0x10000;
+        if (point < min || point > 0x10ffff) throw new Error("The stored passphrase is not valid UTF-8.");
+      }
       points.push(point);
       i += size;
     }

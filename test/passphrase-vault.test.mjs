@@ -275,3 +275,38 @@ test("a U+FEFF-leading passphrase survives the key-file text seam", () => {
   assert.equal(hex(mnemonicToSeedSync(MNEMONIC, bytes)), expected, "the wallet the Key tab derives");
   assert.equal(hex(mnemonicToSeedSync(MNEMONIC, utf8(exportedText))), expected, "the wallet after export → import");
 });
+
+// Audit L9 ledger (input-parsing pass): setBytes decoded UTF-8 leniently —
+// overlong forms, surrogates, code points past U+10FFFF, truncated sequences
+// and stray continuation bytes were all silently accepted, and the poisoned
+// store later made text() throw a RangeError. No live path feeds malformed
+// bytes today; the hardening makes setBytes refuse them, so the vault's
+// invariant (bytes() is the standard encoding of what text() returns) holds
+// by validation, not by luck. Expected values are the WHATWG encoding rules:
+// overlong forms, surrogates D800-DFFF and code points above U+10FFFF are
+// not valid UTF-8.
+test("setBytes refuses malformed UTF-8 instead of poisoning the store (audit L9)", () => {
+  const rejects = (hexBytes, why) => {
+    const vault = new PassphraseVault();
+    vault.setText("keep");
+    assert.throws(() => vault.setBytes(hexBytes()), why);
+    assert.equal(vault.length, 0, `${why}: a refusal leaves the vault empty, not stale`);
+  };
+  // Overlong 2/3/4-byte encodings of '/'.
+  rejects(() => Uint8Array.of(0xc0, 0xaf), "overlong 2-byte form");
+  rejects(() => Uint8Array.of(0xe0, 0x80, 0xaf), "overlong 3-byte form");
+  rejects(() => Uint8Array.of(0xf0, 0x80, 0x80, 0xaf), "overlong 4-byte form");
+  // Surrogate range D800-DFFF and past U+10FFFF.
+  rejects(() => Uint8Array.of(0xed, 0xa0, 0x80), "a UTF-8-encoded surrogate is not a code point");
+  rejects(() => Uint8Array.of(0xf4, 0x90, 0x80, 0x80), "above U+10FFFF");
+  // Structure errors.
+  rejects(() => Uint8Array.of(0xc3), "a truncated sequence");
+  rejects(() => Uint8Array.of(0xc3, 0x28), "a broken continuation byte");
+  rejects(() => Uint8Array.of(0xf5, 0x80, 0x80, 0x80), "a lead byte beyond 0xf4");
+  rejects(() => Uint8Array.of(0x80), "a stray continuation byte");
+  // Canonical multi-byte input still round-trips through bytes() and text().
+  const vault = new PassphraseVault();
+  vault.setBytes(utf8("Grüße 🔑"));
+  assert.equal(vault.text(), "Grüße 🔑");
+  assert.equal(hex(vault.bytes()), hex(utf8("Grüße 🔑")));
+});
