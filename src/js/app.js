@@ -11173,8 +11173,12 @@ function hodlBip85SyncOptions() {
   if (path) path.textContent = hodlBip85CurrentPath() || "\u2014";
 }
 function hodlBip85LoadXprv(text) {
-  let value = String(text || "").trim(), { xkey, isPrivate } = hodlParseExtendedKey(value);
+  let value = String(text || "").trim(), { xkey, isPrivate, scope, prefix } = hodlParseExtendedKey(value);
   if (!isPrivate) throw new Error("BIP-85 needs a private root (xprv/tprv), not an extended public key.");
+  // The same scope rule Key Station applies to an imported key: BIP-85
+  // children are defined from a BIP32 root, and a multisig-prefixed key is
+  // account-scoped, not a root to hang deterministic children on.
+  if (scope !== "singlesig") throw new Error(prefix + " is a multisig extended key. BIP-85 derives from a singlesig root xprv/tprv.");
   let node = hodlHDKey.fromExtendedKey(xkey);
   if (node.depth !== 0) throw new Error("BIP-85 starts at the BIP32 root. This extended key is not depth 0.");
   hodlBip85WipeParent();
