@@ -6,8 +6,10 @@
 // requires one explicit acknowledgement before the entries are installed:
 // the first press of "Open journal" reveals the no-protection notice and
 // installs nothing; the second press on the same file completes the open.
-// Password-protected opens are unchanged — AES-GCM already fails closed on
-// forged files, wrong passwords, and iterations tampering.
+// Choosing a different file or wiping the journal forgets a pending
+// acknowledgement. Password-protected opens are unchanged — AES-GCM
+// already fails closed on forged files, wrong passwords, and iterations
+// tampering.
 //
 // The real app.js functions run under a stub DOM; the real journal.js crypto
 // runs against a low-cost test file (the on-disk iteration floor is honored).
@@ -25,6 +27,8 @@ import {
   emptyDocument,
   openDocument,
   sealDocument,
+  wipeBytes,
+  wipeDocument,
 } from "../src/js/journal.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -67,6 +71,7 @@ const source = [
   loadSlice("hodlJournalError"),
   loadSlice("hodlJournalChooseFile"),
   loadSlice("hodlJournalUnlock"),
+  loadSlice("hodlJournalWipeNotebook"),
 ].join("\n");
 
 const PASSWORD = "correct horse battery staple";
@@ -81,19 +86,23 @@ const loadApp = ({ password = "", onOpen = (file, password) => openDocument(file
   const documentStub = { getElementById: (id) => fields[id] ?? null };
   const api = new Function(
     "hodlJournalOpenDocument", "document",
-    "hodlKeyManagerReset", "hodlJournalWipeNotebook", "hodlJournalHideEditor",
+    "hodlJournalWipeDocument", "hodlJournalWipeBytes",
+    "hodlKeyManagerReset", "hodlJournalHideEditor",
     "hodlJournalShowWork", "hodlShowJournalTool", "hodlJournalLog",
     "hodlJournalBackfillDerivedKeys", "hodlJournalDiscardOpened",
     `${source}; return {
       choose: hodlJournalChooseFile,
       unlock: hodlJournalUnlock,
+      wipe: hodlJournalWipeNotebook,
       setFileText: (text) => { hodlJournalFileText = text; },
       state: () => ({ keys: hodlJournalKeys, doc: hodlJournalDoc }),
+      openReadyFor: () => hodlJournalOpenReadyFor,
       openReadyVisible: () => { const el = document.getElementById("journal-open-ready"); return el ? !el.hidden : false; },
     };`,
   )(
     onOpen, documentStub,
-    noop, noop, noop,
+    wipeDocument, wipeBytes,
+    noop,
     noop, noop, noop,
     noop, noop,
   );
@@ -108,7 +117,11 @@ const sealFile = async (password, label) => {
 };
 
 const passwordlessFile = await sealFile("", "passwordless entry");
+const otherPasswordlessFile = await sealFile("", "other entry");
 const protectedFile = await sealFile(PASSWORD, "protected entry");
+
+assert.notEqual(otherPasswordlessFile, passwordlessFile,
+  "the second fixture must differ byte-for-byte — labels sit inside the AES-GCM ciphertext, so a string replace on the sealed envelope would be a no-op");
 
 test("a passwordless file is not installed until the open is acknowledged (audit L6)", async () => {
   const env = loadApp();
@@ -134,9 +147,23 @@ test("a fresh file choice resets a pending passwordless acknowledgement (audit L
   env.setFileText(passwordlessFile);
   await env.unlock();
   assert.ok(env.openReadyVisible(), "armed for the first file");
-  await env.choose({ text: async () => passwordlessFile.replace("passwordless entry", "other entry") });
+  await env.choose({ text: async () => otherPasswordlessFile });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await env.unlock();
   assert.deepEqual(env.state(), { keys: null, doc: null }, "the second file is not installed on its first open");
   assert.ok(env.openReadyVisible(), "the acknowledgement is armed for the new file, not inherited");
+});
+
+test("a journal wipe forgets a pending passwordless acknowledgement (audit L6)", async () => {
+  const env = loadApp();
+  env.setFileText(passwordlessFile);
+  await env.unlock();
+  assert.ok(env.openReadyVisible(), "armed before the wipe");
+  env.wipe();
+  assert.ok(!env.openReadyVisible(), "a wipe also hides the acknowledgement row");
+  assert.equal(env.openReadyFor(), "", "a wipe drops the armed file bytes");
+  env.setFileText(passwordlessFile);
+  await env.unlock();
+  assert.deepEqual(env.state(), { keys: null, doc: null }, "a wiped session installs nothing without a fresh acknowledgement");
+  assert.ok(env.openReadyVisible(), "the acknowledgement must be earned again after a wipe");
 });
