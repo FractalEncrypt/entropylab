@@ -10231,7 +10231,7 @@ function hodlFinalized(entries) {
 // finalized signatures still participate in repeated-nonce analysis; a
 // signature that cannot be decoded or associated must block a clean verdict
 // rather than pass silently (issue #87).
-function hodlScriptPushes(script) {
+function hodlScriptPushes(script, limit = 512) {
   let items = [], offset = 0;
   while (offset < script.length) {
     let opcode = script[offset++], length;
@@ -10252,6 +10252,7 @@ function hodlScriptPushes(script) {
     hodlPsbtNeed(script, offset, length, "A final script push is truncated.");
     items.push(script.slice(offset, offset + length));
     offset += length;
+    if (items.length >= limit) throw new Error("A script has too many pushes to analyze safely.");
   }
   return items;
 }
@@ -10293,12 +10294,30 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
       malformed = true;
     }
   }
-  for (let item of items) if (hodlLooksPubkey(item)) candidates.push(item);
+  if (items.length > 512) {
+    items.length = 512;
+    malformed = true;
+  }
+  // Candidates are untrusted bytes; cap the set so a hostile script cannot
+  // turn the ownership search into a large EC-verification job (audit M4).
+  let seenCandidates = new Set(), addCandidate = (item) => {
+    if (!hodlLooksPubkey(item)) return;
+    let key = hodlHex.encode(item);
+    if (seenCandidates.has(key)) return;
+    if (candidates.length >= 32) {
+      malformed = true;
+      return;
+    }
+    seenCandidates.add(key);
+    candidates.push(item);
+  };
+  for (let item of items) addCandidate(item);
   // Multisig co-signer keys live in the redeem/witness script, not the stack.
   for (let scriptEntry of hodlFind(entries, 4).concat(hodlFind(entries, 5))) {
     try {
-      for (let push of hodlScriptPushes(scriptEntry.val)) if (hodlLooksPubkey(push)) candidates.push(push);
+      for (let push of hodlScriptPushes(scriptEntry.val)) addCandidate(push);
     } catch {
+      malformed = true;
     }
   }
   let signatures = [], uninspected = 0, scriptCode = hodlInputScriptCode(entries, witnessUtxo);
@@ -10338,9 +10357,8 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
       }
     }
     if (!signature.pubkey) {
-      let unique = [];
-      for (let candidate of candidates) if (!unique.some((seen) => hodlEq(seen, candidate))) unique.push(candidate);
-      if (unique.length === 1) signature.pubkey = unique[0];
+      // candidates is already deduplicated and capped above.
+      if (candidates.length === 1) signature.pubkey = candidates[0];
     }
     if (signature.pubkey) signatures.push(signature);
     else uninspected += 1;
@@ -12364,7 +12382,7 @@ function hodlForeignSingleKeyScript(entries, script) {
   }
   return false;
 }
-function hodlDeclaredOutput(entries, script, network) {
+function hodlDeclaredOutput(entries, script, network, budget = null) {
   if (!hodlPsbtHd || !entries || !script) return null;
   let fingerprint = hodlFingerprintHex(hodlPsbtHd.fingerprint), declared = null;
   for (let entry of hodlFind(entries, 2)) {
@@ -12382,9 +12400,22 @@ function hodlDeclaredOutput(entries, script, network) {
       if (!declared) declared = { state: "other-wallet", path: label, fingerprint: fp };
       continue;
     }
+    // A PSBT is untrusted. Deriving an attacker-named path costs one CKD per
+    // step and creates live private nodes; bound the whole render and mark an
+    // exhausted claim unverified instead of deriving it (audit M3).
+    if (path.length > 255 || (budget && path.length > budget.remaining)) {
+      if (budget) budget.remaining = 0;
+      if (!declared || declared.state !== "ours") declared = { state: "unknown", path: label, budget: true };
+      continue;
+    }
+    if (budget) budget.remaining -= path.length;
+    let node = hodlPsbtHd, derived = [];
     try {
-      let node = hodlPsbtHd;
-      for (let index of path) node = node.deriveChild(index);
+      for (let index of path) {
+        let next = node.deriveChild(index);
+        if (node !== hodlPsbtHd) derived.push(node);
+        node = next;
+      }
       if (!node.publicKey || !hodlEq(node.publicKey, entry.keydata)) return { state: "lie", path: label };
       let address = hodlAddr(script, network);
       let encoded = false;
@@ -12414,11 +12445,16 @@ function hodlDeclaredOutput(entries, script, network) {
       }
     } catch {
       return { state: "lie", path: label };
+    } finally {
+      // The root belongs to the session; every node this record created is
+      // disposable and holds a private key.
+      for (let derivedNode of derived) derivedNode.wipePrivateData();
+      if (node !== hodlPsbtHd) node.wipePrivateData();
     }
   }
   return declared;
 }
-function hodlRenderOutputHtml(output, index, network, map, entries) {
+function hodlRenderOutputHtml(output, index, network, map, entries, derivationBudget = null) {
   let opReturn = parseOpReturn(output.script);
   if (opReturn) {
     let amount = typeof output.amount === "bigint" ? output.amount : BigInt(output.amount || 0);
@@ -12441,7 +12477,7 @@ function hodlRenderOutputHtml(output, index, network, map, entries) {
   if (scan.state === "ours" && address.startsWith("script ") && scan.address) address = scan.address;
   let declared = null;
   try {
-    declared = hodlDeclaredOutput(entries, output.script, network);
+    declared = hodlDeclaredOutput(entries, output.script, network, derivationBudget);
   } catch {
   }
   let extra = "", className = "psbt-kv";
@@ -12526,7 +12562,11 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     // One digest-reconstruction budget per render, shared by the partial
     // signatures and the finalized-field scan (audit C3-3); 256 mirrors the
     // consensus layer's MAX_SIGNATURE_CHECKS.
-    signatureChecks = { remaining: 256 };
+    signatureChecks = { remaining: 256 },
+    // One PSBT output-derivation budget per render. An attacker-named path
+    // costs one CKD per step; the inspector must not derive an unbounded
+    // private subtree from an untrusted file (audit M3).
+    derivationBudget = { remaining: 4096 };
   let inscriptionReport = { inputs: [], envelopes: [] }, inscriptionScanIncomplete = false;
   try {
     inscriptionReport = inspectPsbtInscriptions(psbt);
@@ -12555,7 +12595,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx outputs") + " <span class='label-value'>(" + tx.outputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction sends bitcoin") + "</p>");
   let ownershipMap = hodlSessionOwnership(network);
   tx.outputs.forEach((output, index) => {
-    html.push(hodlRenderOutputHtml(output, index, network, ownershipMap, psbt.outputs[index]));
+    html.push(hodlRenderOutputHtml(output, index, network, ownershipMap, psbt.outputs[index], derivationBudget));
   });
   html.push(hodlOwnershipWarning(tx.outputs, network, ownershipMap));
   html.push("<hr class='result-divider'>");
