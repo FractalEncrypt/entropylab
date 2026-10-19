@@ -16056,6 +16056,12 @@ var hodlJournalGeneration = 0;
 // fill hodlJournalFileText: a slower earlier read, or one a reset discarded,
 // finds itself replaced and drops its text (#889).
 var hodlJournalFileRead = null;
+// Audit L6: a passwordless journal file is authenticated by nothing (the key
+// material derives from the empty password), so opening one installs entries
+// that anyone with the file could have altered. The first open of a given
+// file arms an explicit no-protection acknowledgement instead of installing;
+// this holds that file's text, or "" when nothing is armed.
+var hodlJournalOpenReadyFor = "";
 function hodlJournalError(message) {
   let error = document.getElementById("journal-error");
   if (error) error.textContent = message || "";
@@ -16413,6 +16419,11 @@ async function hodlJournalCreate() {
 function hodlJournalChooseFile(file) {
   hodlJournalError("");
   hodlJournalFileText = "";
+  // A different file is a different provenance: a pending passwordless
+  // acknowledgement never carries over (audit L6).
+  hodlJournalOpenReadyFor = "";
+  let ready = document.getElementById("journal-open-ready");
+  if (ready) ready.hidden = true;
   let read = (hodlJournalFileRead = file ? file.text().then((text) => ({ text }), (error) => ({ error })) : null);
   read?.then((result) => {
     if (hodlJournalFileRead === read && !result.error) hodlJournalFileText = result.text;
@@ -16434,6 +16445,18 @@ async function hodlJournalUnlock() {
     if (!hodlJournalFileText) throw new Error("Choose a journal file first.");
     let opened = await hodlJournalOpenDocument(hodlJournalFileText, document.getElementById("journal-open-password")?.value || "");
     if (generation !== hodlJournalGeneration) return hodlJournalDiscardOpened(opened);
+    if (!opened.keys.passwordProtected && hodlJournalOpenReadyFor !== hodlJournalFileText) {
+      // Passwordless envelope: the entries it holds are authenticated by
+      // nothing, so the first open of this file only arms the no-protection
+      // acknowledgement — installing waits for a second, knowing press.
+      hodlJournalOpenReadyFor = hodlJournalFileText;
+      let ready = document.getElementById("journal-open-ready");
+      if (ready) ready.hidden = false;
+      return;
+    }
+    hodlJournalOpenReadyFor = "";
+    let openReady = document.getElementById("journal-open-ready");
+    if (openReady) openReady.hidden = true;
     hodlKeyManagerReset();
     hodlJournalWipeNotebook();
     hodlJournalKeys = opened.keys;
