@@ -683,8 +683,12 @@ function hodlSingleKeyWallet(e, t, r, trimBrainWallet = false) {
   else if (/^[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}$/.test(a)) {
     let E = hodlDecodeWif(a);
     // A WIF only settles the encoding family; when it matches the selected
-    // chain's family, keep the chain so regtest still renders bcrt1….
-    i = E.priv, source = "wif", compressed = E.compressed, c = hodlNetworkFamily(t) === E.network ? t : E.network, n.push(hodlNote(E.compressed ? "Decoded a compressed WIF private key (starts with K or L on mainnet)." : "Decoded an uncompressed WIF private key (starts with 5 on mainnet)."));
+    // chain's family, keep the chain so regtest still renders bcrt1…. A
+    // mismatch throws: the derive path asserts the family before calling, and
+    // a future caller that skips that check must not get a wallet silently
+    // re-homed onto the WIF's network.
+    if (hodlNetworkFamily(t) !== E.network) throw hodlError("This WIF is for {have}; Network is set to {want}.", { have: E.network, want: t });
+    i = E.priv, source = "wif", compressed = E.compressed, c = t, n.push(hodlNote(E.compressed ? "Decoded a compressed WIF private key (starts with K or L on mainnet)." : "Decoded an uncompressed WIF private key (starts with 5 on mainnet)."));
   } else {
     let E = a.replace(/\s/g, "").replace(/^0x/i, "");
     if (!/^[0-9a-fA-F]{64}$/.test(E)) throw hodlError("Enter a WIF key (5/K/L…), a 64-character hex private key, or a Casascius mini key (S…).");
