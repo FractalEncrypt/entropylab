@@ -3995,7 +3995,10 @@ function hodlParseCards(raw, targetWords = hodlTargetWordCount) {
       invalidEntries.push(entry);
       continue;
     }
-    let pool = cards.length < needed.first ? cards : cards.slice(needed.first);
+    // A one-deck target (needed.extra is 0 — no second shuffle is ever
+    // instructed) repeats against every card dealt so far; a two-deck target
+    // (24 words) starts a fresh pool past the first shuffle (audit L1).
+    let pool = needed.extra ? (cards.length < needed.first ? cards : cards.slice(needed.first)) : cards;
     if (pool.includes(card)) {
       entry.duplicate = true;
       duplicates.push(card);
@@ -4003,8 +4006,15 @@ function hodlParseCards(raw, targetWords = hodlTargetWordCount) {
     } else cards.push(card);
   }
   let firstCount = Math.min(cards.length, needed.first), extraCount = Math.max(0, cards.length - needed.first);
-  let bits = hodlCardWithoutReplacementBits(firstCount);
-  for (let i = 0; i < extraCount; i++) bits += Math.log2(52 - i);
+  let bits;
+  if (needed.extra) {
+    bits = hodlCardWithoutReplacementBits(firstCount);
+    for (let i = 0; i < extraCount; i++) bits += Math.log2(52 - i);
+  } else {
+    // One deal, one deck: the ceiling is the deal's own without-replacement
+    // entropy, log2(52!/(52-n)!), never a fresh-deck credit (audit L1).
+    bits = hodlCardWithoutReplacementBits(cards.length);
+  }
   return { cards, invalid, duplicates, entries, invalidEntries, duplicateEntries, bits, needed, hashInput: hodlCardsHashInput(cards) };
 }
 function hodlCardsHashInput(cards, coleman = false) {
@@ -4062,7 +4072,9 @@ function hodlCardsEntropy(value, targetWords = hodlTargetWordCount, coleman = fa
   return { ok: true, bytes, hex: hodlHex.encode(bytes), bits: config.bits, sourceBits: parsed.bits, method: coleman ? "ian-coleman-cards-sha256" : "cards-sha256", notes, warnings, parsed, hashInput };
 }
 function hodlCardSelectionState(cards, needed, selectedSuit = "", selectedRank = "") {
-  let currentShuffle = cards.length < needed.first ? cards : cards.slice(needed.first), used = new Set(currentShuffle), available = [];
+  // Same deck rule as hodlParseCards (audit L1): a one-deck target deals from
+  // the same shuffle throughout; only a two-deck target resets past the first.
+  let currentShuffle = needed.extra && cards.length >= needed.first ? cards.slice(needed.first) : cards, used = new Set(currentShuffle), available = [];
   for (let suit of hodlCardSuits) for (let rank of hodlCardRanks) {
     let card = rank + suit.code;
     if (!used.has(card)) available.push(card);
