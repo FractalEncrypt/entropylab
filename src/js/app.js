@@ -17213,6 +17213,21 @@ async function hodlVanityApplyMatch(index) {
     // its chip, fingerprint, and LifeHash follow the key.
     if (hodlSpSource === "key:" + updated.id) hodlPickSpSessionKey(updated);
     if (hodlBip85Source === "key:" + updated.id) hodlPickBip85SessionKey(updated);
+    if (hodlPsbtSource === "key:" + updated.id) {
+      // The PSBT session holds private material from the pre-update key;
+      // keeping it would compute ownership and RFC 6979 verdicts against the
+      // old seed while the session line still names this key (audit L10).
+      try {
+        hodlUseActiveKeyForPsbt(updated);
+      } catch {
+        // The updated key has no session material (e.g. an account-level
+        // extended key): fall back to inspect-only rather than abort the
+        // apply — the key itself was already saved.
+        hodlPsbtWipeMem();
+        hodlPaintPsbtSession();
+        hodlSyncPsbtControls();
+      }
+    }
     let changed = run.sourceLabel !== match.savedTo;
     hodlVanitySetStatus(hodlNote(match.index !== null
       ? changed ? "Saved to key {key}: account {n} is now on the key — its master fingerprint and LifeHash changed from {from} to {key}. Open the Keys tab to review and export it." : "Saved to key {key}: account {n} is now on the key. Open the Keys tab to review and export it."
