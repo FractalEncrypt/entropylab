@@ -1159,7 +1159,11 @@ pub unsafe extern "C" fn el_bech32m_encode(
     for &w in raw {
         match Fe32::try_from(w) {
             Ok(fe) => fes.push(fe),
-            Err(_) => return -1,
+            Err(_) => {
+                // A valid prefix may already contain private key words.
+                wipe(fes.as_mut_ptr() as *mut u8, fes.len());
+                return -1;
+            }
         }
     }
     let mut encoded = bech32::primitives::encode::Encoder::<_, Bech32m>::new(fes.iter().copied(), &hrp)
