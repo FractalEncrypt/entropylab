@@ -18120,8 +18120,11 @@ function hodlInitSecretFieldAutoClear() {
     try { hodlLnWipeMem(); } catch {}
     // Every derived wallet's row key bytes, shared results included: the
     // whole session is going (#546 B2). Before the Journal wipe, which empties
-    // the Key Manager's pending keys.
-    for (let result of [hodlWalletResult, ...hodlKeys.map((state) => state.result), ...hodlKeyManagerPending.map((state) => state.result), ...hodlCommittedResults]) hodlWipeWalletKeys(result);
+    // the Key Manager's pending keys. A result can be mid-update and throw,
+    // and its failure must not skip the other wallets or the wipes after them.
+    for (let result of [hodlWalletResult, ...hodlKeys.map((state) => state.result), ...hodlKeyManagerPending.map((state) => state.result), ...hodlCommittedResults]) try {
+      hodlWipeWalletKeys(result);
+    } catch {}
     hodlCommittedResults.clear();
     try { hodlJournalWipeMem(); } catch {}
     hodlKeys = hodlKeys.map((state) => {
