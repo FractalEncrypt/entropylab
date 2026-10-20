@@ -125,7 +125,10 @@ const saltFor = (passphrase) => {
     }
     return textEncoder.encode(nfkd("mnemonic" + text));
   }
-  if (typeof passphrase === "string" && !isWellFormed(passphrase)) throw new Error("Invalid passphrase");
+  // "mnemonic" + passphrase coerces anything else (a String object, say) to
+  // a string, so check the same string that gets hashed.
+  passphrase = String(passphrase);
+  if (!isWellFormed(passphrase)) throw new Error("Invalid passphrase");
   return textEncoder.encode(nfkd("mnemonic" + passphrase));
 };
 
@@ -138,12 +141,14 @@ const mnemonicToSeedSync = (mnemonic, passphrase = "") => {
   const text = nfkd(mnemonic);
   if (!isCanonicalPhrase(text)) throw new Error("Invalid mnemonic");
   const salt = saltFor(passphrase);
-  const phrase = textEncoder.encode(text);
+  let phrase = new Uint8Array(0);
   try {
+    phrase = textEncoder.encode(text);
     return pbkdf2Sha512(phrase, salt, 2048, 64);
   } finally {
     // The encoded phrase and the passphrase-bearing salt are secret; the
-    // 64-byte seed is the caller's to keep or wipe.
+    // 64-byte seed is the caller's to keep or wipe. The salt is wiped even if
+    // encoding the phrase throws.
     phrase.fill(0);
     salt.fill(0);
   }

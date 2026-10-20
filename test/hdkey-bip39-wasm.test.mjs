@@ -202,7 +202,7 @@ test("BIP39 seed matches the published vector (TREZOR passphrase)", () => {
 // refuse malformed UTF-8 instead of decoding it with replacement characters.
 test("BIP39 refuses a passphrase that is not well-formed Unicode or valid UTF-8", () => {
   const phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-  for (const passphrase of ["\uD800", "a\uDC00b", "\uD800\uD800"]) {
+  for (const passphrase of ["\uD800", "a\uDC00b", "\uD800\uD800", new String("\uD800")]) {
     assert.throws(() => mnemonicToSeedSync(phrase, passphrase), /Invalid passphrase/, JSON.stringify(passphrase));
   }
   // A well-formed surrogate pair is a valid passphrase and derives what
