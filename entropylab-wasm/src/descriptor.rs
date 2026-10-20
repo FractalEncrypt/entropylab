@@ -186,6 +186,8 @@ fn substitute_sorted_multi_a(body: &str, index: u32) -> Result<String, String> {
             }
             let close = close.ok_or_else(|| "unbalanced sortedmulti_a() expression".to_string())?;
             let replacement = rewrite_sorted_multi_a(&out[open + 1..close], index)?;
+            // The wiping allocator covers both reallocation and any private
+            // suffix left beyond the new length when this buffer is dropped.
             out.replace_range(start..=close, &replacement);
             cursor = start + replacement.len();
         }
@@ -206,9 +208,9 @@ struct Derived {
     keys: Vec<BtcPublicKey>,
 }
 
-/// Erases the xprv/WIF keys `parse_descriptor` collects. `KeyMap` has no
-/// `Drop` and its entries do not erase themselves, so dropping the map
-/// would leave private keys in linear memory.
+/// Erases the moved-out xprv/WIF keys. The wiping allocator also erases the
+/// original map nodes on deallocation; this consuming iterator alone cannot
+/// erase those allocations, nor a partial map dropped inside a failed parse.
 fn wipe_key_map(secrets: KeyMap) {
     for (_, mut secret) in secrets {
         match &mut secret {
