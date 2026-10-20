@@ -107,6 +107,9 @@ const validateMnemonic = (mnemonic, wordlist = bip39English) => {
 // once for its normalization.
 const MNEMONIC_SALT = textEncoder.encode("mnemonic");
 const saltFor = (passphrase) => {
+  // No passphrase is the empty one, whether the caller passes "", undefined
+  // or null; "mnemonic" + null would hash the four letters "null".
+  if (passphrase == null) passphrase = "";
   if (passphrase instanceof Uint8Array) {
     if (passphrase.every((byte) => byte < 0x80)) {
       const salt = new Uint8Array(MNEMONIC_SALT.length + passphrase.length);

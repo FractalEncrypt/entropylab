@@ -205,8 +205,11 @@ test("BIP39 refuses a passphrase that is not well-formed Unicode or valid UTF-8"
   for (const passphrase of ["\uD800", "a\uDC00b", "\uD800\uD800"]) {
     assert.throws(() => mnemonicToSeedSync(phrase, passphrase), /Invalid passphrase/, JSON.stringify(passphrase));
   }
-  // A well-formed surrogate pair is a valid passphrase and still derives.
-  assert.doesNotThrow(() => mnemonicToSeedSync(phrase, "🔑"));
+  // A well-formed surrogate pair is a valid passphrase and derives what
+  // @scure/bip39 derives for it.
+  assert.deepEqual(mnemonicToSeedSync(phrase, "🔑"), scureBip39.mnemonicToSeedSync(phrase, "🔑"));
+  // No passphrase is the empty one: null must not hash the text "null".
+  assert.deepEqual(mnemonicToSeedSync(phrase, null), scureBip39.mnemonicToSeedSync(phrase, ""));
   // Malformed UTF-8 bytes: an encoded surrogate, a truncated sequence, and a
   // stray continuation byte. The vault refuses these at intake; the direct
   // byte path must too.
