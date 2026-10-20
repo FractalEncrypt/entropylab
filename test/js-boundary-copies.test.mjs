@@ -2,8 +2,9 @@
 // secret behind after a WASM call. The facades already zero the buffers they
 // build for input; these tests retain the *output* temporaries — every array
 // Uint8Array.prototype.slice or Uint8Array.from produces during the call —
-// and require them all zero once the call returns, on success and on refusal,
-// while the caller-owned result is unchanged.
+// and require them all zero once the call returns, on success, on refusal and
+// on a failure thrown between the WASM call and the result, while the
+// caller-owned output is unchanged.
 // Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -50,6 +51,20 @@ const assertZeroed = (seen, label) => {
   assert.ok(seen.length > 0, `${label}: no temporary was retained, so the wipe is not exercised`);
   for (const [index, bytes] of seen.entries()) {
     assert.ok(bytes.every((byte) => byte === 0), `${label}: temporary ${index + 1} of ${seen.length} (${bytes.length} bytes) still holds the secret`);
+  }
+};
+
+// Runs `fn` with one global replaced by a thrower, so the cleanup path is
+// entered by a failure between the WASM call and the returned value.
+const failing = (target, name, message, fn) => {
+  const original = target[name];
+  target[name] = () => {
+    throw new Error(message);
+  };
+  try {
+    return fn();
+  } finally {
+    target[name] = original;
   }
 };
 
@@ -132,6 +147,25 @@ test("descriptor derivation zeroes the record bytes a private descriptor produce
   assert.match(value.address, /^bc1/);
   assert.equal(seen.length, 1, "the derived record arrives as one byte copy");
   assertZeroed(seen, "descriptor derive");
+});
+
+test("descriptor derivation zeroes the record when decoding throws", () => {
+  const xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+  const { error, seen } = failing(TextDecoder.prototype, "decode", "decoder blew up", () =>
+    retained(() => descriptorDerive(`wpkh(${xprv}/0/*)`, 0, "mainnet"))
+  );
+  assert.match(error.message, /decoder blew up/);
+  assertZeroed(seen, "descriptor derive, decoder failure");
+});
+
+test("PSBT inspection zeroes the JSON copy when parsing throws", () => {
+  const b64 = readFileSync(new URL("fixtures/psbt/p2wpkh-1in-2out.b64", import.meta.url), "utf8").trim();
+  const bytes = Uint8Array.from(atob(b64), (char) => char.charCodeAt(0));
+  const { error, seen } = failing(JSON, "parse", "parser blew up", () =>
+    retained(() => psbtInspectDoc(bytes))
+  );
+  assert.match(error.message, /parser blew up/);
+  assertZeroed(seen, "PSBT inspect, parse failure");
 });
 
 test("PSBT inspection zeroes the JSON byte copy that carried the document", () => {

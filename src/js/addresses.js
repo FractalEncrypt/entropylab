@@ -166,9 +166,10 @@ export const descriptorDerive = (descriptor, index, network) => {
       withOutput(DESCRIPTOR_CAP, (out) => wasm().el_desc_derive(p, bytes.length, index, net, out, DESCRIPTOR_CAP))
     );
     if (!record) throw new Error("Invalid output descriptor, or it cannot be derived at this index.");
-    // The record is the derived line for this index; a private descriptor's
-    // output carries its xprv or WIF, so the decoded string is the result and
-    // the bytes are erased (RT-JSBOUNDARY-1).
+    // The record is the derived line for this index — address, script and
+    // public keys, not the key material itself — so the decoded values are
+    // the result and the bytes are erased (RT-JSBOUNDARY-1). The input
+    // descriptor above is what can carry an xprv or WIF.
     try {
       const [address, scriptHex, keys] = textDecoder.decode(record).split("\n");
       return { address: address || null, scriptHex, pubkeys: keys ? keys.split(",") : [] };

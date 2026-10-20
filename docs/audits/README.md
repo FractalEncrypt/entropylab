@@ -62,7 +62,7 @@ validation-time `Array.from` copy removed for AR-07".
 |---|---|---|
 | RT-BUILD-1 Committed WASM predates the merged fixes | Incomplete — accepted | Publication job owns replacement; ruling on PR #1001 comment 6290296352. CI builds from source; no artifact is committed on the branch |
 | RT-CONCEAL-2 Three secret surfaces outside conceal | Fixed | `2fae67ee`, `app.js:18061-18081`, `expandable.js:103-119`, `psbt-editor.js:1354` |
-| RT-JSBOUNDARY-1 Abandoned JS copies of secrets | Fixed | `679eaa15`; six paths wiped in `finally`; `test/js-boundary-copies.test.mjs` retains the temporaries (red pre-fix: 52-byte WIF kept) |
+| RT-JSBOUNDARY-1 Abandoned JS copies of secrets | Fixed | `679eaa15`; six paths wiped in `finally`; `test/js-boundary-copies.test.mjs` retains the temporaries, including the two exception paths the reviewer probed (red pre-fix: 52-byte WIF kept) |
 | RT-WASMRESIDUE-1 Only one crate wipes its heap | Fixed | `2fae67ee`; `psbt-wasm/src/lib.rs:71-77,127-155`, `vanity-wasm/src/lib.rs:172-199` |
 | RT-VANITYPASS-1 Dead `#vanity-pass` feature and a test that fabricated it | Fixed | `2fae67ee`, `app.js:16966-16995` |
 | Speculative: `clearSecretFields` not exception-isolated | Incomplete — accepted Info | Named wipes are guarded (`app.js:18088-18098`); the wallet-result loop at `18096` is not. No product trigger established |
