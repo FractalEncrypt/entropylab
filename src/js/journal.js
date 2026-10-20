@@ -509,7 +509,7 @@ export function normalizeEntry(entry, now = new Date()) {
   const walletId = entry?.walletId == null || entry.walletId === "" ? null : Number(entry.walletId);
   if (walletId != null && (!Number.isInteger(walletId) || walletId < 0)) throw new Error("Session wallet id must be a whole number.");
   const normalized = {
-    id: Number.isInteger(entry?.id) && entry.id > 0 ? entry.id : 0,
+    id: Number.isSafeInteger(entry?.id) && entry.id > 0 ? entry.id : 0,
     method,
     input: bounded(entry?.input, "input"),
     phrase: bounded(entry?.phrase, "phrase"),
@@ -534,7 +534,11 @@ export function addEntry(doc, fields, now = new Date()) {
   // The counter is repaired on open, but a document built elsewhere could
   // still carry one below an existing id.
   const highest = doc.entries.reduce((max, entry) => Math.max(max, Number(entry?.id) || 0), 0);
-  const entry = normalizeEntry({ ...fields, id: Math.max(Number(doc.nextId) || 1, highest + 1) }, now);
+  // Above 2**53 a counter stops advancing; refuse before the document changes
+  // so a failed add leaves a saveable state behind.
+  const id = Math.max(Number.isSafeInteger(doc.nextId) && doc.nextId > 0 ? doc.nextId : 1, highest + 1);
+  if (!Number.isSafeInteger(id)) throw new Error("Journal entry ids are past the safe integer range.");
+  const entry = normalizeEntry({ ...fields, id }, now);
   doc.entries = [...doc.entries, entry];
   doc.nextId = entry.id + 1;
   return entry;
@@ -739,7 +743,7 @@ export function parseDocument(plain) {
   if (parsed.entries.length > JOURNAL_MAX_ENTRIES) {
     throw new Error(`A journal holds at most ${JOURNAL_MAX_ENTRIES} entries.`);
   }
-  const nextId = Number.isInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
+  const nextId = Number.isSafeInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
   const entries = parsed.entries.map((entry) => normalizeEntry(entry));
   // The id keys the list: the view and delete paths take the first match, so
   // a repeat would make one entry unreachable. `nextId` is only a counter, so
