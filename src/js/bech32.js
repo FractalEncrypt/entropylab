@@ -51,8 +51,11 @@ export const fromWords = (words) => {
 
 export const bech32mEncode = (hrp, words) => {
   if (typeof hrp !== "string" || !hrp) throw new Error("bech32m hrp must be a non-empty string.");
+  if (!Array.isArray(words) && !ArrayBuffer.isView(words)) throw new Error("bech32m words must be an array of integers 0..31.");
+  const list = Array.from(words);
+  if (!list.every((word) => Number.isInteger(word) && word >= 0 && word <= 31)) throw new Error("bech32m word values must be integers 0..31.");
   const hrpBytes = textEncoder.encode(hrp);
-  const wordBytes = Uint8Array.from(words);
+  const wordBytes = Uint8Array.from(list);
   // Word arrays for spscan/spspend carry private-key bits; the 5-bit copy
   // handed to WASM is zeroed once the call returns (audit follow-up).
   try {
@@ -91,7 +94,7 @@ export const bech32mDecode = (text) => {
         const hrpLen = packed & 0xfff;
         const wordCount = packed >> 12;
         return {
-          prefix: textDecoder.decode(heap().slice(hrpPtr, hrpPtr + hrpLen)),
+          prefix: textDecoder.decode(heap().slice(hrpPtr, hrpPtr + hrpLen)).toLowerCase(),
           words: Array.from(heap().slice(wordsPtr, wordsPtr + wordCount)),
         };
       } finally {

@@ -106,7 +106,13 @@ const saltFor = (passphrase) => {
 
 // PBKDF2-HMAC-SHA512(NFKD(mnemonic), NFKD("mnemonic" + passphrase), 2048, 64).
 const mnemonicToSeedSync = (mnemonic, passphrase = "") => {
-  const phrase = textEncoder.encode(nfkd(mnemonic));
+  // The reference refuses a phrase that is not 12/15/18/21/24 words or not
+  // well-formed Unicode; hashing whatever string arrives would turn a typo
+  // into a valid-looking wallet.
+  if (typeof mnemonic !== "string" || (typeof mnemonic.isWellFormed === "function" && !mnemonic.isWellFormed())) throw new Error("Invalid mnemonic");
+  const text = nfkd(mnemonic);
+  if (!isCanonicalPhrase(text)) throw new Error("Invalid mnemonic");
+  const phrase = textEncoder.encode(text);
   const salt = saltFor(passphrase);
   try {
     return pbkdf2Sha512(phrase, salt, 2048, 64);

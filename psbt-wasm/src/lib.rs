@@ -400,6 +400,21 @@ fn reject_bip370_singleton_keydata(
     Ok(())
 }
 
+/// Refuses every keyless typed field that carries key data, not just BIP-370's.
+/// `is_singleton` names the fields whose key is the type byte alone; a longer
+/// key is a lookalike (`decode_pair` reports it as "this field must not carry
+/// key data"). The v2 builder passes unknown pairs through verbatim, so
+/// without this check a hand-edited document could emit a file whose typed
+/// fields mean one thing here and another to a reader that ignores keydata.
+fn reject_lookalike_keydata(kind: &str, pairs: &[RawPair]) -> Result<(), String> {
+    for pair in pairs {
+        if pair.key.len() > 1 && is_singleton(kind, pair.key[0]) {
+            return Err(format!("{} must not carry key data", pair_type_name(kind, pair.key[0])));
+        }
+    }
+    Ok(())
+}
+
 /// The one occurrence of a keyless-data typed field in a v2 map; duplicates
 /// of a typed field are a format error, not an ambiguity to resolve.
 fn v2_field<'a>(pairs: &'a [RawPair], type_byte: u8, what: &str) -> Result<Option<&'a [u8]>, String> {
@@ -1680,9 +1695,16 @@ fn build_v2(doc: &Value, tx: &Transaction, global_pairs: Vec<RawPair>, insane: b
         ));
     }
     // A non-exact singleton key is passed through below (only the one-byte
-    // key is regenerated). Refuse it here so the editor cannot emit a file
-    // whose reader would have to ignore that key.
-    reject_bip370_singleton_keydata(&global_pairs, &inputs, &outputs)?;
+    // key is regenerated). Refuse every lookalike here — BIP-370's fields and
+    // the rest — so the editor cannot emit a file whose reader would have to
+    // ignore that key. (v0 gets the same rule from rust-bitcoin's parser.)
+    reject_lookalike_keydata("global", &global_pairs)?;
+    for map in &inputs {
+        reject_lookalike_keydata("input", map)?;
+    }
+    for map in &outputs {
+        reject_lookalike_keydata("output", map)?;
+    }
 
     // Same export gate as the v0 path: BIP-370 changes the container, not
     // the consensus rules the transaction and its signing claims are held to.
@@ -2016,6 +2038,21 @@ mod tests {
         );
         assert_eq!(pair_type_name("output", 0x1a), "PSBT_OUT_UNKNOWN");
         assert_eq!(pair_type_name("global", 0x1a), "PSBT_GLOBAL_UNKNOWN");
+    }
+
+    /// The v2 builder passes unknown pairs through verbatim. A keyless field
+    /// with key data is a lookalike: `decode_pair` rejects it, and the build
+    /// must too, not emit a file another reader could interpret differently.
+    #[test]
+    fn the_v2_builder_refuses_every_singleton_lookalike() {
+        for (kind, type_byte) in [("global", 0x02), ("input", 0x00), ("output", 0x06)] {
+            let pair = RawPair { key: vec![type_byte, 0xaa], value: vec![0x01] };
+            let err = reject_lookalike_keydata(kind, &[pair]).expect_err(kind);
+            assert!(err.contains("must not carry key data"), "{kind}: {err}");
+        }
+        // Keyed fields that legitimately carry key data are not singleton.
+        let pair = RawPair { key: vec![0x02, 0x02], value: vec![0x01] };
+        assert!(reject_lookalike_keydata("input", &[pair]).is_ok());
     }
 
 }

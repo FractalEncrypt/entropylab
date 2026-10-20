@@ -98,10 +98,21 @@ fn tapscript_leaves(map: &[RawPair]) -> BTreeMap<TapLeafHash, &[u8]> {
 
 impl Budget {
     fn take(&mut self, problems: &mut Vec<Problem>) -> bool {
-        if self.left > 0 {
-            self.left -= 1;
+        self.take_units(1, problems)
+    }
+
+    /// Takes `units` at once: a legacy signature hash re-serializes the whole
+    /// transaction, so its cost is charged by size rather than counted as one
+    /// signature. Takes nothing and fails when fewer units remain.
+    fn take_units(&mut self, units: usize, problems: &mut Vec<Problem>) -> bool {
+        if units == 0 {
             return true;
         }
+        if self.left >= units {
+            self.left -= units;
+            return true;
+        }
+        self.left = 0;
         if !self.noted {
             self.noted = true;
             // Error severity: past the budget the document is not fully
@@ -110,7 +121,7 @@ impl Budget {
             problems.push(Problem::error(
                 "transaction".into(),
                 "verification_budget",
-                format!("verification budget exhausted after {MAX_SIGNATURE_CHECKS} signatures — later signatures are unchecked"),
+                format!("verification budget exhausted after {MAX_SIGNATURE_CHECKS} signature checks — later signatures are unchecked"),
             ));
         }
         false
@@ -364,6 +375,16 @@ fn check_ecdsa(
         // or a future witness version: nothing to hash.
         Spend::P2wsh(None) | Spend::WrappedP2wsh(_, None) | Spend::P2tr(_) | Spend::Unknown | Spend::UnknownWitness => return None,
     };
+    // A legacy sign on every input re-serializes the whole transaction for each
+    // candidate scriptCode: charge it by size so the signature budget cannot
+    // become 256 full-transaction hashes on a hostile document. Witness v0
+    // digests reuse SighashCache's amortized midstate, so they stay per-signature.
+    if matches!(version, SigVersion::Legacy) {
+        let kib = cache.transaction().total_size() / 1024;
+        if kib > 0 && !budget.take_units(kib, problems) {
+            return None;
+        }
+    }
     let shape = starts_memo.get(script, scriptcode::code_starts);
     let starts = match &*shape {
         scriptcode::Shape::Starts(starts) if starts.is_empty() => {
@@ -599,7 +620,14 @@ fn check_partial_sigs(
                 "partial_sig_invalid",
                 format!("partial signature (pubkey {short}…) {why}"),
             )),
-            None => {} // no sighash without a witness script; nothing to claim
+            // No sighash: the spend type cannot be hashed without a witness
+            // script, or the legacy-digest charge exhausted the budget. Either
+            // way the signature is not checked — say so rather than stay silent.
+            None => problems.push(Problem::warning(
+                scope.clone(),
+                "partial_sig_unchecked",
+                format!("partial signature (pubkey {short}…) is unchecked: no signature hash is computable for this input"),
+            )),
         }
     }
 }
@@ -766,9 +794,19 @@ fn check_final_scriptsig(
     if claim_script.is_witness_program() {
         if !value.is_empty() {
             problems.push(Problem::error(
-                scope,
+                scope.clone(),
                 "final_scriptsig_bad",
                 "final scriptSig of a native SegWit input must be empty",
+            ));
+        }
+        // A final scriptSig makes the input final, and every native witness
+        // program — taproot included — is then spent by its witness alone.
+        // Without one the input carries no spend at all.
+        if !has_final_witness {
+            problems.push(Problem::error(
+                scope,
+                "final_witness_bad",
+                "native SegWit input has a final scriptSig but no decodable final witness",
             ));
         }
         return;
@@ -999,6 +1037,17 @@ fn check_final_witness(
                     return;
                 }
             };
+            // This crate understands 0xc0 tapscript only: a future leaf version
+            // executes under rules it cannot check, so its script-path signature
+            // would pass unvetted. Refuse rather than vouch for it.
+            if control.leaf_version != LeafVersion::TapScript {
+                problems.push(Problem::error(
+                    scope,
+                    "final_witness_bad",
+                    "taproot control block commits to a leaf version whose script this tool cannot check",
+                ));
+                return;
+            }
             if !control.verify_taproot_commitment(&Secp256k1::verification_only(), *output_key, script) {
                 problems.push(Problem::error(
                     scope,
@@ -1607,6 +1656,67 @@ mod tests {
         let problems = analyze(&tx, &[badmap()]);
         assert!(problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR));
         assert!(gate_error(&tx, &[badmap()]).is_some());
+    }
+
+    /// A final scriptSig alone is not a spend: a native witness program is
+    /// spent by its witness, and without one the input has no spend at all.
+    #[test]
+    fn a_native_witness_final_scriptsig_without_a_witness_is_an_error() {
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey = bitcoin::PublicKey::new(key.public_key(&secp));
+        let (tx, _) = fixture();
+        let claim = TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap()),
+        };
+        let map = || vec![pair("01", &witness_utxo_value(&claim)), pair("07", "")];
+        let problems = analyze(&tx, &[map()]);
+        assert!(
+            problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR),
+            "{problems:?}"
+        );
+        assert!(gate_error(&tx, &[map()]).is_some());
+    }
+
+    /// A partial signature on a P2WSH input without PSBT_IN_WITNESS_SCRIPT has
+    /// no scriptCode to hash; it must be named unchecked, not pass silently.
+    #[test]
+    fn a_partial_sig_without_a_witness_script_is_reported_unchecked() {
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey = bitcoin::PublicKey::new(key.public_key(&secp));
+        let script = ScriptBuf::from_bytes(vec![0x51]);
+        let claim = TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2wsh(&script.wscript_hash()),
+        };
+        let (tx, _) = fixture();
+        let map = vec![
+            pair("01", &witness_utxo_value(&claim)),
+            pair(&format!("02{}", hex_encode(&pubkey.to_bytes())), &hex_encode(&[0u8; 71])),
+        ];
+        let problems = analyze(&tx, &[map]);
+        assert!(
+            problems.iter().any(|p| p.code == "partial_sig_unchecked" && p.severity == WARNING),
+            "{problems:?}"
+        );
+    }
+
+    /// A legacy signature is charged by transaction size, so the budget can be
+    /// spent in one digest; it must clamp at zero and note exhaustion once.
+    #[test]
+    fn the_budget_charges_units_without_underflowing() {
+        let mut problems = Vec::new();
+        let mut budget = Budget { left: 3, noted: false };
+        assert!(budget.take_units(2, &mut problems));
+        assert_eq!(budget.left, 1);
+        assert!(!budget.take_units(2, &mut problems));
+        assert_eq!(budget.left, 0);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].code, "verification_budget");
+        assert!(!budget.take_units(1, &mut problems));
+        assert_eq!(problems.len(), 1, "exhaustion is noted once");
     }
 
     /// A P2SH-P2WPKH input: the claim is the P2SH wrapper, so the witness

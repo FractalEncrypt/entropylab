@@ -203,6 +203,9 @@ self.onmessage = function (event) {
     try {
       grind(msg);
     } catch (error) {
+      // A trap in the first synchronous chunk must wipe the same buffers the
+      // deferred chunk does, not rely on the parent's terminate.
+      wipeSecrets();
       postMessage({ type: "error", message: (error && error.message) || String(error) });
     }
   } else if (msg.type === "stop") {

@@ -148,6 +148,15 @@ export function serializeNotebook(journal) {
       content: journalNotebookRuns(page.notesText),
     })),
   };
+  for (const page of document.pages) {
+    // parseNotebook refuses a page over the read cap; a save that produced
+    // one would hand back a file the app cannot open.
+    try {
+      journalTextFromRuns(page.content);
+    } catch {
+      throw new Error("A notebook page is too large to save.");
+    }
+  }
   return JSON.stringify(document, null, 2) + "\n";
 }
 
@@ -755,11 +764,15 @@ async function sealPlainText(plainText, keys) {
 }
 
 export async function sealDocument(doc, keys) {
-  return sealPlainText(JSON.stringify({
+  const plain = JSON.stringify({
     version: JOURNAL_VERSION,
     nextId: doc.nextId,
     entries: doc.entries,
-  }), keys);
+  });
+  // parseDocument refuses a plaintext over the read cap, so a save must not
+  // create a file that the app then reports as too large to open.
+  if (plain.length > JOURNAL_MAX_TEXT_LENGTH) throw new Error("The journal is too large to save as one file.");
+  return sealPlainText(plain, keys);
 }
 
 export async function sealExport(kind, content, keys) {

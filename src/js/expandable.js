@@ -51,11 +51,11 @@ export const expandSizeLabel = (text) => {
 export const expandableHtml = (text, { label = "Full value", editAttrs = "" } = {}) => {
   const value = String(text ?? "");
   const { truncated, preview } = truncateText(value);
-  if (!truncated) return `<span data-private-value data-i18n-skip>${escapeHtml(value)}</span>`;
+  if (!truncated) return `<span data-private-value data-i18n-skip translate="no">${escapeHtml(value)}</span>`;
   const edit = editAttrs ? ` data-exp-edit="" ${editAttrs}` : "";
   return `<button type="button" class="exp-cell" data-exp="${escapeHtml(value)}" data-exp-label="${escapeHtml(label)}"${edit} ` +
     `aria-label="${escapeHtml(label)}: truncated; activate to open the full ${value.length}-character value in an editor window">` +
-    `<span data-private-value data-i18n-skip>${escapeHtml(preview)}</span> <span class="exp-len">${escapeHtml(expandSizeLabel(value))}</span></button>`;
+    `<span data-private-value data-i18n-skip translate="no">${escapeHtml(preview)}</span> <span class="exp-len">${escapeHtml(expandSizeLabel(value))}</span></button>`;
 };
 
 export const initExpandable = ({ copy: copyIcon = () => "", copied: copiedIcon = () => "" } = {}) => {
@@ -115,6 +115,7 @@ export const initExpandable = ({ copy: copyIcon = () => "", copied: copiedIcon =
   // dialog unless it is torn down first.
   addEventListener("blur", teardown);
   addEventListener("beforeprint", teardown);
+  document.addEventListener("hodl:conceal", teardown);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") teardown();
   });
