@@ -217,7 +217,19 @@ test("a P2SH-P2WPKH input whose redeem script does not hash to its prevout is re
   // Likewise a redeem script the prevout does not commit to, and a push
   // that is not the single 22-byte redeem push.
   assert.throws(() => extractInputPubKey({ ...base, scriptSig: "160014" + "00".repeat(20) }), /redeem script its prevout commits to/);
-  assert.throws(() => extractInputPubKey({ ...base, scriptSig: "4c" + base.scriptSig.slice(2) }), /redeem script its prevout commits to/);
+  // A non-minimal OP_PUSHDATA1 push of the right redeem script.
+  assert.throws(() => extractInputPubKey({ ...base, scriptSig: "4c16" + base.scriptSig.slice(2) }), /redeem script its prevout commits to/);
+  // The witness key must hash to the redeem script's key hash: another
+  // input's key (here the generator point) or a missing witness is refused.
+  const otherKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+  assert.throws(() => extractInputPubKey({ ...base, txinwitness: "02" + "47" + "00".repeat(71) + "21" + otherKey }), /witness key does not hash/);
+  assert.throws(() => extractInputPubKey({ ...base, txinwitness: "" }), /witness key does not hash/);
+  // Native P2WPKH under the same key hash: the matching key counts, and a
+  // mismatched or missing witness key is refused the same way.
+  const native = { ...base, scriptSig: "", prevout: "001479091972186c449eb1ded22b78e40d009bdf0089" };
+  assert.equal(bytesToHex(extractInputPubKey(native).point.toBytes(true)), pub);
+  assert.throws(() => extractInputPubKey({ ...native, txinwitness: "02" + "47" + "00".repeat(71) + "21" + otherKey }), /witness key does not hash/);
+  assert.throws(() => extractInputPubKey({ ...native, txinwitness: "" }), /witness key does not hash/);
   // The redeem script pasted as the scriptSig (missing its push byte) and an
   // empty scriptSig are refused too, not dropped from the key sum.
   assert.throws(() => extractInputPubKey({ ...base, scriptSig: base.scriptSig.slice(2) }), /redeem script its prevout commits to/);

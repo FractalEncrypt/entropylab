@@ -191,6 +191,19 @@ const compressedPointOrNull = (bytes) => {
   }
 };
 
+// The key a P2WPKH spend (native or P2SH-wrapped) reveals: the last witness
+// item, which consensus requires to hash to the 20-byte key hash. Pasted data
+// that breaks that is refused rather than skipped, since the send flow would
+// drop a skipped input from its key sum while the chain counts it. A
+// consistent uncompressed key is ineligible under BIP-352 (null), as before.
+const p2wpkhWitnessKey = (keyhash, witness) => {
+  const key = witness[witness.length - 1];
+  if (!witness.length || !(key instanceof Uint8Array) || !equalBytes(hash160(key), keyhash)) {
+    throw new Error("A P2WPKH input's witness key does not hash to the key hash it spends. Check the pasted witness.");
+  }
+  return compressedPointOrNull(key);
+};
+
 export function extractInputPubKey(vin) {
   const prevout = vinPrevoutScript(vin);
   const scriptSig = vin.scriptSig instanceof Uint8Array ? vin.scriptSig : hexToBytes(vin.scriptSig || "");
@@ -213,16 +226,17 @@ export function extractInputPubKey(vin) {
     // a P2SH-P2WPKH input, so the output would be one the recipient never
     // finds. A consistent non-P2WPKH redeem (P2SH-P2WSH) is ineligible and
     // skipped as before.
-    if (witness.length && (scriptSig.length < 2 || scriptSig[0] > 0x4b || scriptSig[0] !== redeem.length || !equalBytes(hash160(redeem), prevout.slice(2, 22)))) {
+    const pushesCommitted = scriptSig.length >= 2 && scriptSig[0] <= 0x4b && scriptSig[0] === redeem.length && equalBytes(hash160(redeem), prevout.slice(2, 22));
+    if (witness.length && !pushesCommitted) {
       throw new Error("A P2SH input's scriptSig does not push the redeem script its prevout commits to. Check the pasted prevout and scriptSig.");
     }
-    if (isP2wpkh(redeem) && witness.length) {
-      const point = compressedPointOrNull(witness[witness.length - 1]);
-      if (point) return { point, isTaproot: false };
+    if (pushesCommitted && isP2wpkh(redeem)) {
+      const point = p2wpkhWitnessKey(redeem.slice(2, 22), witness);
+      return point ? { point, isTaproot: false } : null;
     }
   }
-  if (isP2wpkh(prevout) && witness.length) {
-    const point = compressedPointOrNull(witness[witness.length - 1]);
+  if (isP2wpkh(prevout)) {
+    const point = p2wpkhWitnessKey(prevout.slice(2, 22), witness);
     if (point) return { point, isTaproot: false };
   }
   if (isP2tr(prevout) && witness.length) {
