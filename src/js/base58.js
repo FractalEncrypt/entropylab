@@ -24,7 +24,11 @@ export const base58checkEncode = (payload) => {
 export const base58checkDecode = (text) => {
   if (typeof text !== "string") throw new Error("Base58Check input must be a string.");
   const bytes = textEncoder.encode(text);
-  const out = withInput(bytes, (p) => withOutput(DECODE_CAP, (o) => wasm().el_b58check_decode(p, bytes.length, o, DECODE_CAP)));
-  if (!out) throw new Error("Invalid Base58Check string.");
-  return out;
+  try {
+    const out = withInput(bytes, (p) => withOutput(DECODE_CAP, (o) => wasm().el_b58check_decode(p, bytes.length, o, DECODE_CAP)));
+    if (!out) throw new Error("Invalid Base58Check string.");
+    return out;
+  } finally {
+    bytes.fill(0);
+  }
 };

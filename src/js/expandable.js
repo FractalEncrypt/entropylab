@@ -109,6 +109,15 @@ export const initExpandable = ({ copy: copyIcon = () => "", copied: copiedIcon =
   addEventListener("pageshow", (event) => {
     if (event.persisted) teardown();
   });
+  // Conceal-on-leave reaches this overlay too: it is a body-level sibling of
+  // every wiped view, so the page's own sweep cannot. A pair value can carry
+  // an xprv from a proprietary field, and the print preview renders the live
+  // dialog unless it is torn down first.
+  addEventListener("blur", teardown);
+  addEventListener("beforeprint", teardown);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") teardown();
+  });
   const open = (target) => {
     cell = target;
     const value = target.dataset.exp ?? "";

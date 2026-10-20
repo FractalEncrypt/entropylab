@@ -378,6 +378,23 @@ test("descriptor ranges cover displayed addresses plus a recovery gap", () => {
   assert.deepEqual(readRange(descriptorValues[1]), { nextIndex: 7001, rangeStart: 7000, rangeEnd: 8000 });
 });
 
+test("a branch window starting above 0 exports every derived branch as external", () => {
+  // The picker can derive branches {1, 2}; the old [0, 1] loop exported only
+  // branch 1 and filed it as change, so Core watched no receive chain.
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  wallet.accounts[0].branchStart = 1;
+  wallet.accounts[0].addressBranches = [
+    { branch: 1, publicDescriptor: REF_PUBLIC_DESCRIPTORS[0], rows: [{ index: 0 }] },
+    { branch: 2, publicDescriptor: REF_PUBLIC_DESCRIPTORS[1], rows: [{ index: 0 }] },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units.length, 2, "both derived branches must be exported");
+  assert.deepEqual(units.map((unit) => unit.descriptor), REF_PUBLIC_DESCRIPTORS.slice(0, 2));
+  assert.deepEqual(units.map((unit) => unit.internal), [false, false], "branches 1 and 2 are not Core's change chain");
+});
+
 test("button gating: HD wallets with descriptors, and msig watch-only", () => {
   const { hasDescriptors } = loadModule();
   assert.equal(hasDescriptors(null), false);

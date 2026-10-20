@@ -227,7 +227,7 @@ fn classify(index: usize, map: &[RawPair], claim: &TxOut, problems: &mut Vec<Pro
                 // push encoding (minimal pushes are policy for a legacy
                 // spend; check_final_scriptsig still holds a wrapped-segwit
                 // scriptSig to the exact single push).
-                match script_pushes_any_encoding(Script::from_bytes(script_sig)).and_then(|mut pushes| pushes.pop()) {
+                match script_pushes(Script::from_bytes(script_sig)).and_then(|mut pushes| pushes.pop()) {
                     Some(last) => (last, true),
                     // Not push-only, unparseable, or empty: BIP-16 rejects
                     // the spend, so fail closed rather than skip the input.
@@ -483,6 +483,15 @@ fn taproot_sighash_script_spend(
     Some(TapSighash::from_engine(engine).to_byte_array())
 }
 
+/// BIP-341 has no SIGHASH_SINGLE fallback: when the input has no output at
+/// the same index, validation fails outright (unlike legacy and segwit v0,
+/// which hash a constant). Both sighash encoders above report that as an
+/// error, indistinguishable from a missing prevout set, so callers ask this
+/// first to tell "cannot compute" from "can never verify".
+fn taproot_single_without_output(cache: &SighashCache<&Transaction>, index: usize, ty: TapSighashType) -> bool {
+    matches!(ty, TapSighashType::Single | TapSighashType::SinglePlusAnyoneCanPay) && index >= cache.transaction().output.len()
+}
+
 /// The codesep_pos values a script-path signature under `leaf_hash` can have
 /// committed to: from the leaf's script when the input declares it (its
 /// entry in `tapscript_leaves`), the positions of the separators an
@@ -616,6 +625,13 @@ fn check_tap_sigs(
             Ok((sig, ty)) if !budget.take(problems) => {
                 let _ = (sig, ty);
             }
+            Ok((_sig, ty)) if taproot_single_without_output(cache, index, ty) => {
+                problems.push(Problem::warning(
+                    scope.clone(),
+                    "tap_sig_invalid",
+                    "key-path signature uses SIGHASH_SINGLE with no corresponding output, which BIP-341 rejects",
+                ));
+            }
             Ok((sig, ty)) => match taproot_sighash_key_spend(cache, index, prevouts, None, ty) {
                 None => {} // prevout set incomplete: cannot compute, cannot accuse
                 Some(digest) => {
@@ -651,6 +667,14 @@ fn check_tap_sigs(
             }
             Ok(parsed) => parsed,
         };
+        if taproot_single_without_output(cache, index, ty) {
+            problems.push(Problem::warning(
+                scope.clone(),
+                "tap_sig_invalid",
+                format!("script-path signature (xonly {short}…) uses SIGHASH_SINGLE with no corresponding output, which BIP-341 rejects"),
+            ));
+            continue;
+        }
         let leaf_hash = TapLeafHash::from_slice(leaf_hash).expect("32 bytes");
         // Valid when it verifies at some position; each position past the
         // first is another digest and takes its own budget.
@@ -694,30 +718,11 @@ fn check_tap_sigs(
 
 /// The pushes of a final scriptSig; None when the script is not push-only or
 /// does not parse. The small-number opcodes are pushes (of the empty vector
-/// for OP_0, of the number for OP_1..OP_16) — a P2SH multisig scriptSig
-/// starts with OP_0, as CHECKMULTISIG's stack dummy.
+/// for OP_0, of the number for OP_1..OP_16, of 0x81 for OP_1NEGATE) — a P2SH
+/// multisig scriptSig starts with OP_0, as CHECKMULTISIG's stack dummy.
+/// Non-minimal push encodings are accepted: minimal pushes are policy
+/// (SCRIPT_VERIFY_MINIMALDATA), and consensus reads any push form.
 fn script_pushes(script: &Script) -> Option<Vec<Vec<u8>>> {
-    use bitcoin::opcodes::all::{OP_PUSHNUM_1, OP_PUSHNUM_16};
-    use bitcoin::opcodes::OP_0;
-    let mut pushes = Vec::new();
-    for instruction in script.instructions_minimal() {
-        match instruction {
-            Ok(Instruction::PushBytes(bytes)) => pushes.push(bytes.as_bytes().to_vec()),
-            Ok(Instruction::Op(op)) if op == OP_0 => pushes.push(Vec::new()),
-            Ok(Instruction::Op(op)) if op.to_u8() >= OP_PUSHNUM_1.to_u8() && op.to_u8() <= OP_PUSHNUM_16.to_u8() => {
-                pushes.push(vec![op.to_u8() - OP_PUSHNUM_1.to_u8() + 1]);
-            }
-            _ => return None,
-        }
-    }
-    Some(pushes)
-}
-
-/// The pushes of a P2SH final scriptSig in any push encoding, as BIP-16's
-/// push-only rule accepts them (OP_1NEGATE included). None when the script
-/// holds a non-push opcode or does not parse. Only classify's 0x04-less
-/// fallback uses it; every structural check keeps script_pushes.
-fn script_pushes_any_encoding(script: &Script) -> Option<Vec<Vec<u8>>> {
     use bitcoin::opcodes::all::{OP_PUSHNUM_1, OP_PUSHNUM_16, OP_PUSHNUM_NEG1};
     use bitcoin::opcodes::OP_0;
     let mut pushes = Vec::new();
@@ -890,7 +895,15 @@ fn check_final_witness(
                 ));
                 return;
             }
-            if items[1].len() != 33 || hash160::Hash::hash(items[1]).to_byte_array()[..] != program[..] {
+            if items[1].len() != 33 {
+                problems.push(Problem::error(
+                    scope.clone(),
+                    "final_witness_bad",
+                    "P2WPKH final witness public key must be 33 bytes (compressed)",
+                ));
+                return;
+            }
+            if hash160::Hash::hash(items[1]).to_byte_array()[..] != program[..] {
                 problems.push(Problem::error(
                     scope,
                     "final_witness_bad",
@@ -950,6 +963,13 @@ fn check_final_witness(
                     Err(why) => problems.push(Problem::error(scope, "final_witness_bad", why)),
                     Ok((sig, ty)) if !budget.take(problems) => {
                         let _ = (sig, ty);
+                    }
+                    Ok((_sig, ty)) if taproot_single_without_output(cache, index, ty) => {
+                        problems.push(Problem::error(
+                            scope,
+                            "final_witness_bad",
+                            "final key-path signature uses SIGHASH_SINGLE with no corresponding output, which BIP-341 rejects",
+                        ));
                     }
                     Ok((sig, ty)) => match taproot_sighash_key_spend(cache, index, prevouts, annex, ty) {
                         Some(digest) => {

@@ -186,6 +186,11 @@ function hodlNormalizeMnemonicText(e) {
   return e.trim().toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean).join(" ");
 }
 function hodlValidateMnemonic(e) {
+  // The normalizer turns every non-letter into a separator, so a digit or a
+  // non-ASCII letter glued to a word silently rewrites the phrase (and can
+  // still validate). Refuse it here too, where the PSBT, Silent Payments and
+  // Lightning stations read a pasted seed (audit follow-up).
+  if (/[0-9]|[^\x00-\x7F]/.test(String(e ?? ""))) return { ok: false, words: [], unknown: [], error: hodlNote("Seed words are the BIP39 English list: remove digits and non-ASCII characters.") };
   let t = hodlNormalizeMnemonicText(e).split(" ").filter(Boolean), r = t.map((o, i) => ({ index: i, word: o })).filter(({ word: o }) => !hodlBip39Wordlist.includes(o));
   if (t.length === 0) return { ok: false, words: t, error: hodlNote("Type or paste your seed phrase."), unknown: r };
   if (![12, 15, 18, 21, 24].includes(t.length)) return { ok: false, words: t, unknown: r, error: hodlNote("A seed phrase is 12, 15, 18, 21, or 24 words. You entered {n}.", { n: t.length }) };
@@ -215,6 +220,12 @@ function hodlWifVersionByte(e) {
 // of the family: the address layer takes the chain itself.)
 function hodlNetworkFamily(network) {
   return network === "mainnet" ? "mainnet" : "testnet";
+}
+// Inspectors render addresses for the chain the picker names: signet shares
+// testnet's tb1 prefix, regtest needs bcrt1. Everything else (key versions,
+// coin type) still normalizes through hodlNetworkFamily.
+function hodlInspectorNetwork() {
+  return hodlNetworkChoice === "regtest" ? "regtest" : hodlNetworkDefault;
 }
 function hodlCoinTypeFromNetwork(e) {
   let index = Number(e);
@@ -4350,6 +4361,13 @@ function hodlSeedCountStatus(count, targetWords = hodlTargetWordCount) {
   return entered <= config.words ? hodlT("{entered} of {words} BIP39 words entered", { entered, words: config.words }) : hodlT("{entered} entered · {words} required BIP39 words", { entered, words: config.words });
 }
 function hodlValidateTargetMnemonic(value, targetWords = hodlTargetWordCount) {
+  // Digits and non-ASCII letters are separators to the normalizer but word
+  // characters to the analyzer: "abandon1abandon" shows red and would still
+  // derive the clean phrase's wallet. Refuse them instead of silently
+  // changing the phrase (audit follow-up).
+  if (/[0-9]|[^\x00-\x7F]/.test(String(value ?? ""))) {
+    return { ok: false, words: [], error: hodlNote("Seed words are the BIP39 English list: remove digits and non-ASCII characters."), unknown: [] };
+  }
   let words = hodlNormalizeMnemonicText(value).split(" ").filter(Boolean), config = hodlSeedConfig(targetWords);
   if (!words.length) return { ok: false, words, error: hodlNote("{entered} of {words} BIP39 words entered · {n} remaining", { entered: 0, words: config.words, n: config.words }), unknown: [] };
   if (words.length !== config.words) {
@@ -4701,7 +4719,7 @@ function hodlPassphraseBip39ToggleMarkup(checked = hodlPassphraseBip39Enabled())
   let autocomplete = hodlPassphraseAutocompleteEnabled();
   // Showing the passphrase is its own choice; in word mode the field shows
   // its text anyway, so the switch steps aside.
-  let reveal = hodlSwitchRowMarkup("passphrase-reveal", hodlT("Show passphrase"), { note: hodlT("Hidden by default: a passphrase on screen can be captured or seen"), checked: hodlPassphraseShown, hidden: checked });
+  let reveal = hodlSwitchRowMarkup("passphrase-reveal", hodlT("Show passphrase"), { note: hodlT("Hidden by default: a passphrase on screen can be captured or seen"), checked: hodlPassphraseShown, hidden: checked, privateReveal: true });
   return `<div class="passphrase-bip39-options"><div class="switch-row"><label class="switch-toggle passphrase-bip39-toggle"><input type="checkbox" id="passphrase-bip39-words" aria-describedby="passphrase-bip39-note" ${checked ? "checked" : ""} /><span class="label">${hodlT("Build passphrase from BIP39 words")}</span></label><p class="switch-note" id="passphrase-bip39-note">${hodlT("Use complete lowercase English BIP39 words separated by single spaces")}</p></div><label class="switch-toggle passphrase-autocomplete-toggle" id="passphrase-autocomplete-control"${checked ? "" : " hidden"}><input type="checkbox" id="passphrase-autocomplete" ${autocomplete ? "checked" : ""} /><span class="label">${hodlT("Autocomplete BIP39 words")}</span></label></div>${reveal}`;
 }
 function hodlBrainWalletTrimEnabled() {
@@ -5620,9 +5638,10 @@ function hodlManualCalculationMarkup(method, value, targetWords = hodlTargetWord
 // The switch every checkbox in the card uses: a checkbox and its title on one
 // row, and an optional note under both that the checkbox points at. A
 // component supplies only its id, its words, and how the row sits: a class
-// for its container, and whether it starts hidden.
-function hodlSwitchRowMarkup(id, label, { note = "", checked = false, rowClass = "", hidden = false } = {}) {
-  return `<div class="switch-row${rowClass ? ` ${rowClass}` : ""}"${hidden ? " hidden" : ""}><label class="switch-toggle"><input type="checkbox" id="${id}"${note ? ` aria-describedby="${id}-note"` : ""}${checked ? " checked" : ""} /><span class="label">${label}</span></label>${note ? `<p class="switch-note" id="${id}-note">${note}</p>` : ""}</div>`;
+// for its container, and whether it starts hidden. `privateReveal` marks a
+// switch that reveals secret material, so conceal-on-leave turns it off.
+function hodlSwitchRowMarkup(id, label, { note = "", checked = false, rowClass = "", hidden = false, privateReveal = false } = {}) {
+  return `<div class="switch-row${rowClass ? ` ${rowClass}` : ""}"${hidden ? " hidden" : ""}><label class="switch-toggle"><input type="checkbox" id="${id}"${privateReveal ? " data-private-reveal" : ""}${note ? ` aria-describedby="${id}-note"` : ""}${checked ? " checked" : ""} /><span class="label">${label}</span></label>${note ? `<p class="switch-note" id="${id}-note">${note}</p>` : ""}</div>`;
 }
 // The "Show calculations" switch and the panel it opens, shared by every
 // method that can show its working. The row ships hidden, because a fresh
@@ -10324,11 +10343,15 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
     }
   }
   let signatures = [], uninspected = 0, scriptCode = hodlInputScriptCode(entries, witnessUtxo);
-  // Its keys are safe candidates only because scriptCode matched the commitment.
+  // Its keys are safe candidates only because scriptCode matched the commitment,
+  // and they go through the same dedup/32 cap as every other untrusted push: a
+  // witnessScript can otherwise carry 511 pubkey-shaped pushes and defeat the
+  // EC-verification bound (audit follow-up).
   if (scriptCode) {
     try {
-      for (let push of hodlScriptPushes(scriptCode)) if (hodlLooksPubkey(push)) candidates.push(push);
+      for (let push of hodlScriptPushes(scriptCode)) addCandidate(push);
     } catch {
+      malformed = true;
     }
   }
   // A script containing OP_CODESEPARATOR has no reconstructable digest here:
@@ -10910,7 +10933,7 @@ function hodlRunNonce() {
     let bytes = hodlPsbtBytes(document.getElementById("nonce-text").value);
     let kind = isPsbtMagic(bytes) ? "psbt" : "transaction";
     let sourceTag = hodlSha256(bytes), checkedAt = new Date().toISOString();
-    let parsed = kind === "psbt" ? hodlParsePsbt(bytes) : parseRawTx(bytes), network = hodlNetworkDefault, transcript = document.getElementById("psbt-ax-transcript")?.value || "";
+    let parsed = kind === "psbt" ? hodlParsePsbt(bytes) : parseRawTx(bytes), network = hodlInspectorNetwork(), transcript = document.getElementById("psbt-ax-transcript")?.value || "";
     output.innerHTML = kind === "psbt" ? hodlRenderPsbt(parsed, sourceTag, checkedAt, "nonce", { network, transcript }) : hodlRenderRawTx(parsed, sourceTag, checkedAt, "nonce", { network });
     hodlNonceLast = { kind, parsed, sourceTag, checkedAt, network, transcript };
     hodlJournalLog("inspect-nonces", kind, "psbt");
@@ -11559,7 +11582,7 @@ function hodlRunPsbt() {
     let bytes = hodlPsbtBytes(document.getElementById("psbt-text").value);
     let kind = isPsbtMagic(bytes) ? "psbt" : "transaction";
     let sourceTag = hodlSha256(bytes), checkedAt = new Date().toISOString();
-    let parsed = kind === "psbt" ? hodlParsePsbt(bytes) : parseRawTx(bytes), network = hodlNetworkDefault;
+    let parsed = kind === "psbt" ? hodlParsePsbt(bytes) : parseRawTx(bytes), network = hodlInspectorNetwork();
     output.innerHTML = kind === "psbt" ? hodlRenderPsbt(parsed, sourceTag, checkedAt, "inspect", { network }) : hodlRenderRawTx(parsed, sourceTag, checkedAt, "inspect", { network });
     hodlPsbtLast = { kind, parsed, sourceTag, checkedAt, network };
     hodlJournalLog("inspect", kind, "psbt");
@@ -12549,7 +12572,7 @@ function hodlPsbtNonceCheck(reused, possible, nonceIncomplete) {
 function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt = new Date().toISOString(), view = "all", options) {
   // The inspector follows the header network picker (mainnet/testnet); there
   // is no per-tool network control.
-  let network = options?.network ?? hodlNetworkDefault,
+  let network = options?.network ?? hodlInspectorNetwork(),
     transcript = null,
     transcriptError = "",
     tx = psbt.tx,
@@ -12928,7 +12951,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
 function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt = new Date().toISOString(), view = "all", options) {
   // The inspector follows the header network picker (mainnet/testnet); there
   // is no per-tool network control. A repaint passes the run's network.
-  let network = options?.network ?? hodlNetworkDefault,
+  let network = options?.network ?? hodlInspectorNetwork(),
     html = [],
     map = hodlSessionOwnership(network),
     signatures = extractEcdsaSignatures(tx),
@@ -13314,6 +13337,10 @@ function hodlKeyManagerIgnore(state) {
   } else if (pending >= 0) hodlKeyManagerPending.splice(pending, 1);
   hodlKeyManagerIgnored = hodlKeyManagerIgnored.filter((entry) => keyVaultIdentity(entry) !== identity);
   hodlKeyManagerIgnored.push(hodlKeyManagerEntry(state));
+  // The Ignored copy was taken first; the station's own secret material and
+  // every session cloned from it now go (#1000 audit follow-up).
+  if (station >= 0) hodlReleaseKeyConsumers(state.id);
+  hodlZeroKeyPassphrase(state);
   hodlKeyManagerIds.delete(identity);
   hodlKeyManagerActiveId = "";
   hodlKeyManagerRender();
@@ -13338,6 +13365,7 @@ function hodlKeyManagerDetachFromStation(state) {
   let identity = keyVaultIdentity(state), index = hodlKeys.indexOf(state);
   if (index < 0) return;
   hodlCaptureKey();
+  hodlReleaseKeyConsumers(state.id);
   hodlKeys.splice(index, 1);
   if (!hodlKeyManagerPending.some((candidate) => keyVaultIdentity(candidate) === identity)) hodlKeyManagerPending.push(state);
   if (hodlActiveKey > index) hodlActiveKey--;
@@ -13361,6 +13389,9 @@ function hodlKeyManagerReset() {
   // A pending key detached from a station can share its result with one that
   // still shows it; the walk skips those results rather than zero them.
   let live = hodlLiveWalletResults();
+  // The session roots cloned from a detached key are not part of the key
+  // itself: release them before the key's own bytes are zeroed.
+  hodlKeyManagerPending.forEach((state) => hodlReleaseKeyConsumers(state.id));
   hodlKeyManagerPending.forEach((state) => hodlKeyManagerWipeValue(state, new Set(live)));
   hodlKeyManagerIgnored.forEach((state) => hodlKeyManagerWipeValue(state));
   hodlKeyManagerIds.clear();
@@ -13702,6 +13733,10 @@ function hodlWipeActiveKey() {
   hodlLastWordCache.clear();
   if (hodlActiveKey < 0 || !hodlKeys[hodlActiveKey]) return;
   let state = hodlKeys[hodlActiveKey];
+  // Clear replaces the derived material, so the sessions cloned from it go
+  // too, and the passphrase bytes are zeroed rather than left to GC.
+  hodlReleaseKeyConsumers(state.id);
+  hodlZeroKeyPassphrase(state);
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
   // Restoring the fresh state re-renders the form; dropping the still-filled
@@ -14218,6 +14253,48 @@ function hodlSelectKey(index) {
 function hodlAddKey() {
   hodlSelectLab();
 }
+// A station key is a source: the PSBT, BIP-85, Silent Payments and vanity
+// stations clone its root or seed into their own session state. When the key
+// goes away, each clone goes with it, the way hodlDeleteActiveBip85 already
+// takes its own children (#1000 audit follow-up).
+function hodlZeroKeyPassphrase(state) {
+  let pass = state?.fields?.pass;
+  if (ArrayBuffer.isView(pass)) pass.fill(0);
+}
+function hodlReleaseKeyConsumers(keyId) {
+  let source = "key:" + keyId;
+  if (hodlPsbtSource === source) {
+    hodlPsbtWipeMem();
+    hodlPaintPsbtSession();
+    hodlSyncPsbtControls();
+  }
+  if (hodlBip85Source === source) {
+    hodlBip85WipeMem();
+    let field = document.getElementById("bip85-key");
+    if (field) field.value = "";
+    hodlSyncBip85Parent();
+  }
+  hodlSpDropAddressesFrom(source);
+  if (hodlSpSource === source) {
+    hodlSpWipeKeys();
+    for (let id of ["sp-key", "sp-pass"]) {
+      let field = document.getElementById(id);
+      if (field) field.value = "";
+    }
+    hodlClearStationPassphrase("sp-pass");
+    let out = document.getElementById("sp-out");
+    if (out) out.replaceChildren();
+    hodlSpVerifyMatches = null;
+    hodlSpSendLast = null;
+    hodlPaintSpSession(hodlSpNote);
+  }
+  if (hodlVanitySource === source) {
+    hodlVanityCancel();
+    hodlVanityClearResults();
+    hodlVanitySource = "";
+    hodlVanitySyncSource();
+  }
+}
 function hodlDeleteActiveKey() {
   let state = hodlKeys[hodlActiveKey];
   if (!state || state.isLab) {
@@ -14233,8 +14310,9 @@ function hodlDeleteActiveKey() {
     return;
   }
   let deletedIndex = hodlActiveKey, deletedState = state;
+  hodlZeroKeyPassphrase(deletedState);
+  hodlReleaseKeyConsumers(deletedState.id);
   hodlKeys.splice(deletedIndex, 1);
-  hodlSpDropAddressesFrom("key:" + deletedState.id);
   hodlNextKeyNumber = hodlKeys.length ? hodlKeys.reduce((latest, state) => Math.max(latest, state.number), 0) + 1 : deletedState.number;
   if (!hodlKeys.length) {
     hodlKeys.push(hodlNewLabState());
@@ -16069,6 +16147,7 @@ var hodlJournalFileRead = null;
 // file arms an explicit no-protection acknowledgement instead of installing;
 // this holds that file's text, or "" when nothing is armed.
 var hodlJournalOpenReadyFor = "";
+var hodlJournalUnlockBusy = false;
 function hodlJournalError(message) {
   let error = document.getElementById("journal-error");
   if (error) error.textContent = message || "";
@@ -16440,6 +16519,11 @@ function hodlJournalChooseFile(file) {
   });
 }
 async function hodlJournalUnlock() {
+  // One open at a time. A double-click starts two decrypts; the second could
+  // see the first's armed token and install the passwordless file without
+  // the acknowledgement (audit follow-up).
+  if (hodlJournalUnlockBusy) return;
+  hodlJournalUnlockBusy = true;
   hodlJournalError("");
   let generation = hodlJournalGeneration;
   try {
@@ -16462,6 +16546,10 @@ async function hodlJournalUnlock() {
       hodlJournalOpenReadyFor = hodlJournalFileText;
       let ready = document.getElementById("journal-open-ready");
       if (ready) ready.hidden = false;
+      // The decrypted document was only needed to learn that no password
+      // protects it; installing waits for the second press, so this copy is
+      // wiped now instead of being left for GC.
+      hodlJournalDiscardOpened(opened);
       return;
     }
     hodlJournalOpenReadyFor = "";
@@ -16483,6 +16571,8 @@ async function hodlJournalUnlock() {
     hodlJournalLog("journal-unlock", `${opened.doc.entries.length} entries`);
   } catch (exception) {
     hodlJournalError(exception.message || String(exception));
+  } finally {
+    hodlJournalUnlockBusy = false;
   }
 }
 async function hodlJournalSaveFile() {
@@ -16781,17 +16871,15 @@ function hodlVanitySyncSource() {
   }
   panel.hidden = !state;
   if (!state) {
-    // The pick was dropped; the block is hidden, and the passphrase it
-    // showed is key material — it goes with the visibility.
-    for (let id of ["vanity-pass", "vanity-pass-note"]) {
-      let el = document.getElementById(id);
-      if (el) el.textContent = "";
-    }
+    // The pick was dropped; the note that described its passphrase goes
+    // with the hidden block.
+    let passNote = document.getElementById("vanity-pass-note");
+    if (passNote) passNote.textContent = "";
   }
   let passphraseOption = document.querySelector('#vanity-method-tabs [data-vanity-method-option="passphrase"]');
   if (state) {
     let label = hodlVanityKeyLabel(state), pass = hodlPassphraseText(state.fields?.pass), hasMnemonic = hodlResultHasSeed(state.result);
-    let name = document.getElementById("vanity-source-name"), kind = document.getElementById("vanity-source-kind"), image = document.getElementById("vanity-source-lifehash"), field = document.getElementById("vanity-pass"), passNote = document.getElementById("vanity-pass-note");
+    let name = document.getElementById("vanity-source-name"), kind = document.getElementById("vanity-source-kind"), image = document.getElementById("vanity-source-lifehash"), passNote = document.getElementById("vanity-pass-note");
     if (name) {
       name.textContent = label;
       name.disabled = !state.result?.masterFingerprint;
@@ -16803,7 +16891,6 @@ function hodlVanitySyncSource() {
       image.hidden = true;
       hodlFillKeyTabLifehash(image, state.result?.masterFingerprint || "");
     }
-    if (field) field.textContent = pass || hodlTText("No passphrase — the key uses its seed words alone");
     if (passNote) {
       passNote.textContent = state.isBip85Child
         ? hodlTText("This BIP-85 child is immutable. You can search and copy matches, but Update key cannot change the child.")
@@ -17883,20 +17970,31 @@ function hodlConcealPrivateValues() {
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  // Result panes and mirrors carry the same material without a reveal
+  // switch: a pasted PSBT can hold an xprv in a proprietary field, and the
+  // brain-wallet hash is the key material itself. Leaving the page empties
+  // them rather than leaving them for a screen capture or a print preview.
+  for (let id of ["psbt-out", "nonce-out", "psbted-out", "psbted-compare-out", "brain-lab-hex"]) {
+    let panel = document.getElementById(id);
+    if (panel) panel.textContent = "";
+  }
 }
 function hodlInitSecretFieldAutoClear() {
   let clearSecretFields = () => {
-    hodlInvalidateDerivation();
-    hodlPsbtWipeMem();
-    hodlBip85WipeMem();
-    hodlSpWipeMem();
-    hodlLnWipeMem();
+    // One failing wipe must not skip the rest. Each of these touches state
+    // that can be mid-update (a cancelled derivation, a half-built session),
+    // and a throw here would leave every later secret in place.
+    try { hodlInvalidateDerivation(); } catch {}
+    try { hodlPsbtWipeMem(); } catch {}
+    try { hodlBip85WipeMem(); } catch {}
+    try { hodlSpWipeMem(); } catch {}
+    try { hodlLnWipeMem(); } catch {}
     // Every derived wallet's row key bytes, shared results included: the
     // whole session is going (#546 B2). Before the Journal wipe, which empties
     // the Key Manager's pending keys.
     for (let result of [hodlWalletResult, ...hodlKeys.map((state) => state.result), ...hodlKeyManagerPending.map((state) => state.result), ...hodlCommittedResults]) hodlWipeWalletKeys(result);
     hodlCommittedResults.clear();
-    hodlJournalWipeMem();
+    try { hodlJournalWipeMem(); } catch {}
     hodlKeys = hodlKeys.map((state) => {
       let fields = state.fields || {}, privateKeys = fields.privateKeys;
       if (privateKeys) Object.keys(privateKeys).forEach((kind) => {
@@ -17931,6 +18029,9 @@ function hodlInitSecretFieldAutoClear() {
       if (field) {
         field.value = "";
         delete field.dataset.previousValue;
+        // A beforeinput with no paired input event (aborted, or IME
+        // composition) leaves this expando holding the field's prior value.
+        delete field.hodlDiceBeforeInput;
       }
     }
     hodlClearPassphraseField();
@@ -17990,8 +18091,7 @@ function hodlInitSecretFieldAutoClear() {
     hodlVanityRun = null;
     hodlVanitySource = "";
     hodlVanityApplying = false;
-    let vanityPass = document.getElementById("vanity-pass"), vanityOut = document.getElementById("vanity-out");
-    if (vanityPass) vanityPass.textContent = "";
+    let vanityOut = document.getElementById("vanity-out");
     if (vanityOut) {
       vanityOut.innerHTML = "";
       vanityOut.style.removeProperty("--vanity-pass-width");

@@ -245,19 +245,36 @@ var hodlWalletExport = (() => {
     for (const account of wallet.accounts) {
       const type = OUTPUT_TYPES[account.def?.id];
       if (type === undefined) continue;
-      for (const branch of [0, 1]) {
-        // A wallet may have derived only one branch (branch range 1, or a
-        // custom branch start): export whichever branches exist rather than
-        // hiding the whole export (issue #366). Core tolerates a missing
-        // activeinternalspk record; the descriptor record carries the branch.
-        const descriptor = branch === 0 ? account?.receiveDescriptor : account?.changeDescriptor;
+      // Export the branches the account actually derived. A custom window can
+      // start at 1, so [0, 1] would drop the last branch and file branch 1 as
+      // change — Core then watches neither receive chain (audit follow-up).
+      // Core's `internal` is the change chain: branch 1 of the default 0/1
+      // window only.
+      //
+      // addressBranches may carry rows only (the legacy receive/change
+      // descriptors still describe the branch), so take the union by branch
+      // number rather than letting a rows-only list hide a legacy descriptor.
+      const byBranch = new Map();
+      const addBranch = (entry) => {
+        if (!entry || !Number.isSafeInteger(entry.branch) || byBranch.has(entry.branch)) return;
+        byBranch.set(entry.branch, entry);
+      };
+      if (Array.isArray(account.addressBranches)) for (const entry of account.addressBranches) addBranch(entry);
+      // A legacy descriptor below the window start belongs to a branch this
+      // account did not derive (the window can begin at 1 or higher).
+      const windowStart = account.branchStart ?? 0;
+      if (windowStart <= 0) addBranch({ branch: 0, publicDescriptor: account.receiveDescriptor, rows: account.receive });
+      if (windowStart <= 1) addBranch({ branch: 1, publicDescriptor: account.changeDescriptor, rows: account.change });
+      const branches = [...byBranch.values()].sort((a, b) => a.branch - b.branch);
+      for (const entry of branches) {
+        const branch = entry.branch;
+        const descriptor = entry.publicDescriptor ?? (branch === 0 ? account.receiveDescriptor : branch === 1 ? account.changeDescriptor : null);
         if (!descriptor) continue;
-        const privateDescriptor = branch === 0 ? account.receiveDescriptorPriv : account.changeDescriptorPriv;
-        const branchRows = account.addressBranches?.find((entry) => entry.branch === branch)?.rows;
-        const rows = Array.isArray(branchRows) ? branchRows : branch === 0 ? account.receive : account.change;
+        const privateDescriptor = branch === 0 ? account.receiveDescriptorPriv : branch === 1 ? account.changeDescriptorPriv : null;
+        const rows = Array.isArray(entry.rows) ? entry.rows : branch === 0 ? account.receive : branch === 1 ? account.change : [];
         units.push({
           type,
-          internal: branch === 1,
+          internal: (account.branchStart ?? 0) === 0 && branch === 1,
           descriptor,
           privateDescriptor: includePrivate ? privateDescriptor : null,
           ...branchRangeFromRows(rows),

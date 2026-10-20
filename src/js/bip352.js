@@ -345,7 +345,12 @@ export function deriveSilentPaymentKeys(masterSeed, { coinType = 0, account = 0 
 
 const encodeKeyExpression = (hrp, payload) => {
   const words = [0, ...toWords(payload)];
-  return bech32mEncode(hrp, words);
+  try {
+    return bech32mEncode(hrp, words);
+  } finally {
+    // The words carry the scan (and, for spspend, spend) private key bits.
+    words.fill(0);
+  }
 };
 
 export function encodeSpscan(scanPriv, spendPub, network = "mainnet") {

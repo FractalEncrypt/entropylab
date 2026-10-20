@@ -128,5 +128,12 @@ export const psbtInspectDoc = (bytes) => {
 // still enforced, so the output is always a parseable PSBT.
 export const psbtBuildBytes = (doc, { insane = false } = {}) => {
   if (!doc || typeof doc !== "object") throw new Error("editor document must be an object.");
-  return call(encoder.encode(JSON.stringify(insane ? { ...doc, insane: true } : doc)), "psbt_build");
+  // The JSON can carry an xprv/key material in key-value pairs; wipe the
+  // UTF-8 copy once the call returns.
+  const bytes = encoder.encode(JSON.stringify(insane ? { ...doc, insane: true } : doc));
+  try {
+    return call(bytes, "psbt_build");
+  } finally {
+    bytes.fill(0);
+  }
 };
