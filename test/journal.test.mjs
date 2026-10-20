@@ -547,3 +547,27 @@ test("a save refuses an envelope the reader would reject (AR-02)", async () => {
   assert.ok(text.length <= JOURNAL_MAX_FILE_LENGTH, "an accepted save must fit the reader's cap");
   assert.ok(parseFile(text));
 });
+
+// Journal ids key the entry list (`find((entry) => entry.id === id)` selects
+// the first match) and `addEntry` trusts `nextId`. A hand-edited file that
+// repeats an id makes one entry unreachable, and a stale `nextId` makes the
+// next add collide with an existing entry.
+test("a journal file rejects duplicate entry ids and repairs a stale nextId", () => {
+  const entry = (id) => ({ id, method: "dice", label: `entry ${id}`, input: "", created: fixedNow.toISOString() });
+  const duplicate = { version: JOURNAL_VERSION, nextId: 3, entries: [entry(1), entry(1)] };
+  assert.throws(() => parseDocument(JSON.stringify(duplicate)), /duplicate/, "two entries cannot share an id");
+
+  const stale = { version: JOURNAL_VERSION, nextId: 2, entries: [entry(5), entry(6)] };
+  const repaired = parseDocument(JSON.stringify(stale));
+  assert.equal(repaired.nextId, 7, "the counter must clear the highest existing id");
+  assert.equal(addEntry(repaired, { method: "dice", label: "next" }).id, 7, "and the next add must not collide");
+
+  const flat = parseDocument(JSON.stringify({ version: JOURNAL_VERSION, entries: [entry(1), entry(2)] }));
+  assert.equal(flat.nextId, 3, "a missing counter is still derived from the entries");
+});
+
+test("addEntry does not reuse an id a document already carries", () => {
+  const doc = parseDocument(JSON.stringify({ version: JOURNAL_VERSION, nextId: 1, entries: [{ id: 9, method: "dice", label: "nine" }] }));
+  doc.nextId = 1;
+  assert.equal(addEntry(doc, { method: "dice", label: "next" }).id, 10);
+});

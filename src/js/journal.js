@@ -531,7 +531,10 @@ export function normalizeEntry(entry, now = new Date()) {
 export function addEntry(doc, fields, now = new Date()) {
   if (!doc || !Array.isArray(doc.entries)) throw new Error("Journal document is missing.");
   if (doc.entries.length >= JOURNAL_MAX_ENTRIES) throw new Error(`A journal holds at most ${JOURNAL_MAX_ENTRIES} entries.`);
-  const entry = normalizeEntry({ ...fields, id: doc.nextId || 1 }, now);
+  // The counter is repaired on open, but a document built elsewhere could
+  // still carry one below an existing id.
+  const highest = doc.entries.reduce((max, entry) => Math.max(max, Number(entry?.id) || 0), 0);
+  const entry = normalizeEntry({ ...fields, id: Math.max(Number(doc.nextId) || 1, highest + 1) }, now);
   doc.entries = [...doc.entries, entry];
   doc.nextId = entry.id + 1;
   return entry;
@@ -738,7 +741,17 @@ export function parseDocument(plain) {
   }
   const nextId = Number.isInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
   const entries = parsed.entries.map((entry) => normalizeEntry(entry));
-  return { version: JOURNAL_VERSION, nextId, entries };
+  // The id keys the list: the view and delete paths take the first match, so
+  // a repeat would make one entry unreachable. `nextId` is only a counter, so
+  // a stale one is repaired rather than rejected.
+  const ids = new Set();
+  let highest = 0;
+  for (const entry of entries) {
+    if (ids.has(entry.id)) throw new Error("That journal file has duplicate entry ids.");
+    ids.add(entry.id);
+    highest = Math.max(highest, entry.id);
+  }
+  return { version: JOURNAL_VERSION, nextId: Math.max(nextId, highest + 1), entries };
 }
 
 // The IV is a synthetic nonce — HMAC-SHA-256 of the plaintext under its own
