@@ -125,9 +125,10 @@ const saltFor = (passphrase) => {
     }
     return textEncoder.encode(nfkd("mnemonic" + text));
   }
-  // "mnemonic" + passphrase coerces anything else (a String object, say) to
-  // a string, so check the same string that gets hashed.
-  passphrase = String(passphrase);
+  // Check the same string "mnemonic" + passphrase hashes: "" + passphrase
+  // coerces exactly as that concatenation does (a String object becomes its
+  // value, a Symbol still throws), where String() would differ.
+  passphrase = "" + passphrase;
   if (!isWellFormed(passphrase)) throw new Error("Invalid passphrase");
   return textEncoder.encode(nfkd("mnemonic" + passphrase));
 };
