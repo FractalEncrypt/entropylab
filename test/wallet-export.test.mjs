@@ -547,13 +547,26 @@ test("an unsupported descriptor tail is reported, not left to throw on click", (
   assert.equal(bip388Supported(BIP45_WALLET), false, "BIP 388 only rewrites /0/* and /1/*");
 });
 
+test("a kept 'now' birthday becomes 0 for a BIP 45 Core JSON export", () => {
+  ui.setResult(MSIG_WALLET, false);
+  ui.setWalletDatBirthday("now");
+  ui.setResult(BIP45_WALLET, false);
+  const imported = JSON.parse(ui.hodlMsigCoreImportDescriptorsJson());
+  assert.equal(imported.length, 2);
+  for (const record of imported) assert.equal(record.timestamp, 0, "recovery of an old BIP 45 wallet must scan from genesis");
+  ui.setResult(MSIG_WALLET, false);
+  for (const record of JSON.parse(ui.hodlMsigCoreImportDescriptorsJson())) assert.equal(record.timestamp, "now", "a supported wallet keeps the choice");
+  ui.setWalletDatBirthday("genesis");
+});
+
 test("a BIP 45 result hides the wallet.dat and BIP 388 controls but keeps Core JSON", () => {
   ui.setResult(BIP45_WALLET, false);
   const json = ui.hodlMsigCoreImportDescriptorsMarkup();
   assert.match(json, /id="msig-save-importdescriptors"/);
   assert.match(json, /id="msig-copy-importdescriptors"/);
   assert.doesNotMatch(json, /id="msig-download-wallet-dat"/);
-  assert.doesNotMatch(json, /data-wallet-dat-birthday/);
+  assert.match(json, /data-wallet-dat-birthday/, "the Core JSON timestamp uses the birthday, so its picker stays");
+  assert.match(json, /id="msig-birthday-help"/, "and so does the recovery warning");
   assert.equal(ui.msigBip388Markup(), "");
 
   ui.setResult(MSIG_WALLET, false);
@@ -825,7 +838,7 @@ ${walletSrc}
 const msigBip388Markup = typeof hodlMsigBip388Markup === "function" ? hodlMsigBip388Markup : () => "";
 const setResult = (value, flag) => { hodlWalletResult = value; hodlRevealPrivate = flag; };
 const setWalletDatBirthday = (value) => { hodlWalletDatBirthday = value; };
-export { captured, elements, copies, calls, hodlPrivateDataControls, hodlSaveRecoveryControl, hodlDownloadWalletDat, hodlBindWalletResultActions, hodlMsigCoreImportDescriptorsMarkup, hodlMsigPolicySheetMarkup, msigBip388Markup, hodlBindMsigCoreImportDescriptors, setResult, setWalletDatBirthday };
+export { captured, elements, copies, calls, hodlMsigCoreImportDescriptorsJson, hodlPrivateDataControls, hodlSaveRecoveryControl, hodlDownloadWalletDat, hodlBindWalletResultActions, hodlMsigCoreImportDescriptorsMarkup, hodlMsigPolicySheetMarkup, msigBip388Markup, hodlBindMsigCoreImportDescriptors, setResult, setWalletDatBirthday };
 `;
 
 // Keep the transient harness out of test/ so parallel suites that list the

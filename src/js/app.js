@@ -2185,7 +2185,10 @@ function hodlMsigCoreImportDescriptorsJson() {
   return buildImportDescriptorsJson({
     receiveDescriptor: hodlWalletResult.receiveDescriptor,
     changeDescriptor: hodlWalletResult.changeDescriptor,
-    timestamp: hodlWalletDatBirthday === "now" ? "now" : 0,
+    // "now" is for unused keys; a shape the wallet.dat writer refuses (a
+    // BIP 45 recovery wallet) must still scan from genesis even though the
+    // birthday picker stays visible for this JSON.
+    timestamp: hodlWalletDatBirthday === "now" && hodlWalletExport.walletDatSupported(hodlWalletResult) ? "now" : 0,
     decode: codec.decode,
     encode: codec.encode,
     rangeEnd: hodlMsigDisplayedAddressEnd(hodlWalletResult)
@@ -2206,13 +2209,14 @@ function hodlMsigCoreImportDescriptorsMarkup() {
   // The footer the key view uses: the Downloads title, what the export is, the
   // birthday titled the way a field is, then the two saves splitting the row.
   // The ids stay msig’s own, so both views wear the same shape without two
-  // elements answering to one label. A BIP 45 tail ("…/0/0/*") cannot become a
-  // descriptor record, so the birthday and the download drop out and the Core
-  // JSON controls stay.
+  // elements answering to one label. The birthday stays for every Core JSON
+  // export — its timestamp is the same setting — while a BIP 45 tail
+  // ("…/0/0/*"), which cannot become a descriptor record, drops only the
+  // wallet.dat download.
   return `<div class="wallet-data-actions msig-data-actions no-print" id="msig-core-importdescriptors">
     <div class="msig-downloads-head"><p class="label">${hodlT("Downloads")}</p><p class="muted label-description">${hodlT("Import the watch-only wallet descriptor into Sparrow or another wallet.")}</p></div>
     <p class="edge-note is-public" id="msig-core-importdescriptors-help">${coreNote}</p>
-    ${walletDat ? `<div class="wallet-birthday-field"><p class="label" id="msig-birthday-label">${hodlT("Wallet birthday")}</p><p class="muted label-description wallet-dat-birthday-help" id="msig-birthday-help">${hodlT("Bitcoin Core only auto-scans history back to the birthday. Choose “New keys” only for entropy created right now; recovering older keys with today's birthday can look empty until you run <code>rescanblockchain 0</code> in Bitcoin Core.")}</p><select data-wallet-dat-birthday aria-labelledby="msig-birthday-label" aria-describedby="msig-birthday-help msig-core-importdescriptors-help"><option value="genesis"${hodlWalletDatBirthday === "genesis" ? " selected" : ""}>${hodlT("Recovering keys · scan from genesis")}</option><option value="now"${hodlWalletDatBirthday === "now" ? " selected" : ""}>${hodlT("New keys · created today")}</option></select></div>` : ""}
+    <div class="wallet-birthday-field"><p class="label" id="msig-birthday-label">${hodlT("Wallet birthday")}</p><p class="muted label-description wallet-dat-birthday-help" id="msig-birthday-help">${hodlT("Bitcoin Core only auto-scans history back to the birthday. Choose “New keys” only for entropy created right now; recovering older keys with today's birthday can look empty until you run <code>rescanblockchain 0</code> in Bitcoin Core.")}</p><select data-wallet-dat-birthday aria-labelledby="msig-birthday-label" aria-describedby="msig-birthday-help msig-core-importdescriptors-help"><option value="genesis"${hodlWalletDatBirthday === "genesis" ? " selected" : ""}>${hodlT("Recovering keys · scan from genesis")}</option><option value="now"${hodlWalletDatBirthday === "now" ? " selected" : ""}>${hodlT("New keys · created today")}</option></select></div>
     <button class="btn secondary green" id="msig-save-importdescriptors" type="button">${hodlT("Save Core Watch-only JSON")}</button>
     <button class="btn secondary" id="msig-copy-importdescriptors" type="button">${hodlT("Copy Core importdescriptors")}</button>
     ${walletDat ? `<button class="btn secondary green save-wallet-dat" id="msig-download-wallet-dat" type="button" aria-describedby="msig-core-importdescriptors-help msig-birthday-help">${hodlWalletExport.walletDatButtonLabel(false)}</button>` : ""}
