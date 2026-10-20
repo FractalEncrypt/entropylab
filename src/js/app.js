@@ -85,6 +85,7 @@ import {
   appendLog as hodlJournalAppend,
   createDocument as hodlJournalCreateDocument,
   createJournal,
+  JOURNAL_MAX_FILE_LENGTH as hodlJournalMaxFileLength,
   defaultJournalPageStyle as hodlJournalDefaultPageStyle,
   formatLog as hodlJournalFormatLog,
   formatNotebook as hodlJournalFormatNotebook,
@@ -16601,6 +16602,14 @@ function hodlJournalChooseFile(file) {
   hodlJournalOpenReadyFor = "";
   let ready = document.getElementById("journal-open-ready");
   if (ready) ready.hidden = true;
+  // The reader caps the decoded text at the same length in UTF-16 units. A
+  // file is bytes, and no string exceeds three bytes per unit (+3 for a BOM),
+  // so a larger file is refused before file.text() pulls it into memory.
+  if (file && Number.isFinite(file.size) && file.size > hodlJournalMaxFileLength * 3 + 3) {
+    hodlJournalFileRead = null;
+    hodlJournalError("That journal file is too large to open.");
+    return;
+  }
   let read = (hodlJournalFileRead = file ? file.text().then((text) => ({ text }), (error) => ({ error })) : null);
   read?.then((result) => {
     if (hodlJournalFileRead === read && !result.error) hodlJournalFileText = result.text;

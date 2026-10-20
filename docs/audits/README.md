@@ -83,7 +83,7 @@ fixed on this branch.
 | Item | Status | Evidence |
 |---|---|---|
 | Journal duplicate ids / stale `nextId` | Accepted open | `journal.js:739-741` |
-| `file.text()` before the 4 MiB cap | Accepted open | `app.js:16604` |
+| `file.text()` before the 4 MiB cap | Fixed | `File.size` is refused over `3 × limit + 3` bytes before the read; `test/journal-open-acknowledge.test.mjs` |
 | Uncapped Silent Payments paste fields | Accepted open | `app.js:11849-11869` |
 | bip352 redeem script not hash-checked | Accepted open | `bip352.js:207-212` |
 | bip352 zero label tweak | Accepted open | `bip352.js:83-88,286-298` |
