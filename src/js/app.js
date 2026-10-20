@@ -11847,12 +11847,21 @@ function hodlSpDeriveSessionKeys() {
   scanNode.wipePrivateData();
   spendNode.wipePrivateData();
 }
+// A paste is parsed as one string and then derived per item. Both bounds are
+// well past a real transaction or the largest practical scan while keeping a
+// pasted wall of text, or an array of tiny items, from locking the tab.
+const hodlSpMaxVinText = 4 * 1024 * 1024;
+const hodlSpMaxVins = 100000;
+const hodlSpMaxOutputText = 8 * 1024 * 1024;
+const hodlSpMaxOutputs = 100000;
 function hodlSpParseVins(text) {
   let raw = String(text || "").trim();
   if (!raw) throw new Error("Paste BIP-352 vin JSON.");
+  if (raw.length > hodlSpMaxVinText) throw new Error("The pasted vin JSON is too large.");
   let parsed = JSON.parse(raw);
   if (parsed && Array.isArray(parsed.vin)) parsed = parsed.vin;
   if (!Array.isArray(parsed) || !parsed.length) throw new Error("Vin JSON must be a non-empty array.");
+  if (parsed.length > hodlSpMaxVins) throw new Error(`Vin JSON holds at most ${hodlSpMaxVins} inputs.`);
   return parsed;
 }
 function hodlSpParseRecipients(text) {
@@ -11861,12 +11870,17 @@ function hodlSpParseRecipients(text) {
 function hodlSpParseOutputs(text) {
   let raw = String(text || "").trim();
   if (!raw) throw new Error("Paste at least one 32-byte x-only taproot output key.");
+  if (raw.length > hodlSpMaxOutputText) throw new Error("The pasted output list is too large.");
+  let outputs;
   if (raw.startsWith("[")) {
     let parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error("Output JSON must be an array of hex strings.");
-    return parsed.map(String);
+    outputs = parsed.map(String);
+  } else {
+    outputs = raw.split(/\s+/).map((item) => item.replace(/^0x/i, "")).filter(Boolean);
   }
-  return raw.split(/\s+/).map((item) => item.replace(/^0x/i, "")).filter(Boolean);
+  if (outputs.length > hodlSpMaxOutputs) throw new Error(`At most ${hodlSpMaxOutputs} outputs are scanned at once.`);
+  return outputs;
 }
 function hodlSpParseLabels(text) {
   let raw = String(text || "").trim();
