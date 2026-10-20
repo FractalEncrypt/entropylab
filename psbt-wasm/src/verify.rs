@@ -820,16 +820,11 @@ fn check_final_scriptsig(
                 "final scriptSig of a native SegWit input must be empty",
             ));
         }
-        // A final scriptSig makes the input final, and every native witness
-        // program — taproot included — is then spent by its witness alone.
-        // Without one the input carries no spend at all.
-        if !has_final_witness {
-            problems.push(Problem::error(
-                scope,
-                "final_witness_bad",
-                "native SegWit input has a final scriptSig but no decodable final witness",
-            ));
-        }
+        // An *empty* final scriptSig is also the not-yet-finalized state: a
+        // native witness program is spent with an empty scriptSig, so its
+        // presence says nothing an absent field does not. Only a non-empty one
+        // is a consensus error (above). The wrapped case below can tell the
+        // two apart, because there the final scriptSig must carry a push.
         return;
     }
     if claim_script.is_p2sh() {
@@ -1749,10 +1744,13 @@ mod tests {
         assert!(problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR), "{problems:?}");
     }
 
-    /// A final scriptSig alone is not a spend: a native witness program is
-    /// spent by its witness, and without one the input has no spend at all.
+    /// An *empty* final scriptSig is also the native-segwit not-yet-finalized
+    /// state: BIP-141 spends a native witness program with an empty scriptSig,
+    /// so the unsigned transaction is byte-identical whether the map omits 0x07
+    /// or carries it empty, and the gate must treat those alike. A non-empty
+    /// one is still a consensus error.
     #[test]
-    fn a_native_witness_final_scriptsig_without_a_witness_is_an_error() {
+    fn an_empty_native_witness_final_scriptsig_is_not_a_consensus_error() {
         let secp = Secp256k1::new();
         let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
         let pubkey = bitcoin::PublicKey::new(key.public_key(&secp));
@@ -1761,13 +1759,14 @@ mod tests {
             value: Amount::from_sat(50_000),
             script_pubkey: ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap()),
         };
-        let map = || vec![pair("01", &witness_utxo_value(&claim)), pair("07", "")];
-        let problems = analyze(&tx, &[map()]);
-        assert!(
-            problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR),
-            "{problems:?}"
-        );
-        assert!(gate_error(&tx, &[map()]).is_some());
+        let empty = || vec![pair("01", &witness_utxo_value(&claim)), pair("07", "")];
+        let problems = analyze(&tx, &[empty()]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(gate_error(&tx, &[empty()]).is_none());
+
+        let nonempty = vec![pair("01", &witness_utxo_value(&claim)), pair("07", "51")];
+        let problems = analyze(&tx, &[nonempty]);
+        assert!(problems.iter().any(|p| p.code == "final_scriptsig_bad" && p.severity == ERROR), "{problems:?}");
     }
 
     /// A partial signature on a P2WSH input without PSBT_IN_WITNESS_SCRIPT has
