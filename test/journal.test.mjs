@@ -32,6 +32,7 @@ import {
   parseDocument,
   parseFile,
   removeEntry,
+  replaceEntry,
   searchEntries,
   sealDocument,
   sealExport,
@@ -587,8 +588,26 @@ test("an unsafe imported counter or entry id cannot produce a duplicate", () => 
     nextId: 1,
     entries: [{ id: unsafe, method: "hex", label: "imported", input: "00" }],
   }));
-  assert.deepEqual(carried.entries.map((entry) => entry.id), [0], "an unsafe entry id normalizes out of the counter's way");
-  assert.equal(addEntry(carried, { method: "hex", label: "next", input: "00" }).id, 1);
+  assert.deepEqual(carried.entries.map((entry) => entry.id), [1], "an unsafe entry id takes the lowest free one");
+  assert.equal(addEntry(carried, { method: "hex", label: "next", input: "00" }).id, 2);
+});
+
+test("an entry with an unsafe imported id still edits in place and drops its old secret", () => {
+  const doc = parseDocument(JSON.stringify({
+    version: JOURNAL_VERSION,
+    entries: [
+      { id: 2 ** 53, method: "hex", label: "imported", input: "aa".repeat(32), notes: "old" },
+      { id: 2 ** 53, method: "hex", label: "also imported", input: "bb".repeat(32) },
+    ],
+  }));
+  assert.deepEqual(doc.entries.map((entry) => entry.id), [1, 2], "both unsafe ids get unique positive ids");
+  const target = doc.entries[0].id;
+  assert.ok(target, "the editor's add-or-replace fork sees a truthy id");
+  replaceEntry(doc, target, { method: "dice", label: "edited", input: "1 2 3 4", notes: "" });
+  assert.equal(doc.entries.length, 2, "an edit must replace, not append");
+  assert.equal(doc.entries[0].label, "edited");
+  assert.equal(doc.entries[0].input, "1 2 3 4");
+  assert.equal(doc.entries[0].notes, "", "the old secret and note are gone");
 });
 
 test("allocation refuses at the safe-integer boundary before mutating the document", () => {

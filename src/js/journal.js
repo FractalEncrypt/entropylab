@@ -745,16 +745,25 @@ export function parseDocument(plain) {
   }
   const nextId = Number.isSafeInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
   const entries = parsed.entries.map((entry) => normalizeEntry(entry));
-  // The id keys the list: the view and delete paths take the first match, so
-  // a repeat would make one entry unreachable. `nextId` is only a counter, so
-  // a stale one is repaired rather than rejected.
+  // The id keys the list: the view, edit and delete paths take the first
+  // match, so a repeat would make one entry unreachable, and id 0 is falsy at
+  // the editor's add-or-replace fork. An id that is missing or outside the
+  // safe range is given the lowest free positive one, which keeps the entry
+  // editable in place. `nextId` is only a counter, so a stale one is repaired.
   const ids = new Set();
-  let highest = 0;
   for (const entry of entries) {
+    if (!entry.id) continue;
     if (ids.has(entry.id)) throw new Error("That journal file has duplicate entry ids.");
     ids.add(entry.id);
-    highest = Math.max(highest, entry.id);
   }
+  let spare = 0;
+  for (const entry of entries) {
+    if (entry.id) continue;
+    do spare++; while (ids.has(spare));
+    entry.id = spare;
+    ids.add(spare);
+  }
+  const highest = Math.max(0, ...ids);
   return { version: JOURNAL_VERSION, nextId: Math.max(nextId, highest + 1), entries };
 }
 
