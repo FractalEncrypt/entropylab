@@ -571,3 +571,35 @@ test("addEntry does not reuse an id a document already carries", () => {
   doc.nextId = 1;
   assert.equal(addEntry(doc, { method: "dice", label: "next" }).id, 10);
 });
+
+// Node's Number.isInteger accepts 2**53, but adding one to it does not
+// advance, so an imported counter or entry id at that boundary collides on
+// the next add and a save then fails to reopen.
+test("an unsafe imported counter or entry id cannot produce a duplicate", () => {
+  const unsafe = 2 ** 53;
+  const doc = parseDocument(JSON.stringify({ version: JOURNAL_VERSION, nextId: unsafe, entries: [] }));
+  assert.equal(doc.nextId, 1, "a counter above the safe range is repaired");
+  assert.equal(addEntry(doc, { method: "hex", label: "first", input: "00" }).id, 1);
+  assert.equal(addEntry(doc, { method: "hex", label: "second", input: "00" }).id, 2);
+
+  const carried = parseDocument(JSON.stringify({
+    version: JOURNAL_VERSION,
+    nextId: 1,
+    entries: [{ id: unsafe, method: "hex", label: "imported", input: "00" }],
+  }));
+  assert.deepEqual(carried.entries.map((entry) => entry.id), [0], "an unsafe entry id normalizes out of the counter's way");
+  assert.equal(addEntry(carried, { method: "hex", label: "next", input: "00" }).id, 1);
+});
+
+test("allocation refuses at the safe-integer boundary before mutating the document", () => {
+  const doc = parseDocument(JSON.stringify({
+    version: JOURNAL_VERSION,
+    nextId: Number.MAX_SAFE_INTEGER,
+    entries: [{ id: Number.MAX_SAFE_INTEGER, method: "hex", label: "last", input: "00" }],
+  }));
+  const before = doc.entries.length;
+  const nextId = doc.nextId;
+  assert.throws(() => addEntry(doc, { method: "hex", label: "past the end", input: "00" }), /safe integer/);
+  assert.equal(doc.entries.length, before, "a refused add leaves the list untouched");
+  assert.equal(doc.nextId, nextId, "and the counter untouched");
+});
