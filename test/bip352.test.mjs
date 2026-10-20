@@ -193,6 +193,45 @@ test("NUMS internal-key taproot inputs are skipped by extractInputPubKey", () =>
   assert.equal(present.length, vector.sending[0].expected.input_pub_keys.length);
 });
 
+test("a P2SH-P2WPKH input whose redeem script does not hash to its prevout is refused", () => {
+  // BIP143's P2SH-P2WPKH worked example: the redeem script
+  // 001479091972186c449eb1ded22b78e40d009bdf0089 hashes (hash160) to
+  // 4733f37cf4db86fbc2efed2500b4f4e49f312023.
+  const pub = "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873";
+  const base = {
+    txid: "11".repeat(32),
+    vout: 0,
+    scriptSig: "16001479091972186c449eb1ded22b78e40d009bdf0089",
+    // Only the last witness item is read; the signature placeholder is never parsed.
+    txinwitness: "02" + "47" + "00".repeat(71) + "21" + pub,
+    prevout: "a9144733f37cf4db86fbc2efed2500b4f4e49f31202387",
+  };
+  const extracted = extractInputPubKey(base);
+  assert.equal(bytesToHex(extracted.point.toBytes(true)), pub);
+  // The same unlocking data under a prevout whose hash it does not commit
+  // to (a mistyped prevout, say) must be refused: skipping it would leave a
+  // key the chain counts out of the sender's sum.
+  const mismatchedPrevout = { ...base, prevout: "a914" + "00".repeat(20) + "87" };
+  assert.throws(() => extractInputPubKey(mismatchedPrevout), /redeem script its prevout commits to/);
+  assert.throws(() => eligibleInputKeys([mismatchedPrevout]), /redeem script its prevout commits to/);
+  // Likewise a redeem script the prevout does not commit to, and a push
+  // that is not the single 22-byte redeem push.
+  assert.throws(() => extractInputPubKey({ ...base, scriptSig: "160014" + "00".repeat(20) }), /redeem script its prevout commits to/);
+  assert.throws(() => extractInputPubKey({ ...base, scriptSig: "4c" + base.scriptSig.slice(2) }), /redeem script its prevout commits to/);
+  // The redeem script pasted as the scriptSig (missing its push byte) and an
+  // empty scriptSig are refused too, not dropped from the key sum.
+  assert.throws(() => extractInputPubKey({ ...base, scriptSig: base.scriptSig.slice(2) }), /redeem script its prevout commits to/);
+  assert.throws(() => extractInputPubKey({ ...base, scriptSig: "" }), /redeem script its prevout commits to/);
+  // A consistent P2SH-P2WSH spend (BIP143's worked example: redeem
+  // 0020a16b…cb54 under P2SH a9149993…a587) is ineligible and still skipped.
+  const p2shP2wsh = {
+    ...base,
+    scriptSig: "220020a16b5755f7f6f96dbd65f5f0d6ab9418b89af4b1f14a1bb8a09062c35f0dcb54",
+    prevout: "a9149993a429037b5d912407a71c252019287b8d27a587",
+  };
+  assert.equal(extractInputPubKey(p2shP2wsh), null);
+});
+
 test("hrp follows the wallet network", () => {
   assert.equal(hrpForNetwork("mainnet"), "sp");
   assert.equal(hrpForNetwork("testnet"), "tsp");

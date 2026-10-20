@@ -206,6 +206,16 @@ export function extractInputPubKey(vin) {
   }
   if (isP2sh(prevout)) {
     const redeem = scriptSig.slice(1);
+    // A wrapped segwit spend (it has a witness) pushes exactly one redeem
+    // script, the one the prevout hash commits to. Pasted data that does not
+    // is refused, not skipped: the send flow treats a skipped input as
+    // ineligible and leaves it out of the key sum, while the chain would count
+    // a P2SH-P2WPKH input, so the output would be one the recipient never
+    // finds. A consistent non-P2WPKH redeem (P2SH-P2WSH) is ineligible and
+    // skipped as before.
+    if (witness.length && (scriptSig.length < 2 || scriptSig[0] > 0x4b || scriptSig[0] !== redeem.length || !equalBytes(hash160(redeem), prevout.slice(2, 22)))) {
+      throw new Error("A P2SH input's scriptSig does not push the redeem script its prevout commits to. Check the pasted prevout and scriptSig.");
+    }
     if (isP2wpkh(redeem) && witness.length) {
       const point = compressedPointOrNull(witness[witness.length - 1]);
       if (point) return { point, isTaproot: false };
