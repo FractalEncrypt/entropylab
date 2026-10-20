@@ -610,7 +610,7 @@ test("dropping a key releases every session cloned from it", () => {
     hodlSyncPsbtControls() { calls.push("psbt-controls"); },
     hodlBip85WipeMem() { calls.push("bip85-wipe"); },
     hodlBip85WipeParent() { calls.push("bip85-wipe-parent"); },
-    hodlDropBip85ChildrenOf(fingerprint) { if (fingerprint) calls.push("bip85-drop:" + fingerprint); },
+    hodlDropBip85ChildrenOf(source) { if (source) calls.push("bip85-drop:" + source); },
     hodlSyncBip85Parent() { calls.push("bip85-parent"); },
     hodlSpDropAddressesFrom(source) { calls.push("sp-drop:" + source); },
     hodlSpWipeKeys() { calls.push("sp-keys"); },
@@ -621,11 +621,13 @@ test("dropping a key releases every session cloned from it", () => {
   });
   vm.runInContext(functionSource("hodlReleaseKeyConsumers"), context);
   context.hodlReleaseKeyConsumers(2);
-  assert.deepEqual(calls, ["sp-drop:key:2"], "a different key released another key's sessions");
+  // The BIP-85 lookup runs for every release but finds no child of this key;
+  // only the SP cascade does anything destructive.
+  assert.deepEqual(calls, ["bip85-drop:key:2", "sp-drop:key:2"], "a different key released another key's sessions");
   calls.length = 0;
   context.hodlReleaseKeyConsumers(1);
   assert.deepEqual(calls, ["psbt-wipe", "psbt-paint", "psbt-controls", "bip85-wipe-parent", "bip85-parent",
-    "bip85-drop:deadbeef", "sp-drop:key:1", "sp-keys", "sp-out", "sp-paint:sp", "vanity-cancel",
+    "bip85-drop:key:1", "sp-drop:key:1", "sp-keys", "sp-out", "sp-paint:sp", "vanity-cancel",
     "vanity-clear", "vanity-source"]);
   assert.equal(fields.get("bip85-key").value, "", "the BIP-85 parent field kept the dropped key's xprv");
   assert.equal(fields.get("sp-key").value, "", "the Silent Payments field kept the dropped key");
@@ -633,40 +635,51 @@ test("dropping a key releases every session cloned from it", () => {
   assert.equal(context.hodlSpVerifyMatches, null, "the SP verify matches survived the key");
   assert.equal(context.hodlSpSendLast, null, "the SP send result survived the key");
   assert.equal(context.hodlVanitySource, "", "the vanity picker still points at the dropped key");
-  // A vanity Update key re-derives this same key while its apply runs: the
-  // session and the match table it is about to annotate must survive until
-  // the apply refreshes them itself.
+  // A vanity Update key re-derives this same key while its apply runs: only
+  // that successful update may keep the session and the match table it is
+  // about to annotate, and it says so explicitly. Any other release during
+  // the apply (a delete, wipe, ignore or detach) still tears the run down.
   calls.length = 0;
   context.hodlVanitySource = "key:1";
   context.hodlVanityApplying = true;
+  context.hodlReleaseKeyConsumers(1, { keepVanity: true });
+  assert(!calls.includes("vanity-cancel"), "the vanity update lost its own match table");
+  assert.equal(context.hodlVanitySource, "key:1", "the vanity update lost its source");
+  calls.length = 0;
   context.hodlReleaseKeyConsumers(1);
-  assert(!calls.includes("vanity-cancel"), "an in-flight vanity apply lost its own match table");
-  assert.equal(context.hodlVanitySource, "key:1", "an in-flight vanity apply lost its source");
+  assert(calls.includes("vanity-cancel"), "a delete during the apply kept the match table and run");
+  assert.equal(context.hodlVanitySource, "", "a delete during the apply kept pointing at the dead key");
 });
 
-test("dropping a key drops only that parent's BIP-85 children", () => {
+test("dropping a key drops only that parent's BIP-85 children, transitively", () => {
   // A station-wide wipe would take another live key's children with it; the
-  // cascade is per master fingerprint, and lab/bench tabs stay.
+  // cascade follows the parent's source, and lab/bench tabs stay. Two
+  // different roots can share a 32-bit fingerprint, so the fingerprint alone
+  // cannot identify a parent (AR-05).
   const calls = [];
   const lab = { isLab: true, id: 0, result: null };
-  const mine = { isLab: false, id: 4, parentFingerprint: "aaaa1111", result: null };
-  const other = { isLab: false, id: 5, parentFingerprint: "bbbb2222", result: null };
-  const mineAgain = { isLab: false, id: 6, parentFingerprint: "aaaa1111", result: null };
+  const parent = { isLab: false, id: 4, parentSource: "key:1", parentFingerprint: "aaaa1111", result: null };
+  const child = { isLab: false, id: 5, parentSource: "key:bip85:4", parentFingerprint: "aaaa1111", result: null };
+  const grandchild = { isLab: false, id: 6, parentSource: "key:bip85:5", parentFingerprint: "bbbb2222", result: null };
+  const unrelated = { isLab: false, id: 7, parentSource: "key:2", parentFingerprint: "aaaa1111", result: null };
   const context = createContext({
-    hodlBip85Children: [lab, mine, other, mineAgain],
-    hodlActiveBip85: 3,
+    hodlBip85Children: [lab, parent, child, grandchild, unrelated],
+    hodlActiveBip85: 4,
     hodlBip85Result: null,
-    hodlReleaseBip85ChildSource(state) { calls.push("release:" + state.id); },
+    hodlSpDropAddressesFrom(source) { calls.push("sp:" + source); },
     hodlBip85DropChild(state) { calls.push("drop:" + state.id); },
     hodlNewBip85BenchState: () => lab,
     hodlBip85ActiveState: () => context.hodlBip85Children[context.hodlActiveBip85] || null,
     hodlRenderBip85Tabs() { calls.push("tabs"); },
     hodlSyncBip85View() { calls.push("view"); },
   });
-  vm.runInContext(functionSource("hodlDropBip85ChildrenOf"), context);
-  context.hodlDropBip85ChildrenOf("aaaa1111");
-  assert.deepEqual(calls, ["release:4", "drop:4", "release:6", "drop:6", "tabs", "view"]);
-  assert.deepEqual(context.hodlBip85Children.map((state) => state.id), [0, 5], "another parent's child was dropped");
+  for (const name of ["hodlReleaseBip85ChildSource", "hodlDropBip85ChildrenOf"]) vm.runInContext(functionSource(name), context);
+  context.hodlDropBip85ChildrenOf("key:1");
+  // Depth first: the descendant cascade runs before the parent's own drop,
+  // and each level that removed something re-renders the tabs.
+  assert.deepEqual(calls, ["sp:key:bip85:4", "sp:key:bip85:5", "sp:key:bip85:6", "drop:6", "tabs", "view",
+    "drop:5", "tabs", "view", "drop:4", "tabs", "view"]);
+  assert.deepEqual(context.hodlBip85Children.map((state) => state.id), [0, 7], "an unrelated child sharing a fingerprint was dropped");
   assert.equal(context.hodlActiveBip85, 1, "the active tab was not clamped to the remaining children");
 });
 

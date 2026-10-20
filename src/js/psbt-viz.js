@@ -147,16 +147,27 @@ const FINAL_PAIR_NAMES = ["PSBT_IN_FINAL_SCRIPTSIG", "PSBT_IN_FINAL_SCRIPTWITNES
 // reads as malformed, never as progress (issue #328).
 const signingStatus = (pairs) => {
   const decodedOk = (pair) => pair.decoded && !pair.decodeError;
-  // A final field carries no key data; `07aa` is a lookalike the verifier
-  // never reads, so it cannot mark the input finalized. Keyless is only
-  // required where the field is keyless by definition — a partial signature
-  // carries the signer's pubkey as its key.
-  const keyless = (pair) => (FINAL_PAIR_NAMES.includes(pair.name) || pair.name === "PSBT_IN_TAP_KEY_SIG")
-    ? typeof pair.key === "string" && pair.key.length === 2
-    : true;
+  const keyHex = (pair) => (typeof pair.key === "string" ? pair.key.toLowerCase() : "");
+  // A pair's key shape is part of its meaning (issue #328 follow-up, AR-09).
+  // `pair.key` is the full serialized key: one type byte then keydata. Final
+  // fields carry no keydata; a tap-key signature is keyless by definition; a
+  // partial signature carries the signer's public key as keydata (BIP-174);
+  // a tap-script signature its x-only key plus leaf hash. A `07aa`-style
+  // lookalike, or a keyless partial signature, is a malformed field, not
+  // signing progress.
+  const shapeOk = (pair) => {
+    const key = keyHex(pair);
+    if (pair.name === "PSBT_IN_PARTIAL_SIG") {
+      const prefix = key.slice(2, 4);
+      return (key.length === 68 && (prefix === "02" || prefix === "03"))
+        || (key.length === 132 && prefix === "04");
+    }
+    if (pair.name === "PSBT_IN_TAP_SCRIPT_SIG") return key.length === 130;
+    return key.length === 2;
+  };
   const finals = pairs.filter((pair) => FINAL_PAIR_NAMES.includes(pair.name));
-  if (finals.some((pair) => keyless(pair) && decodedOk(pair))) return { text: "finalized", tone: "psbted-note-ok" };
-  const sigs = pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name) && keyless(pair) && decodedOk(pair)).length;
+  if (finals.some((pair) => shapeOk(pair) && decodedOk(pair))) return { text: "finalized", tone: "psbted-note-ok" };
+  const sigs = pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name) && shapeOk(pair) && decodedOk(pair)).length;
   if (sigs) return { text: `${sigs} signature${sigs === 1 ? "" : "s"}`, tone: "" };
   const malformed = finals.length + pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name)).length;
   if (malformed) return { text: "malformed signing field", tone: "psbted-note-bad" };

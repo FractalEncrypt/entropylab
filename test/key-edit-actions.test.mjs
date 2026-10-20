@@ -13,6 +13,7 @@ function harness() {
   let nextId = 3;
   const context = vm.createContext({
     hodlPassphraseVaultField: null, hodlPassphraseShown: false, TextEncoder, TextDecoder,
+    hodlVanityApplying: false,
     hodlKeys: [lab, original], hodlActiveKey: 1,
     hodlNewKeyState: () => ({ id: nextId, number: nextId++, name: "New key", fields: {}, result: null }),
     hodlNewLabState: () => ({ id: 0, number: 0, name: "Key Station", isLab: true, fields: {}, result: null }),

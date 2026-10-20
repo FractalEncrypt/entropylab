@@ -294,7 +294,8 @@ var hodlWalletExport = (() => {
         const branch = entry.branch;
         const descriptor = entry.publicDescriptor ?? (branch === 0 ? account.receiveDescriptor : branch === 1 ? account.changeDescriptor : null);
         if (!descriptor) continue;
-        const privateDescriptor = branch === 0 ? account.receiveDescriptorPriv : branch === 1 ? account.changeDescriptorPriv : null;
+        const privateDescriptor = entry.privateDescriptor
+          ?? (branch === 0 ? account.receiveDescriptorPriv : branch === 1 ? account.changeDescriptorPriv : null);
         const rows = Array.isArray(entry.rows) ? entry.rows : branch === 0 ? account.receive : branch === 1 ? account.change : [];
         accountUnits.push({
           type,

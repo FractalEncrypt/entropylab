@@ -239,6 +239,37 @@ test("origin-less descriptors keep a <digit>h xpub byte-identical", () => {
   }
 });
 
+// AR-03: a window starting at 1 or 2 exports branches beyond 0/1. Each of
+// them needs its own private descriptor, or the wallet.dat has a public
+// descriptor with no walletdescriptorkey record and Core cannot sign for it
+// (or, with no private material at all, is filed as watch-only).
+test("a private export carries a key record for every branch of a non-default window (AR-03)", () => {
+  const withBranch = (descriptor, branch) => {
+    const body = descriptor.slice(0, descriptor.lastIndexOf("#")).replace(/\/\d+\/\*/, `/${branch}/*`);
+    return `${body}#${descriptorChecksum(body)}`;
+  };
+  const base = REF_PRIVATE_DESCRIPTORS[6]; // wpkh account tprv, /0/*
+  const accountSecret = bytesToHex(b58checkDecode(base.match(/tprv[1-9A-HJ-NP-Za-km-z]+/)[0]).slice(46, 78));
+  const accountPubkey = bytesToHex(publicKeyForPrivate(hexToBytes(accountSecret)));
+  for (const start of [1, 2]) {
+    const addressBranches = [start, start + 1].map((branch) => {
+      const privateDescriptor = withBranch(base, branch);
+      return { branch, publicDescriptor: publicFormOf(privateDescriptor), privateDescriptor };
+    });
+    const wallet = { kind: "hd", network: "regtest", accounts: [{ def: { id: "bip84" }, branchStart: start, addressBranches }] };
+    const records = moduleRecords(wallet, true, REF_CREATION_TIME), state = `window ${start}/${start + 1}`;
+    assert.equal(descriptorIds(records).length, 2, `${state}: both branches need a descriptor record`);
+    const keyRecords = [...records.entries()].filter(([key]) => key.includes("77616c6c657464657363726970746f726b6579"));
+    assert.equal(keyRecords.length, 2, `${state}: one key record per exported branch`);
+    for (const [key, value] of keyRecords) {
+      assert.ok(key.endsWith("21" + accountPubkey), `${state}: the key record names the account key`);
+      assert.ok(value.includes(accountSecret), `${state}: the key record carries the account secret`);
+    }
+    // DESCRIPTORS | BLANK, not DESCRIPTORS | BLANK | DISABLE_PRIVATE_KEYS.
+    assert.equal(records.get("05666c616773"), "0000000006000000", `${state}: the file advertises private keys`);
+  }
+});
+
 // Regression for the Harden branch option: the watch-only descriptor is
 // "wpkh([fp/84h/0h/0h/0h]xpubBranch/*)" — the branch xpub IS the descriptor
 // root key. Core caches the root key itself when the path after it is empty

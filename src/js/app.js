@@ -1835,8 +1835,13 @@ function hodlWalletExportView(wallet) {
   if (wallet?.kind !== "hd") return wallet;
   return { ...wallet, accounts: wallet.accounts.map((account) => {
     if (!account.privateNode) return account;
+    // Every exported branch needs its own private descriptor: a window can
+    // start at 1 or 2, and selecting only branches 0/1 left those branches
+    // with no key record (AR-03). The receive/change pair stays for the
+    // legacy rows-only shape.
+    let addressBranches = account.addressBranches?.map((entry) => ({ ...entry, privateDescriptor: hodlBranchPrivateDescriptor(account, entry.branch) }));
     let descriptor = (branch) => account.addressBranches?.some((entry) => entry.branch === branch) ? hodlBranchPrivateDescriptor(account, branch) : null;
-    return { ...account, receiveDescriptorPriv: descriptor(0), changeDescriptorPriv: descriptor(1) };
+    return { ...account, addressBranches, receiveDescriptorPriv: descriptor(0), changeDescriptorPriv: descriptor(1) };
   }) };
 }
 function hodlWalletDatControl(includePrivate) {
@@ -7353,7 +7358,7 @@ function hodlInvalidateLiveKeyResult() {
   if (!state) return;
   // Sessions cloned from a committed key must not keep deriving from a root
   // this edit just discarded.
-  if (!state.isLab && state.result) hodlReleaseKeyConsumers(state.id, state.result.masterFingerprint || "");
+  if (!state.isLab && state.result) hodlReleaseKeyConsumers(state.id);
   state.result = null;
   state.reveal = false;
   hodlWalletResult = null;
@@ -7371,7 +7376,7 @@ function hodlRetractBrainWalletResults(output) {
     if (state?.result?.brainWalletOutput !== output) continue;
     // The stations cloned this brain-derived root; retracting the wallet
     // without releasing them leaves a key the app says it withdrew.
-    hodlReleaseKeyConsumers(state.id, state.result.masterFingerprint || "");
+    hodlReleaseKeyConsumers(state.id);
     state.result = null;
     state.reveal = false;
   }
@@ -11503,7 +11508,12 @@ function hodlRunBip85() {
     result = deriveApplication(hodlBip85Root, hodlBip85Spec());
     let fingerprint = hodlBip85ChildFingerprint(result);
     let state = { isLab: false, id: hodlNextBip85ChildId++, name: fingerprint.value, result, reveal: false, fingerprint: fingerprint.value, fingerprintKind: fingerprint.kind, network: hodlBip85Testnet ? "testnet" : "mainnet",
-      parentFingerprint: hodlBip85Root ? hodlFingerprintHex(hodlBip85Root.fingerprint) : "" };
+      // The parent's identity, not just its fingerprint: two different roots
+      // can share a 32-bit fingerprint, and releasing one must not take the
+      // other's children (AR-05). The source names the Key Station tab or the
+      // BIP-85 child session the root came from.
+      parentFingerprint: hodlBip85Root ? hodlFingerprintHex(hodlBip85Root.fingerprint) : "",
+      parentSource: hodlBip85Source || "manual" };
     hodlBip85Children.push(state);
     hodlActiveBip85 = hodlBip85Children.length - 1;
     hodlBip85Result = state.result;
@@ -13337,7 +13347,7 @@ function hodlKeyManagerIgnore(state) {
   hodlKeyManagerIgnored.push(hodlKeyManagerEntry(state));
   // The Ignored copy was taken first; the station's own secret material and
   // every session cloned from it now go (#1000 audit follow-up).
-  if (station >= 0) hodlReleaseKeyConsumers(state.id, state.result?.masterFingerprint || "");
+  if (station >= 0) hodlReleaseKeyConsumers(state.id);
   hodlZeroKeyPassphrase(state);
   hodlKeyManagerIds.delete(identity);
   hodlKeyManagerActiveId = "";
@@ -13363,7 +13373,7 @@ function hodlKeyManagerDetachFromStation(state) {
   let identity = keyVaultIdentity(state), index = hodlKeys.indexOf(state);
   if (index < 0) return;
   hodlCaptureKey();
-  hodlReleaseKeyConsumers(state.id, state.result?.masterFingerprint || "");
+  hodlReleaseKeyConsumers(state.id);
   hodlKeys.splice(index, 1);
   if (!hodlKeyManagerPending.some((candidate) => keyVaultIdentity(candidate) === identity)) hodlKeyManagerPending.push(state);
   if (hodlActiveKey > index) hodlActiveKey--;
@@ -13389,7 +13399,7 @@ function hodlKeyManagerReset() {
   let live = hodlLiveWalletResults();
   // The session roots cloned from a detached key are not part of the key
   // itself: release them before the key's own bytes are zeroed.
-  hodlKeyManagerPending.forEach((state) => hodlReleaseKeyConsumers(state.id, state.result?.masterFingerprint || ""));
+  hodlKeyManagerPending.forEach((state) => hodlReleaseKeyConsumers(state.id));
   hodlKeyManagerPending.forEach((state) => hodlKeyManagerWipeValue(state, new Set(live)));
   hodlKeyManagerIgnored.forEach((state) => hodlKeyManagerWipeValue(state));
   hodlKeyManagerIds.clear();
@@ -13526,7 +13536,7 @@ function hodlCommitDerivedKey(action = "derive") {
     // otherwise keep deriving and verifying under it while their picker and
     // session line still name this tab.
     if (hodlKeyWalletIdentity(previous.result) !== hodlKeyWalletIdentity(updated.result)) {
-      hodlReleaseKeyConsumers(previous.id, previous.result?.masterFingerprint || "");
+      hodlReleaseKeyConsumers(previous.id, { keepVanity: hodlVanityApplying });
     }
     hodlZeroKeyPassphrase(previous);
     hodlKeys[existing] = updated;
@@ -13744,7 +13754,7 @@ function hodlWipeActiveKey() {
   let state = hodlKeys[hodlActiveKey];
   // Clear replaces the derived material, so the sessions cloned from it go
   // too, and the passphrase bytes are zeroed rather than left to GC.
-  hodlReleaseKeyConsumers(state.id, state.result?.masterFingerprint || "");
+  hodlReleaseKeyConsumers(state.id);
   hodlZeroKeyPassphrase(state);
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
@@ -14305,15 +14315,22 @@ function hodlReleaseBip85ChildSource(state) {
     hodlVanitySource = "";
     hodlVanitySyncSource();
   }
+  // Everything this child's session key fed — a deeper BIP-85 child, a PSBT
+  // or Silent Payments session — goes with the child (AR-05).
+  hodlDropBip85ChildrenOf(source);
 }
 // Drop only the children this parent derived. hodlBip85WipeMem is the
 // station-wide lifetime wipe and would take another live key's children with
-// it, leaving their own consumers behind.
-function hodlDropBip85ChildrenOf(parentFingerprint) {
-  if (!parentFingerprint) return;
+// it, leaving their own consumers behind. The parent is identified by source,
+// not by its 32-bit fingerprint: two different roots can share one, and a
+// fingerprint match used to release the unrelated parent's child (AR-05).
+function hodlDropBip85ChildrenOf(parentSource) {
+  if (!parentSource) return;
   let removed = false;
   for (let state of [...hodlBip85Children]) {
-    if (state.isLab || state.parentFingerprint !== parentFingerprint) continue;
+    // A transitive release below may already have taken this state.
+    if (!hodlBip85Children.includes(state)) continue;
+    if (state.isLab || state.parentSource !== parentSource) continue;
     hodlReleaseBip85ChildSource(state);
     hodlBip85DropChild(state);
     let index = hodlBip85Children.indexOf(state);
@@ -14327,9 +14344,8 @@ function hodlDropBip85ChildrenOf(parentFingerprint) {
   hodlRenderBip85Tabs();
   hodlSyncBip85View();
 }
-function hodlReleaseKeyConsumers(keyId, parentFingerprint = "") {
+function hodlReleaseKeyConsumers(keyId, options = {}) {
   let source = "key:" + keyId;
-  if (!parentFingerprint) parentFingerprint = hodlKeys.find((state) => state.id === keyId)?.result?.masterFingerprint || "";
   if (hodlPsbtSource === source) {
     hodlPsbtWipeMem();
     hodlPaintPsbtSession();
@@ -14341,7 +14357,7 @@ function hodlReleaseKeyConsumers(keyId, parentFingerprint = "") {
     if (field) field.value = "";
     hodlSyncBip85Parent();
   }
-  hodlDropBip85ChildrenOf(parentFingerprint);
+  hodlDropBip85ChildrenOf(source);
   hodlSpDropAddressesFrom(source);
   if (hodlSpSource === source) {
     hodlSpWipeKeys();
@@ -14357,9 +14373,10 @@ function hodlReleaseKeyConsumers(keyId, parentFingerprint = "") {
     hodlPaintSpSession(hodlSpNote);
   }
   // A vanity Update key re-derives the key whose id this session names while
-  // the apply is still running. Releasing it here would wipe the match table
-  // the apply is about to annotate; the apply refreshes the session itself.
-  if (hodlVanitySource === source && !hodlVanityApplying) {
+  // the apply is still running. Only that successful update may keep the run:
+  // it is passed explicitly as { keepVanity: true }, so a delete, wipe,
+  // ignore or detach during the apply still releases it (AR-06).
+  if (hodlVanitySource === source && !options.keepVanity) {
     hodlVanityCancel();
     hodlVanityClearResults();
     hodlVanitySource = "";
@@ -14382,7 +14399,7 @@ function hodlDeleteActiveKey() {
   }
   let deletedIndex = hodlActiveKey, deletedState = state;
   hodlZeroKeyPassphrase(deletedState);
-  hodlReleaseKeyConsumers(deletedState.id, deletedState.result?.masterFingerprint || "");
+  hodlReleaseKeyConsumers(deletedState.id);
   hodlKeys.splice(deletedIndex, 1);
   hodlNextKeyNumber = hodlKeys.length ? hodlKeys.reduce((latest, state) => Math.max(latest, state.number), 0) + 1 : deletedState.number;
   if (!hodlKeys.length) {
@@ -17517,10 +17534,13 @@ async function hodlVanityApplyMatch(index) {
     return;
   }
   hodlVanityApplying = true;
-  hodlRenderVanityOut();
-  hodlVanitySyncControls();
   let lab = hodlKeys.find((candidate) => candidate.isLab) || null;
   try {
+    // Inside the try: a render exception must still reach the `finally` that
+    // clears the applying flag, or the session stays marked as mid-apply and
+    // suppresses its own cleanup for the rest of the page's life (AR-06).
+    hodlRenderVanityOut();
+    hodlVanitySyncControls();
     let labIndex = hodlFillLabFromKey(state), draft = hodlKeys[labIndex];
     draft.fields.pass = hodlStoredPassphraseBytes(match.passphrase);
     let definition = hodlScriptTypes.find((candidate) => candidate.script === run.script);

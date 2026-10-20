@@ -40,17 +40,27 @@ pub(crate) const WARNING: &str = "warning";
 // signatures are reported unchecked instead — the same budgeted shape the
 // sanitize pass uses (a 5 MB hostile PSBT must not freeze the editor).
 const MAX_SIGNATURE_CHECKS: usize = 256;
+// A legacy signature hash re-serializes the whole transaction, so their work
+// is bounded by bytes hashed rather than by signature count alone. 32 MiB
+// admits every ordinary wallet (a 100-input consolidation at ~4 KiB per
+// digest uses ~400 KiB) while keeping a hostile multisig document from hashing
+// gigabytes; the two budgets fail independently.
+const MAX_LEGACY_DIGEST_BYTES: usize = 32 * 1024 * 1024;
 const _: () = assert!(1 << scriptcode::MAX_MULTISIG_COMPANIONS <= MAX_SIGNATURE_CHECKS);
 const _: () = assert!(
     scriptcode::MAX_STARTS <= MAX_SIGNATURE_CHECKS,
     "every start the analysis lists must be checkable within the budget"
 );
 
-/// The verification budget: `take()` returns false once exhausted, and the
-/// caller notes the exhaustion in the problem list exactly once.
+/// The verification budget: `take()` bounds the number of signatures and
+/// `take_digest()` the bytes hashed by legacy sighashes. Each returns false
+/// once its own budget is exhausted, and the caller notes the exhaustion in
+/// the problem list exactly once.
 struct Budget {
     left: usize,
     noted: bool,
+    digest_left: usize,
+    digest_noted: bool,
 }
 
 /// One script's separator analysis, memoized for the whole run: every
@@ -97,22 +107,15 @@ fn tapscript_leaves(map: &[RawPair]) -> BTreeMap<TapLeafHash, &[u8]> {
 }
 
 impl Budget {
-    fn take(&mut self, problems: &mut Vec<Problem>) -> bool {
-        self.take_units(1, problems)
+    fn new() -> Self {
+        Self { left: MAX_SIGNATURE_CHECKS, noted: false, digest_left: MAX_LEGACY_DIGEST_BYTES, digest_noted: false }
     }
 
-    /// Takes `units` at once: a legacy signature hash re-serializes the whole
-    /// transaction, so its cost is charged by size rather than counted as one
-    /// signature. Takes nothing and fails when fewer units remain.
-    fn take_units(&mut self, units: usize, problems: &mut Vec<Problem>) -> bool {
-        if units == 0 {
+    fn take(&mut self, problems: &mut Vec<Problem>) -> bool {
+        if self.left > 0 {
+            self.left -= 1;
             return true;
         }
-        if self.left >= units {
-            self.left -= units;
-            return true;
-        }
-        self.left = 0;
         if !self.noted {
             self.noted = true;
             // Error severity: past the budget the document is not fully
@@ -122,6 +125,27 @@ impl Budget {
                 "transaction".into(),
                 "verification_budget",
                 format!("verification budget exhausted after {MAX_SIGNATURE_CHECKS} signature checks — later signatures are unchecked"),
+            ));
+        }
+        false
+    }
+
+    /// Charges the bytes a legacy signature hash re-serializes. Called at
+    /// every digest the multisig/codeseparator enumeration would compute,
+    /// not once per signature: each candidate is another full transaction
+    /// hash. Takes nothing and fails when fewer bytes remain.
+    fn take_digest(&mut self, bytes: usize, problems: &mut Vec<Problem>) -> bool {
+        if bytes <= self.digest_left {
+            self.digest_left -= bytes;
+            return true;
+        }
+        self.digest_left = 0;
+        if !self.digest_noted {
+            self.digest_noted = true;
+            problems.push(Problem::error(
+                "transaction".into(),
+                "verification_budget",
+                format!("verification budget exhausted after {} MiB of legacy signature hashing — later signatures are unchecked", MAX_LEGACY_DIGEST_BYTES / (1024 * 1024)),
             ));
         }
         false
@@ -375,16 +399,10 @@ fn check_ecdsa(
         // or a future witness version: nothing to hash.
         Spend::P2wsh(None) | Spend::WrappedP2wsh(_, None) | Spend::P2tr(_) | Spend::Unknown | Spend::UnknownWitness => return None,
     };
-    // A legacy sign on every input re-serializes the whole transaction for each
-    // candidate scriptCode: charge it by size so the signature budget cannot
-    // become 256 full-transaction hashes on a hostile document. Witness v0
-    // digests reuse SighashCache's amortized midstate, so they stay per-signature.
-    if matches!(version, SigVersion::Legacy) {
-        let kib = cache.transaction().total_size() / 1024;
-        if kib > 0 && !budget.take_units(kib, problems) {
-            return None;
-        }
-    }
+    // A legacy sign re-serializes the whole transaction for each candidate
+    // scriptCode. Each digest is charged its transaction size inside the loop
+    // below; witness v0 hashes one candidate per signature, so the signature
+    // budget alone bounds them.
     let shape = starts_memo.get(script, scriptcode::code_starts);
     let starts = match &*shape {
         scriptcode::Shape::Starts(starts) if starts.is_empty() => {
@@ -449,6 +467,9 @@ fn check_ecdsa(
                 return None;
             }
             seen.push(id);
+            if matches!(version, SigVersion::Legacy) && !budget.take_digest(cache.transaction().total_size(), problems) {
+                return None;
+            }
             let digest = ecdsa_digest(cache, index, version, &code, claim.value, hash_type)?;
             let message = Message::from_digest_slice(&digest).expect("a sighash is 32 bytes");
             if secp.verify_ecdsa(&message, &signature, &pubkey).is_ok() {
@@ -817,7 +838,17 @@ fn check_final_scriptsig(
             // and the input then needs its final witness.
             let wrapped = matches!(spend, Spend::WrappedP2wpkh(_) | Spend::WrappedP2wsh(..));
             if wrapped {
-                let ok = script_pushes(script).is_some_and(|p| p.len() == 1 && matches!(spend, Spend::WrappedP2wpkh(r) | Spend::WrappedP2wsh(r, _) if p[0] == *r.as_bytes()));
+                // BIP-141 requires the scriptSig to be exactly the canonical
+                // single push of the redeemScript. `script_pushes` accepts
+                // non-minimal encodings for legacy consensus reads, so it
+                // cannot decide this: compare the bytes instead.
+                let redeem = match spend {
+                    Spend::WrappedP2wpkh(redeem) | Spend::WrappedP2wsh(redeem, _) => redeem,
+                    _ => unreachable!(),
+                };
+                let mut canonical = ScriptBuf::new();
+                canonical.push_slice(redeem.as_bytes());
+                let ok = script.as_bytes() == canonical.as_bytes();
                 if !ok {
                     problems.push(Problem::error(
                         scope.clone(),
@@ -933,13 +964,24 @@ fn check_final_witness(
                 ));
                 return;
             }
-            if items[1].len() != 33 {
+            // Consensus reads v0 witnesses under no compressed-key rule;
+            // compressed keys are a relay/mining policy requirement. Accept
+            // 65-byte keys that hash to the program and verify, and name the
+            // policy difference rather than refusing a valid spend.
+            if items[1].len() != 33 && items[1].len() != 65 {
                 problems.push(Problem::error(
                     scope.clone(),
                     "final_witness_bad",
-                    "P2WPKH final witness public key must be 33 bytes (compressed)",
+                    "P2WPKH final witness public key must be 33 or 65 bytes",
                 ));
                 return;
+            }
+            if items[1].len() == 65 {
+                problems.push(Problem::warning(
+                    scope.clone(),
+                    "witness_pubkey_uncompressed",
+                    "P2WPKH final witness uses an uncompressed public key: consensus-valid when it verifies, but non-standard (relay/mining policy)",
+                ));
             }
             if hash160::Hash::hash(items[1]).to_byte_array()[..] != program[..] {
                 problems.push(Problem::error(
@@ -1156,7 +1198,7 @@ pub(crate) fn analyze(tx: &Transaction, inputs: &[Vec<RawPair>]) -> Vec<Problem>
         .collect();
 
     let mut cache = SighashCache::new(tx);
-    let mut budget = Budget { left: MAX_SIGNATURE_CHECKS, noted: false };
+    let mut budget = Budget::new();
     let mut starts_memo = AnalysisMemo { script: None, result: None };
     let mut tap_memo = TapscriptMemo::new();
     for (index, map) in inputs.iter().enumerate() {
@@ -1459,7 +1501,7 @@ mod tests {
         let claim = three_starts_two_codes(&pubkey);
         // Signed over a code no start produces: every candidate is tried.
         let (_, sig) = sign_code(&tx, &[0xac], 1);
-        let mut budget = Budget { left: 10, noted: false };
+        let mut budget = Budget { left: 10, ..Budget::new() };
         let mut problems = Vec::new();
         let mut cache = SighashCache::new(&tx);
         let mut memo = AnalysisMemo { script: None, result: None };
@@ -1480,7 +1522,7 @@ mod tests {
         let whole = [&[0x63, 0x68, 0x21][..], &pubkey, &[0xac]].concat();
         // Valid only for the second candidate, with no budget left for it.
         let (_, sig) = sign_code(&tx, &past_separator, 1);
-        let mut budget = Budget { left: 0, noted: false };
+        let mut budget = Budget { left: 0, ..Budget::new() };
         let mut problems = Vec::new();
         let mut cache = SighashCache::new(&tx);
         let mut memo = AnalysisMemo { script: None, result: None };
@@ -1489,7 +1531,7 @@ mod tests {
         // Valid for the first candidate: verified without touching the budget.
         let (_, sig) = sign_code(&tx, &whole, 1);
         let mut problems = Vec::new();
-        let mut budget = Budget { left: 0, noted: false };
+        let mut budget = Budget { left: 0, ..Budget::new() };
         let mut memo = AnalysisMemo { script: None, result: None };
         assert_eq!(check_ecdsa(&mut cache, 0, &Spend::Legacy, &claim, &pubkey, &sig, &mut budget, &mut problems, &mut memo), Some(Ok(())));
         assert!(problems.is_empty());
@@ -1511,7 +1553,7 @@ mod tests {
         let claim = TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(script) };
         let map = vec![pair(&format!("02{}", hex_encode(&pubkey)), &hex_encode(&sig))];
         let mut problems = Vec::new();
-        let mut budget = Budget { left: MAX_SIGNATURE_CHECKS, noted: false };
+        let mut budget = Budget::new();
         let mut cache = SighashCache::new(&tx);
         let mut memo = AnalysisMemo { script: None, result: None };
         check_partial_sigs(&mut cache, 0, &map, &Spend::Legacy, &claim, None, &mut budget, &mut problems, &mut memo);
@@ -1658,6 +1700,50 @@ mod tests {
         assert!(gate_error(&tx, &[badmap()]).is_some());
     }
 
+    /// An uncompressed key in a v0 witness is consensus-valid when it hashes
+    /// to the program and its signature verifies; compressed-only is relay
+    /// policy. It must be a warning, not an error that blocks export.
+    #[test]
+    fn an_uncompressed_p2wpkh_final_witness_verifies_with_a_policy_warning() {
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey = bitcoin::PublicKey::new_uncompressed(key.public_key(&secp));
+        let (tx, _) = fixture();
+        let claim = TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::hash(&pubkey.to_bytes())),
+        };
+        let mut cache = SighashCache::new(&tx);
+        let sighash = cache
+            .p2wpkh_signature_hash(0, &claim.script_pubkey, claim.value, EcdsaSighashType::All)
+            .unwrap();
+        let message = Message::from_digest_slice(&sighash.to_byte_array()).unwrap();
+        let sig = secp.sign_ecdsa(&message, &key);
+        let mut sig_bytes = sig.serialize_der().to_vec();
+        sig_bytes.push(0x01);
+        let witness = Witness::from_slice(&[sig_bytes.clone(), pubkey.to_bytes()]);
+        let map = vec![
+            pair("01", &witness_utxo_value(&claim)),
+            pair("08", &hex_encode(&encode::serialize(&witness))),
+        ];
+        let problems = analyze(&tx, &[map]);
+        assert!(!problems.iter().any(|p| p.severity == ERROR), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.code == "witness_pubkey_uncompressed" && p.severity == WARNING),
+            "{problems:?}"
+        );
+        assert!(gate_error(&tx, &[vec![pair("01", &witness_utxo_value(&claim)), pair("08", &hex_encode(&encode::serialize(&witness)))]]).is_none());
+
+        // A key that is neither compressed nor uncompressed is malformed.
+        let bad = Witness::from_slice(&[sig_bytes, vec![2u8; 32]]);
+        let badmap = vec![
+            pair("01", &witness_utxo_value(&claim)),
+            pair("08", &hex_encode(&encode::serialize(&bad))),
+        ];
+        let problems = analyze(&tx, &[badmap]);
+        assert!(problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR), "{problems:?}");
+    }
+
     /// A final scriptSig alone is not a spend: a native witness program is
     /// spent by its witness, and without one the input has no spend at all.
     #[test]
@@ -1703,20 +1789,37 @@ mod tests {
         );
     }
 
-    /// A legacy signature is charged by transaction size, so the budget can be
-    /// spent in one digest; it must clamp at zero and note exhaustion once.
+    /// Legacy hashing is charged at every digest, so a multisig
+    /// companion explosion cannot spend one signature unit per hash. The
+    /// digest budget is separate from the signature-count budget and notes
+    /// exhaustion once.
     #[test]
-    fn the_budget_charges_units_without_underflowing() {
+    fn the_digest_budget_charges_every_legacy_digest() {
         let mut problems = Vec::new();
-        let mut budget = Budget { left: 3, noted: false };
-        assert!(budget.take_units(2, &mut problems));
-        assert_eq!(budget.left, 1);
-        assert!(!budget.take_units(2, &mut problems));
-        assert_eq!(budget.left, 0);
+        let mut budget = Budget { digest_left: 3_000, ..Budget::new() };
+        assert!(budget.take_digest(1_000, &mut problems));
+        assert_eq!(budget.digest_left, 2_000);
+        assert!(budget.take_digest(2_000, &mut problems));
+        assert_eq!(budget.digest_left, 0);
+        assert!(!budget.take_digest(1, &mut problems));
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].code, "verification_budget");
-        assert!(!budget.take_units(1, &mut problems));
+        assert!(!budget.take_digest(1, &mut problems));
         assert_eq!(problems.len(), 1, "exhaustion is noted once");
+        // The signature-count budget is untouched by digest work.
+        assert_eq!(budget.left, MAX_SIGNATURE_CHECKS);
+    }
+
+    /// An ordinary consolidation must not hit the digest budget: the largest
+    /// realistic transaction (100 inputs, ~4 KiB unsigned) with all 256
+    /// signatures checked stays well under it.
+    #[test]
+    fn an_ordinary_consolidation_stays_inside_the_digest_budget() {
+        let per_digest = 4 * 1024;
+        assert!(
+            MAX_SIGNATURE_CHECKS * per_digest < MAX_LEGACY_DIGEST_BYTES,
+            "the digest budget must admit a 100-input, 256-signature consolidation"
+        );
     }
 
     /// A P2SH-P2WPKH input: the claim is the P2SH wrapper, so the witness
@@ -1755,6 +1858,22 @@ mod tests {
         let problems = analyze(&tx, &[map]);
         assert!(problems.is_empty(), "{problems:?}");
 
+        // BIP-141 requires the scriptSig to be exactly the canonical push.
+        // A non-minimal PUSHDATA1 of the same redeemScript is not that spend,
+        // even though consensus reads non-minimal pushes in legacy scripts.
+        let non_minimal = ScriptBuf::from_bytes([[0x4c, redeem.as_bytes().len() as u8].as_slice(), redeem.as_bytes()].concat());
+        let slowmap = || {
+            vec![
+                pair("01", &witness_utxo_value(&claim)),
+                pair("04", &hex_encode(redeem.as_bytes())),
+                pair("07", &hex_encode(non_minimal.as_bytes())),
+                pair("08", &hex_encode(&encode::serialize(&witness))),
+            ]
+        };
+        let problems = analyze(&tx, &[slowmap()]);
+        assert!(problems.iter().any(|p| p.code == "final_scriptsig_bad" && p.severity == ERROR), "{problems:?}");
+        assert!(gate_error(&tx, &[slowmap()]).is_some());
+
         // The claim wraps a different key's program: the same witness must be named.
         let other_key = SecretKey::from_slice(&[2u8; 32]).unwrap();
         let other_redeem = ScriptBuf::new_p2wpkh(&bitcoin::PublicKey::new(other_key.public_key(&secp)).wpubkey_hash().unwrap());
@@ -1774,6 +1893,36 @@ mod tests {
         let problems = analyze(&tx, &[badmap()]);
         assert!(problems.iter().any(|p| p.code == "final_witness_bad" && p.severity == ERROR));
         assert!(gate_error(&tx, &[badmap()]).is_some());
+    }
+
+    /// BIP-141's exact-push rule holds for P2SH-P2WSH too: the canonical
+    /// 34-byte push passes, a PUSHDATA1 encoding of the same redeemScript is
+    /// a consensus-invalid scriptSig.
+    #[test]
+    fn a_wrapped_p2wsh_requires_the_canonical_redeem_push() {
+        let (tx, _) = fixture();
+        let witness_script = ScriptBuf::from_bytes(vec![0x51]);
+        let redeem = ScriptBuf::new_p2wsh(&witness_script.wscript_hash());
+        let claim = TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2sh(&redeem.script_hash()),
+        };
+        let witness = Witness::from_slice(&[witness_script.as_bytes()]);
+        let canonical = ScriptBuf::from_bytes([[redeem.as_bytes().len() as u8].as_slice(), redeem.as_bytes()].concat());
+        let non_minimal = ScriptBuf::from_bytes([[0x4c, redeem.as_bytes().len() as u8].as_slice(), redeem.as_bytes()].concat());
+        let map = |script_sig: &ScriptBuf| {
+            vec![
+                pair("01", &witness_utxo_value(&claim)),
+                pair("04", &hex_encode(redeem.as_bytes())),
+                pair("07", &hex_encode(script_sig.as_bytes())),
+                pair("08", &hex_encode(&encode::serialize(&witness))),
+            ]
+        };
+        let problems = analyze(&tx, &[map(&canonical)]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let problems = analyze(&tx, &[map(&non_minimal)]);
+        assert!(problems.iter().any(|p| p.code == "final_scriptsig_bad" && p.severity == ERROR), "{problems:?}");
+        assert!(gate_error(&tx, &[map(&non_minimal)]).is_some());
     }
 
     #[test]

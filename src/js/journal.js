@@ -754,7 +754,15 @@ async function sealPlainText(plainText, keys) {
     try {
       const iv = tag.slice(0, IV_BYTES);
       const ciphertext = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, keys.encKey, plain));
-      return encodeFile({ iv, ciphertext, iterations: keys.iterations });
+      const file = encodeFile({ iv, ciphertext, iterations: keys.iterations });
+      // parseFile caps the text it is handed, and every download writes
+      // JSON.stringify(file, null, 2) + "\n": a plaintext under the cap can
+      // still grow past the file cap through UTF-8 expansion and hex coding.
+      // Refuse here so a save never produces a file the reader rejects.
+      if (JSON.stringify(file, null, 2).length + 1 > JOURNAL_MAX_FILE_LENGTH) {
+        throw new Error("The journal is too large to save as one file.");
+      }
+      return file;
     } finally {
       wipeBytes(tag);
     }
