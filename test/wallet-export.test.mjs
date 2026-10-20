@@ -574,6 +574,30 @@ test("a BIP 45 result hides the wallet.dat and BIP 388 controls but keeps Core J
   assert.match(ui.msigBip388Markup(), /id="msig-save-bip388"/);
 });
 
+// The writer reads every co-signer's tail, not only the first: the Multisig
+// station honours a co-signer's trailing path ("…xpub/5" composes as
+// "…xpub/5/0/*"), so one deep key after the first must hide the controls too.
+const mixedTailBody = (branch) => `wsh(sortedmulti(2,${msigKey(0)}/${branch}/*,${msigKey(1)}/5/${branch}/*,${msigKey(2)}/${branch}/*))`;
+const MIXED_TAIL_WALLET = {
+  ...MSIG_WALLET,
+  receiveDescriptor: `${mixedTailBody(0)}#${descriptorChecksum(mixedTailBody(0))}`,
+  changeDescriptor: `${mixedTailBody(1)}#${descriptorChecksum(mixedTailBody(1))}`,
+};
+
+test("a deep tail on a later co-signer is unsupported too (R1003-2)", () => {
+  const { walletDatSupported, bip388Supported, buildWalletRecords } = loadModule();
+  assert.throws(() => buildWalletRecords(MIXED_TAIL_WALLET, false, msigDeps, 0), /unsupported descriptor path shape/, "the writer refuses the second co-signer's tail");
+  assert.equal(walletDatSupported(MIXED_TAIL_WALLET), false);
+  assert.equal(bip388Supported(MIXED_TAIL_WALLET), false);
+
+  ui.setResult(MIXED_TAIL_WALLET, false);
+  const json = ui.hodlMsigCoreImportDescriptorsMarkup();
+  assert.match(json, /id="msig-save-importdescriptors"/, "Core JSON still exports the shape");
+  assert.doesNotMatch(json, /id="msig-download-wallet-dat"/);
+  assert.equal(ui.msigBip388Markup(), "");
+  ui.setResult(MSIG_WALLET, false);
+});
+
 const msigDeps = {
   ...deps,
   canonicalizeDescriptor: (descriptor) => canonicalizeWatchDescriptor(descriptor, { decode: b58checkDecode, encode: b58checkEncode }),

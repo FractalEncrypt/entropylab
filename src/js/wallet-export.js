@@ -323,14 +323,20 @@ var hodlWalletExport = (() => {
   // Descriptor tails the wallet.dat writer can place: a wildcard at the branch
   // level ("…/*") or one branch step above it ("…/0/*"). A BIP 45 two-step
   // tail ("…/0/0/*") is refused by descriptorKeyTail, so the control would
-  // otherwise render and only fail on click.
+  // otherwise render and only fail on click. Every co-signer is read, as the
+  // writer reads them: a deep tail on any key, not only the first, refuses.
   const tailsSupported = (wallet, branches = null) => {
     const units = walletDescriptorUnits(wallet, false);
     if (!units.length) return false;
     try {
       for (const unit of units) {
-        const tail = descriptorKeyTail(unit.descriptor, extractExtendedKey(unit.descriptor, "key"));
-        if (branches && !branches.includes(tail.branch)) return false;
+        const keys = unit.multiKey ? extractExtendedPubs(unit.descriptor) : [extractExtendedKey(unit.descriptor, "key")];
+        if (!keys.length) return false;
+        for (const key of keys) {
+          const tail = descriptorKeyTail(unit.descriptor, key);
+          if (tail.hardened) return false;
+          if (branches && !branches.includes(tail.branch)) return false;
+        }
       }
       return true;
     } catch {
