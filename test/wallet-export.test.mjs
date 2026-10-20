@@ -524,6 +524,43 @@ const MSIG_WALLET = {
   receive: [{ index: 0 }, { index: 1 }],
   change: [{ index: 0 }, { index: 1 }],
 };
+
+// BIP 45 puts two steps between the key and the wildcard ("…/0/0/*"). The
+// wallet.dat exporter reads one branch step above the wildcard and the BIP 388
+// builder only rewrites "/0/*" and "/1/*", so both refuse that shape while the
+// Core importdescriptors JSON still handles it. The controls must follow suit
+// instead of only failing on click.
+const bip45Body = `wsh(sortedmulti(1,${msigKey(0)}/0/0/*))`;
+const BIP45_WALLET = {
+  ...MSIG_WALLET,
+  receiveDescriptor: `${bip45Body}#${descriptorChecksum(bip45Body)}`,
+  changeDescriptor: `${bip45Body}#${descriptorChecksum(bip45Body)}`,
+};
+
+test("an unsupported descriptor tail is reported, not left to throw on click", () => {
+  const { walletDatSupported, bip388Supported } = loadModule();
+  assert.equal(walletDatSupported(MSIG_WALLET), true, "a /0/* /1/* multisig is still exportable");
+  assert.equal(walletDatSupported(WATCH_ONLY_WALLET), true);
+  assert.equal(walletDatSupported(BIP45_WALLET), false, "wallet.dat cannot place a two-step tail");
+  assert.equal(walletDatSupported({ kind: "hd", network: "mainnet", accounts: [] }), false, "nothing to export");
+  assert.equal(bip388Supported(MSIG_WALLET), true);
+  assert.equal(bip388Supported(BIP45_WALLET), false, "BIP 388 only rewrites /0/* and /1/*");
+});
+
+test("a BIP 45 result hides the wallet.dat and BIP 388 controls but keeps Core JSON", () => {
+  ui.setResult(BIP45_WALLET, false);
+  const json = ui.hodlMsigCoreImportDescriptorsMarkup();
+  assert.match(json, /id="msig-save-importdescriptors"/);
+  assert.match(json, /id="msig-copy-importdescriptors"/);
+  assert.doesNotMatch(json, /id="msig-download-wallet-dat"/);
+  assert.doesNotMatch(json, /data-wallet-dat-birthday/);
+  assert.equal(ui.msigBip388Markup(), "");
+
+  ui.setResult(MSIG_WALLET, false);
+  assert.match(ui.hodlMsigCoreImportDescriptorsMarkup(), /id="msig-download-wallet-dat"/);
+  assert.match(ui.msigBip388Markup(), /id="msig-save-bip388"/);
+});
+
 const msigDeps = {
   ...deps,
   canonicalizeDescriptor: (descriptor) => canonicalizeWatchDescriptor(descriptor, { decode: b58checkDecode, encode: b58checkEncode }),

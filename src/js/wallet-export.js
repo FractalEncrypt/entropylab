@@ -320,6 +320,27 @@ var hodlWalletExport = (() => {
   // the file does not contain (issue #366).
   const hasPrivateDescriptors = (wallet) => walletDescriptorUnits(wallet, true).some((unit) => unit.privateDescriptor);
 
+  // Descriptor tails the wallet.dat writer can place: a wildcard at the branch
+  // level ("…/*") or one branch step above it ("…/0/*"). A BIP 45 two-step
+  // tail ("…/0/0/*") is refused by descriptorKeyTail, so the control would
+  // otherwise render and only fail on click.
+  const tailsSupported = (wallet, branches = null) => {
+    const units = walletDescriptorUnits(wallet, false);
+    if (!units.length) return false;
+    try {
+      for (const unit of units) {
+        const tail = descriptorKeyTail(unit.descriptor, extractExtendedKey(unit.descriptor, "key"));
+        if (branches && !branches.includes(tail.branch)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const walletDatSupported = (wallet) => tailsSupported(wallet);
+  // The BIP 388 builder rewrites only "/0/*" and "/1/*".
+  const bip388Supported = (wallet) => tailsSupported(wallet, [0, 1]);
+
   // Builds the exact key/value rows of the `main` table.
   // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate }
   const buildWalletRecords = (wallet, includePrivate, deps, creationTime) => {
@@ -475,6 +496,8 @@ var hodlWalletExport = (() => {
     walletDescriptorUnits,
     hasDescriptors,
     hasPrivateDescriptors,
+    walletDatSupported,
+    bip388Supported,
     buildWalletRecords,
     buildWalletDat,
     walletDatFilename,

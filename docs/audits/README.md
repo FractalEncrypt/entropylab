@@ -89,7 +89,7 @@ fixed on this branch.
 | bip352 zero label tweak | Accepted open | `bip352.js:83-88,286-298` |
 | Lone-surrogate passphrase | Accepted open | `bip39.js:102-112` |
 | PBKDF2 iteration wrap | Not a product vulnerability | sole caller uses 2048 |
-| BIP45 export buttons on unsupported shapes | Accepted open | `app.js:2191-2222` |
+| BIP45 export buttons on unsupported shapes | Fixed | wallet.dat and BIP 388 controls gate on `walletDatSupported`/`bip388Supported`, Core JSON stays; `test/wallet-export.test.mjs` |
 | HD wallet.dat path lacking msig xprv refusal | Not a product vulnerability | descriptors kept separate |
 | `release-assets.yml` persists checkout credentials | Accepted open | `release-assets.yml:21-30` |
 | Armed-open plaintext kept after acknowledgement | Fixed | `app.js:16634-16646` |
