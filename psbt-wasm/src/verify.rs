@@ -847,7 +847,12 @@ fn check_final_scriptsig(
                     _ => unreachable!(),
                 };
                 let mut canonical = ScriptBuf::new();
-                canonical.push_slice(redeem.as_bytes());
+                // `push_slice` takes `AsRef<PushBytes>`, which `&[u8]` does
+                // not implement; the redeemScript is at most 34 bytes, so the
+                // fallible conversion cannot fail.
+                let redeem_push = bitcoin::script::PushBytesBuf::try_from(redeem.as_bytes().to_vec())
+                    .expect("a wrapped-segwit redeemScript fits a single push");
+                canonical.push_slice(redeem_push);
                 let ok = script.as_bytes() == canonical.as_bytes();
                 if !ok {
                     problems.push(Problem::error(
@@ -1812,7 +1817,9 @@ mod tests {
 
     /// An ordinary consolidation must not hit the digest budget: the largest
     /// realistic transaction (100 inputs, ~4 KiB unsigned) with all 256
-    /// signatures checked stays well under it.
+    /// signatures checked stays well under it. This is the arithmetic guard;
+    /// the signed hundred-input fixture below exercises the same claim through
+    /// verification (AR-11).
     #[test]
     fn an_ordinary_consolidation_stays_inside_the_digest_budget() {
         let per_digest = 4 * 1024;
@@ -1820,6 +1827,115 @@ mod tests {
             MAX_SIGNATURE_CHECKS * per_digest < MAX_LEGACY_DIGEST_BYTES,
             "the digest budget must admit a 100-input, 256-signature consolidation"
         );
+    }
+
+    /// The maximum legacy multisig companion set produces 2^8 candidate
+    /// scriptCodes for one signature. Every distinct candidate is one
+    /// full-transaction hash, and each is charged to the digest budget
+    /// (AR-11). The signature-count budget is not touched: this is byte work,
+    /// not another signature.
+    #[test]
+    fn a_multisig_companion_explosion_is_charged_per_digest() {
+        let (tx, _) = fixture();
+        let mut tx = tx;
+        // A ~4 KiB transaction makes one legacy digest measurable.
+        tx.output.push(TxOut { value: Amount::ZERO, script_pubkey: ScriptBuf::from_bytes(vec![0x6a; 4_000]) });
+        let per_digest = tx.total_size();
+        assert!(per_digest > 4_000, "the fixture must be large enough to measure: {per_digest}");
+        let (pubkey, sig) = sign_code(&tx, &[0xac], 1);
+        // OP_2 <eight distinct strict-DER pushes> OP_2 OP_CHECKMULTISIG: any
+        // subset of the companions may be deleted by FindAndDelete, so every
+        // subset is a candidate scriptCode.
+        let companion = |n: u8| scriptcode::push_encoding(&[0x30, 0x06, 0x02, 0x01, 0x02, 0x02, 0x01, n, 0x01]);
+        let mut script = vec![0x52];
+        for n in 1..=scriptcode::MAX_MULTISIG_COMPANIONS as u8 {
+            script.extend_from_slice(&companion(n + 1));
+        }
+        script.extend_from_slice(&[0x52, 0xae]);
+        let claim = TxOut { value: Amount::from_sat(50_000), script_pubkey: ScriptBuf::from_bytes(script) };
+        let candidates = 1usize << scriptcode::MAX_MULTISIG_COMPANIONS;
+
+        let mut budget = Budget::new();
+        let mut problems = Vec::new();
+        let mut cache = SighashCache::new(&tx);
+        let mut memo = AnalysisMemo { script: None, result: None };
+        let verdict = check_ecdsa(&mut cache, 0, &Spend::Legacy, &claim, &pubkey, &sig, &mut budget, &mut problems, &mut memo);
+        assert!(matches!(verdict, Some(Err(_))), "{verdict:?}");
+        assert_eq!(budget.digest_left, MAX_LEGACY_DIGEST_BYTES - candidates * per_digest);
+        // Each extra candidate is also one verification attempt, so the
+        // signature budget pays it too; the digest budget independently pays
+        // the hashed bytes.
+        assert_eq!(budget.left, MAX_SIGNATURE_CHECKS - (candidates - 1));
+        assert!(problems.is_empty(), "{problems:?}");
+
+        // Ten digests of budget buy ten candidates; the eleventh fails closed
+        // with a budget error, never as an invalid signature.
+        let mut budget = Budget { digest_left: 10 * per_digest, ..Budget::new() };
+        let mut problems = Vec::new();
+        let mut memo = AnalysisMemo { script: None, result: None };
+        assert_eq!(check_ecdsa(&mut cache, 0, &Spend::Legacy, &claim, &pubkey, &sig, &mut budget, &mut problems, &mut memo), None);
+        assert_eq!(budget.digest_left, 0);
+        assert!(problems.iter().any(|p| p.code == "verification_budget" && p.severity == ERROR), "{problems:?}");
+    }
+
+    /// A signed hundred-input P2PKH consolidation: every input has a real
+    /// signature and the same claimed prevout shape, and analyse() verifies
+    /// all hundred legacy digests inside the byte budget. The old
+    /// KiB-denominated charge exhausted after 51 checks (AR-04, AR-11).
+    #[test]
+    fn a_signed_hundred_input_consolidation_verifies_within_the_digest_budget() {
+        let secp = Secp256k1::new();
+        let mut tx = Transaction {
+            version: bitcoin::transaction::Version(2),
+            lock_time: bitcoin::locktime::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![TxOut { value: Amount::from_sat(5_000), script_pubkey: ScriptBuf::from_bytes(vec![0x51]) }],
+        };
+        let mut keys = Vec::new();
+        let mut claims = Vec::new();
+        let mut maps = Vec::new();
+        for n in 1..=100u8 {
+            let key = SecretKey::from_slice(&[n; 32]).unwrap();
+            let pubkey = bitcoin::PublicKey::new(key.public_key(&secp));
+            let claim = TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new_p2pkh(&pubkey.pubkey_hash()) };
+            let (prev, txid) = prev_tx_for(&claim);
+            tx.input.push(TxIn {
+                previous_output: OutPoint { txid, vout: 0 },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            });
+            keys.push((key, pubkey));
+            claims.push(claim);
+            maps.push(vec![pair("00", &hex_encode(&encode::serialize(&prev)))]);
+        }
+        // Sign every input over the finished transaction. Legacy hashing
+        // clears every scriptSig, so filling them afterwards keeps the
+        // signatures valid.
+        let signed: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut cache = SighashCache::new(&tx);
+            (0..tx.input.len())
+                .map(|index| {
+                    let (key, pubkey) = &keys[index];
+                    let digest = ecdsa_digest(&mut cache, index, SigVersion::Legacy, claims[index].script_pubkey.as_bytes(), Amount::ZERO, 1).unwrap();
+                    let mut sig = secp.sign_ecdsa(&Message::from_digest_slice(&digest).unwrap(), key).serialize_der().to_vec();
+                    sig.push(1);
+                    (sig, pubkey.to_bytes())
+                })
+                .collect()
+        };
+        for (index, (sig, pubkey)) in signed.into_iter().enumerate() {
+            let mut script_sig = ScriptBuf::new();
+            script_sig.push_slice(bitcoin::script::PushBytesBuf::try_from(sig).unwrap());
+            script_sig.push_slice(bitcoin::script::PushBytesBuf::try_from(pubkey).unwrap());
+            let script_sig_hex = hex_encode(script_sig.as_bytes());
+            tx.input[index].script_sig = script_sig;
+            maps[index].push(pair("07", &script_sig_hex));
+        }
+        assert_eq!(tx.input.len(), 100);
+        assert!(100 * tx.total_size() < MAX_LEGACY_DIGEST_BYTES, "the fixture must fit the digest budget");
+        let problems = analyze(&tx, &maps);
+        assert!(problems.is_empty(), "{problems:?}");
     }
 
     /// A P2SH-P2WPKH input: the claim is the P2SH wrapper, so the witness
