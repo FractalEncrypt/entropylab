@@ -82,7 +82,7 @@ fixed on this branch.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Journal duplicate ids / stale `nextId` | Accepted open | `journal.js:739-741` |
+| Journal duplicate ids / stale `nextId` | Fixed | duplicate ids are refused at parse, an unsafe or missing id takes the lowest free one, a stale `nextId` is repaired to highest + 1, and `addEntry` never reuses an id; `test/journal.test.mjs` |
 | `file.text()` before the 4 MiB cap | Fixed | `File.size` is refused over `3 × limit + 3` bytes before the read; `test/journal-open-acknowledge.test.mjs` |
 | Uncapped Silent Payments paste fields | Fixed | vin and output text plus item counts are bounded before parse/split; `test/sp-send-session.test.mjs` |
 | bip352 redeem script not hash-checked | Accepted open | `bip352.js:207-212` |
