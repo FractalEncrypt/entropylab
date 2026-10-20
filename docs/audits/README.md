@@ -91,7 +91,7 @@ fixed on this branch.
 | PBKDF2 iteration wrap | Not a product vulnerability | sole caller uses 2048 |
 | BIP45 export buttons on unsupported shapes | Accepted open | `app.js:2191-2222` |
 | HD wallet.dat path lacking msig xprv refusal | Not a product vulnerability | descriptors kept separate |
-| `release-assets.yml` persists checkout credentials | Accepted open | `release-assets.yml:21-30` |
+| `release-assets.yml` persists checkout credentials | Fixed | the checkout sets `persist-credentials: false`; `gh release download` authenticates through `GH_TOKEN` env; `test/toolchain-pin.test.mjs` |
 | Armed-open plaintext kept after acknowledgement | Fixed | `app.js:16634-16646` |
 
 Plus the prior known-open set carried in the handoff (ledger above, BitBox
