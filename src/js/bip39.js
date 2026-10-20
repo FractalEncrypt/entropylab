@@ -20,6 +20,7 @@ const textEncoder = new TextEncoder();
 // bytes in saltFor must equal the salt from the same passphrase as text.
 // entropyToMnemonic's decode is unaffected: its words are plain ASCII.
 const textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+const strictTextDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const PHRASE_CAP = 1024; // a 24-word phrase is at most ~250 bytes
 const ENTROPY_CAP = 64; // BIP39 entropy is 16..32 bytes
@@ -27,6 +28,14 @@ const ENTROPY_CAP = 64; // BIP39 entropy is 16..32 bytes
 const nfkd = (value) => {
   if (typeof value !== "string") throw new TypeError("invalid mnemonic type: " + typeof value);
   return value.normalize("NFKD");
+};
+
+const isWellFormed = (value) => {
+  for (const char of value) {
+    const point = char.codePointAt(0);
+    if (point >= 0xd800 && point <= 0xdfff) return false;
+  }
+  return true;
 };
 
 // @scure/bip39 split the NFKD phrase on a single ASCII space and required
@@ -105,8 +114,15 @@ const saltFor = (passphrase) => {
       salt.set(passphrase, MNEMONIC_SALT.length);
       return salt;
     }
-    return textEncoder.encode(nfkd("mnemonic" + textDecoder.decode(passphrase)));
+    let text;
+    try {
+      text = strictTextDecoder.decode(passphrase);
+    } catch {
+      throw new Error("Invalid passphrase");
+    }
+    return textEncoder.encode(nfkd("mnemonic" + text));
   }
+  if (typeof passphrase === "string" && !isWellFormed(passphrase)) throw new Error("Invalid passphrase");
   return textEncoder.encode(nfkd("mnemonic" + passphrase));
 };
 
@@ -118,8 +134,8 @@ const mnemonicToSeedSync = (mnemonic, passphrase = "") => {
   if (typeof mnemonic !== "string" || (typeof mnemonic.isWellFormed === "function" && !mnemonic.isWellFormed())) throw new Error("Invalid mnemonic");
   const text = nfkd(mnemonic);
   if (!isCanonicalPhrase(text)) throw new Error("Invalid mnemonic");
-  const phrase = textEncoder.encode(text);
   const salt = saltFor(passphrase);
+  const phrase = textEncoder.encode(text);
   try {
     return pbkdf2Sha512(phrase, salt, 2048, 64);
   } finally {
