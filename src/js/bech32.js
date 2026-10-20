@@ -68,7 +68,16 @@ export const bech32mEncode = (hrp, words) => {
         const outPtr = wasm().el_alloc(STRING_CAP);
         try {
           const length = wasm().el_bech32m_encode(h, hrpBytes.length, w, wordBytes.length, outPtr, STRING_CAP);
-          return length < 0 ? null : textDecoder.decode(heap().slice(outPtr, outPtr + length));
+          if (length < 0) return null;
+          // The encoded string is the result; its UTF-8 byte copy carries the
+          // same private-key bits (spscan/spspend) and is erased here
+          // (RT-JSBOUNDARY-1).
+          const encoded = heap().slice(outPtr, outPtr + length);
+          try {
+            return textDecoder.decode(encoded);
+          } finally {
+            encoded.fill(0);
+          }
         } finally {
           wasm().el_free(outPtr, STRING_CAP);
         }
@@ -97,10 +106,20 @@ export const bech32mDecode = (text) => {
         if (packed < 0) return null;
         const hrpLen = packed & 0xfff;
         const wordCount = packed >> 12;
-        return {
-          prefix: textDecoder.decode(heap().slice(hrpPtr, hrpPtr + hrpLen)).toLowerCase(),
-          words: Array.from(heap().slice(wordsPtr, wordsPtr + wordCount)),
-        };
+        // Both outputs arrive as byte copies. The number array returned to the
+        // caller owns the decoded words; these two copies carry the same bits
+        // and are erased before returning (RT-JSBOUNDARY-1).
+        const hrpOut = heap().slice(hrpPtr, hrpPtr + hrpLen);
+        const wordsOut = heap().slice(wordsPtr, wordsPtr + wordCount);
+        try {
+          return {
+            prefix: textDecoder.decode(hrpOut).toLowerCase(),
+            words: Array.from(wordsOut),
+          };
+        } finally {
+          hrpOut.fill(0);
+          wordsOut.fill(0);
+        }
       } finally {
         wasm().el_free(hrpPtr, HRP_CAP);
         wasm().el_free(wordsPtr, WORDS_CAP);

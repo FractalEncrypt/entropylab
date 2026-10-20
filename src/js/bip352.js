@@ -345,7 +345,11 @@ export function deriveSilentPaymentKeys(masterSeed, { coinType = 0, account = 0 
 }
 
 const encodeKeyExpression = (hrp, payload) => {
-  const words = [0, ...toWords(payload)];
+  // Prepend the version in place. A spread would abandon the array toWords
+  // returned, which carries the scan (and, for spspend, spend) private-key
+  // bits (RT-JSBOUNDARY-1).
+  const words = toWords(payload);
+  words.unshift(0);
   try {
     return bech32mEncode(hrp, words);
   } finally {

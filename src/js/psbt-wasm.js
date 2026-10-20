@@ -117,7 +117,16 @@ const call = (input, name) => {
 // input; the error message comes from the Rust side.
 export const psbtInspectDoc = (bytes) => {
   if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error("PSBT must be a non-empty byte array.");
-  return JSON.parse(decoder.decode(call(bytes, "psbt_inspect")));
+  // The JSON carries every field of the document, including any proprietary
+  // key material. The parsed object owns its strings; the byte copy is a
+  // second copy of the same secret and is erased once decoded
+  // (RT-JSBOUNDARY-1).
+  const json = call(bytes, "psbt_inspect");
+  try {
+    return JSON.parse(decoder.decode(json));
+  } finally {
+    json.fill(0);
+  }
 };
 
 // Rebuilds PSBT bytes from a (possibly edited) editor document. Throws when

@@ -1692,8 +1692,11 @@ test("one PSBT workspace contains PSBT Inspector, PSBT Editor and Nonce Inspecto
     assert.match(markup, /<div class="row psbt-actions psbted-actions tool-actions">/);
   }
   assert.match(appSource, /import \{ initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan \} from "\.\/psbt-editor\.js"/);
-  // The editor reads the header picker's network through the passed getter.
-  assert.match(appSource, /initPsbtEditor\(\{ networkDefault: \(\) => hodlNetworkDefault, copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup \}\)/);
+  // The editor reads the header picker's network through the passed getter,
+  // which must report regtest as regtest: hodlNetworkDefault maps every
+  // non-mainnet choice to testnet, so the editor would render tb1 and refuse
+  // a valid bcrt1 output there.
+  assert.match(appSource, /initPsbtEditor\(\{ networkDefault: \(\) => hodlInspectorNetwork\(\), copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup \}\)/);
 });
 
 test("Journal gates its five tools behind the local notebook", () => {
