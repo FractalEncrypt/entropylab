@@ -1258,3 +1258,530 @@ test("bitcoind loads a generated msig Taproot watch-only wallet.dat", { skip: !B
     assert.equal(change, expectedChange);
   });
 });
+
+// --- Stryker survivor coverage for src/js/wallet-export.js -----------------
+//
+// Equivalent mutants with no observable effect:
+// - hex() validation/loop mutants at src/js/wallet-export.js:94/96: hex() is
+//   only called with the valid constant DER templates at module load and is
+//   not exported.
+// - compactSize negative-length mutants at :125: compactSize is only called
+//   with non-negative lengths from streamString and fixed record fields.
+// - compactSize :128 `true` and `length < 0xffffffff`: they differ only for
+//   lengths at or above 0xffffffff, which cannot be produced by a JS string.
+// - tailsSupported :333 label string: the label only appears in an error that
+//   tailsSupported catches and turns into false.
+// - buildWalletRecords :437 DER length: the DER length is fixed by the
+//   constants and the 33-byte pubkey check, so no input can make it differ
+//   from 214.
+// - buildWalletRecords :446 der.fill(0): der is a local buffer that is never
+//   exposed after the record is built; removing the wipe has no observable
+//   effect.
+
+const mutantDescriptorWithLength = (target) => {
+  const base = `wpkh(${XPUB_TAIL_4H}/0/*)`;
+  const pad = target - base.length - 9;
+  assert.ok(pad >= 0, `target ${target} is shorter than the base descriptor`);
+  const body = base + "x".repeat(pad);
+  return `${body}#${descriptorChecksum(body)}`;
+};
+
+const mutantHdWallet = (descriptor, extra = {}) => ({
+  kind: "hd",
+  network: "mainnet",
+  accounts: [{ def: { id: "bip84" }, receiveDescriptor: descriptor, ...extra }],
+});
+
+test("compactSize boundaries match Bitcoin CompactSize", () => {
+  const { buildWalletRecords } = loadModule();
+  const cases = [
+    [253, "fdfd00"],
+    [65535, "fdffff"],
+    [65536, "fe00000100"],
+  ];
+  for (const [length, prefix] of cases) {
+    const wallet = mutantHdWallet(mutantDescriptorWithLength(length));
+    const records = buildWalletRecords(wallet, false, deps, 0);
+    const record = records.find(([key]) => bytesToHex(key).startsWith(DESCRIPTOR_PREFIX));
+    assert.ok(record, `descriptor record for length ${length}`);
+    assert.ok(bytesToHex(record[1]).startsWith(prefix), `CompactSize prefix for length ${length}`);
+  }
+});
+
+test("a descriptor whose checksum marker is at index 0 is refused", () => {
+  const { buildWalletRecords } = loadModule();
+  const wallet = mutantHdWallet(`#wpkh(${XPUB_TAIL_4H}/0/*)`);
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: extended key not in descriptor" },
+  );
+});
+
+test("an extended key at the start of the descriptor body is accepted", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `${XPUB_TAIL_4H}/0/*`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.doesNotThrow(() => buildWalletRecords(wallet, false, deps, 0));
+});
+
+test("a branch-level wildcard at the end of the descriptor is accepted", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `${XPUB_TAIL_4H}/*`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.doesNotThrow(() => buildWalletRecords(wallet, false, deps, 0));
+});
+
+test("multi-digit branch steps are parsed to the end of the descriptor", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `${XPUB_TAIL_4H}/10/*`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  const records = buildWalletRecords(wallet, false, deps, 0);
+  const cache = records.find(([key]) => bytesToHex(key).startsWith("15" + "77616c6c657464657363726970746f726361636865"));
+  assert.ok(cache, "cache record");
+  assert.equal(bytesToHex(cache[1]), "4a" + bytesToHex(deriveBranchBody(XPUB_TAIL_4H, 10)));
+});
+
+test("unsupported descriptor path shapes are refused with the documented error", () => {
+  const { buildWalletRecords } = loadModule();
+  const twoStep = `wpkh(${XPUB_TAIL_4H}/0/0/*)`;
+  assert.throws(
+    () => buildWalletRecords(mutantHdWallet(`${twoStep}#${descriptorChecksum(twoStep)}`), false, deps, 0),
+    { name: "Error", message: "wallet.dat export: unsupported descriptor path shape" },
+  );
+  const hardenedIndex = `wpkh(${XPUB_TAIL_4H}/2147483648/*)`;
+  assert.throws(
+    () => buildWalletRecords(mutantHdWallet(`${hardenedIndex}#${descriptorChecksum(hardenedIndex)}`), false, deps, 0),
+    { name: "Error", message: "wallet.dat export: unsupported descriptor path shape" },
+  );
+});
+
+test("a non-Taproot descriptor containing tr( does not shift cache key indexes", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `wpkh(tr(${"a".repeat(64)},${XPUB_TAIL_4H}/0/*))`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  const records = buildWalletRecords(wallet, false, deps, 0);
+  const cache = records.find(([key]) => bytesToHex(key).startsWith("15" + "77616c6c657464657363726970746f726361636865"));
+  assert.ok(cache, "cache record");
+  assert.equal(cacheKeyIndex(bytesToHex(cache[0])), 0);
+});
+
+test("branch ranges ignore null rows and include index 0 but not out-of-range indexes", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  wallet.accounts[0].addressBranches = [{ branch: 0, rows: [null, { index: 5 }] }];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units[0].nextIndex, 6);
+  assert.equal(units[0].rangeStart, 5);
+  assert.equal(units[0].rangeEnd, 1005);
+
+  const zero = structuredClone(WATCH_ONLY_WALLET);
+  zero.accounts = [zero.accounts[0]];
+  zero.accounts[0].addressBranches = [{ branch: 0, rows: [{ index: 0 }] }];
+  assert.equal(walletDescriptorUnits(zero, false)[0].nextIndex, 1);
+
+  const tooHigh = structuredClone(WATCH_ONLY_WALLET);
+  tooHigh.accounts = [tooHigh.accounts[0]];
+  tooHigh.accounts[0].addressBranches = [{ branch: 0, rows: [{ index: 0x80000000 }] }];
+  const highUnit = walletDescriptorUnits(tooHigh, false)[0];
+  assert.deepEqual(
+    { nextIndex: highUnit.nextIndex, rangeStart: highUnit.rangeStart, rangeEnd: highUnit.rangeEnd },
+    { nextIndex: 0, rangeStart: 0, rangeEnd: 1000 },
+  );
+});
+
+test("msig branch entries ignore null, invalid, and duplicate branches", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  const desc0 = MSIG_WALLET.receiveDescriptor;
+  const desc1 = MSIG_WALLET.changeDescriptor;
+  wallet.addressBranches = [null, { branch: "x", publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc1 }];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units.length, 2);
+  assert.equal(units[0].descriptor, desc0);
+});
+
+test("msig addressBranches add branches beyond the default window", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  const desc2 = MSIG_WALLET.receiveDescriptor;
+  wallet.addressBranches = [{ branch: 2, publicDescriptor: desc2 }];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units.length, 3);
+  assert.equal(units[2].descriptor, desc2);
+});
+
+test("msig window starts above 0 and 1 control which default branches are added", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const start1 = structuredClone(MSIG_WALLET);
+  start1.branchStart = 1;
+  assert.equal(walletDescriptorUnits(start1, false).length, 1);
+  const start2 = structuredClone(MSIG_WALLET);
+  start2.branchStart = 2;
+  assert.equal(walletDescriptorUnits(start2, false).length, 0);
+});
+
+test("msig branches are exported in ascending branch order", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  const desc0 = MSIG_WALLET.receiveDescriptor;
+  const desc1 = MSIG_WALLET.changeDescriptor;
+  const desc2 = MSIG_WALLET.receiveDescriptor;
+  wallet.addressBranches = [
+    { branch: 2, publicDescriptor: desc2 },
+    { branch: 0, publicDescriptor: desc0 },
+    { branch: 1, publicDescriptor: desc1 },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.deepEqual(units.map((unit) => unit.descriptor), [desc0, desc1, desc2]);
+});
+
+test("msig branch descriptors fall back to the wallet receive/change descriptors", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  wallet.addressBranches = [
+    { branch: 0, rows: [{ index: 0 }] },
+    { branch: 1, rows: [{ index: 0 }] },
+    { branch: 2, rows: [{ index: 0 }] },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units.length, 2);
+  assert.equal(units[0].descriptor, MSIG_WALLET.receiveDescriptor);
+  assert.equal(units[1].descriptor, MSIG_WALLET.changeDescriptor);
+});
+
+test("msig branch rows fall back to the wallet receive/change rows", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  wallet.receive = [{ index: 5 }];
+  wallet.change = [{ index: 7 }];
+  wallet.addressBranches = [
+    { branch: 0, publicDescriptor: MSIG_WALLET.receiveDescriptor },
+    { branch: 1, publicDescriptor: MSIG_WALLET.changeDescriptor },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units[0].rangeEnd, 1005);
+  assert.equal(units[1].rangeEnd, 1007);
+});
+
+test("msig branch rows use entry.rows when present", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(MSIG_WALLET);
+  wallet.receive = [{ index: 5 }];
+  wallet.change = [{ index: 7 }];
+  wallet.addressBranches = [
+    { branch: 0, publicDescriptor: MSIG_WALLET.receiveDescriptor, rows: [{ index: 10 }] },
+    { branch: 1, publicDescriptor: MSIG_WALLET.changeDescriptor, rows: [{ index: 20 }] },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units[0].rangeEnd, 1010);
+  assert.equal(units[1].rangeEnd, 1020);
+});
+
+test("msig internal flags mark only branch 1 of a 0/1 window", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const units = walletDescriptorUnits(MSIG_WALLET, false);
+  assert.equal(units[0].internal, false);
+  assert.equal(units[1].internal, true);
+});
+
+test("walletDescriptorUnits refuses non-HD wallets without throwing", () => {
+  const { walletDescriptorUnits } = loadModule();
+  assert.deepEqual(walletDescriptorUnits(null, false), []);
+  assert.deepEqual(walletDescriptorUnits({ kind: "hd" }, false), []);
+  assert.deepEqual(walletDescriptorUnits({ kind: "hd", accounts: [{}] }, false), []);
+});
+
+test("HD branch entries ignore null, invalid, and duplicate branches", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  const desc0 = REF_PUBLIC_DESCRIPTORS[0];
+  const desc1 = REF_PUBLIC_DESCRIPTORS[1];
+  wallet.accounts[0].receiveDescriptor = desc0;
+  wallet.accounts[0].changeDescriptor = desc1;
+  wallet.accounts[0].addressBranches = [null, { branch: "x", publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc1 }];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units.length, 2);
+  assert.equal(units[0].descriptor, desc0);
+});
+
+test("HD window starts above 0 and 1 control which default branches are added", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const start1 = structuredClone(WATCH_ONLY_WALLET);
+  start1.accounts = [start1.accounts[0]];
+  start1.accounts[0].branchStart = 1;
+  assert.equal(walletDescriptorUnits(start1, false).length, 1);
+  const start2 = structuredClone(WATCH_ONLY_WALLET);
+  start2.accounts = [start2.accounts[0]];
+  start2.accounts[0].branchStart = 2;
+  assert.equal(walletDescriptorUnits(start2, false).length, 0);
+});
+
+test("HD branches are exported in ascending branch order", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  const desc0 = REF_PUBLIC_DESCRIPTORS[0];
+  const desc1 = REF_PUBLIC_DESCRIPTORS[1];
+  const desc2 = REF_PUBLIC_DESCRIPTORS[2];
+  wallet.accounts[0].addressBranches = [
+    { branch: 2, publicDescriptor: desc2 },
+    { branch: 0, publicDescriptor: desc0 },
+    { branch: 1, publicDescriptor: desc1 },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.deepEqual(units.map((unit) => unit.descriptor), [desc0, desc1, desc2]);
+});
+
+test("HD branch descriptors are strings, not booleans", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units[0].descriptor, REF_PUBLIC_DESCRIPTORS[0]);
+});
+
+test("HD private descriptors fall back to the account private descriptors", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(PRIVATE_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  const units = walletDescriptorUnits(wallet, true);
+  assert.equal(units[0].privateDescriptor, REF_PRIVATE_DESCRIPTORS[0]);
+});
+
+test("HD branch rows fall back to the account receive/change rows", () => {
+  const { walletDescriptorUnits } = loadModule();
+  const wallet = structuredClone(WATCH_ONLY_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  wallet.accounts[0].receive = [{ index: 5 }];
+  wallet.accounts[0].change = [{ index: 7 }];
+  wallet.accounts[0].addressBranches = [
+    { branch: 0, publicDescriptor: REF_PUBLIC_DESCRIPTORS[0] },
+    { branch: 1, publicDescriptor: REF_PUBLIC_DESCRIPTORS[1] },
+    { branch: 2, publicDescriptor: REF_PUBLIC_DESCRIPTORS[2] },
+  ];
+  const units = walletDescriptorUnits(wallet, false);
+  assert.equal(units[0].nextIndex, 6);
+  assert.equal(units[1].nextIndex, 8);
+  assert.equal(units[2].nextIndex, 0);
+});
+
+test("hasDescriptors is false for wallets with no exportable descriptors", () => {
+  const { hasDescriptors } = loadModule();
+  assert.equal(hasDescriptors(null), false);
+  assert.equal(hasDescriptors({ kind: "hd", accounts: [] }), false);
+});
+
+test("hasPrivateDescriptors is true when any unit has private material", () => {
+  const { hasPrivateDescriptors } = loadModule();
+  const wallet = structuredClone(PRIVATE_WALLET);
+  wallet.accounts[1].receiveDescriptorPriv = null;
+  wallet.accounts[1].changeDescriptorPriv = null;
+  assert.equal(hasPrivateDescriptors(wallet), true);
+});
+
+test("walletDatSupported accepts a supported multisig wallet", () => {
+  const { walletDatSupported } = loadModule();
+  assert.equal(walletDatSupported(MSIG_WALLET), true);
+});
+
+test("walletDatSupported refuses a descriptor with no extended public keys", () => {
+  const { walletDatSupported } = loadModule();
+  const body = "wsh(sortedmulti(1,notakey/0/*))";
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.equal(walletDatSupported(wallet), false);
+});
+
+test("walletDatSupported refuses a hardened branch step", () => {
+  const { walletDatSupported } = loadModule();
+  const body = `wpkh(${XPUB_TAIL_4H}/0h/*)`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.equal(walletDatSupported(wallet), false);
+});
+
+test("bip388Supported refuses branches outside 0 and 1", () => {
+  const { bip388Supported } = loadModule();
+  const body = `wpkh(${XPUB_TAIL_4H}/2/*)`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.equal(bip388Supported(wallet), false);
+});
+
+test("buildWalletRecords reports an unknown network without a TypeError", () => {
+  const { buildWalletRecords } = loadModule();
+  assert.throws(
+    () => buildWalletRecords(null, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: unknown network undefined" },
+  );
+});
+
+test("buildWalletRecords refuses an extended key payload that is not 78 bytes", () => {
+  const { buildWalletRecords } = loadModule();
+  const badDeps = { ...deps, base58Decode: () => new Uint8Array(77) };
+  const body = `wpkh(${XPUB_TAIL_4H}/*)`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.throws(
+    () => buildWalletRecords(wallet, false, badDeps, 0),
+    { name: "Error", message: "wallet.dat export: unexpected extended key payload" },
+  );
+});
+
+test("a watch-only HD descriptor containing an xprv is not treated as multisig", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `wpkh(${msigNode(0).privateExtendedKey}/0/*)`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.doesNotThrow(() => buildWalletRecords(wallet, false, deps, 0));
+});
+
+test("multisig refuses an extended private key with the documented error", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `wsh(sortedmulti(1,${msigNode(0).privateExtendedKey}/0/*))`;
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: watch-only multisig refused an extended private key" },
+  );
+});
+
+test("multisig refuses SLIP-132 uppercase private keys", () => {
+  const { buildWalletRecords } = loadModule();
+  const raw = b58checkDecode(msigNode(0).privateExtendedKey).slice();
+  raw[0] = 0x02; raw[1] = 0xaa; raw[2] = 0x7a; raw[3] = 0x99;
+  const zprv = b58checkEncode(raw);
+  assert.match(zprv, /^Zprv/);
+  const body = `wsh(sortedmulti(1,${zprv}/0/*))`;
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: watch-only multisig refused an extended private key" },
+  );
+});
+
+test("a short xprv-looking substring is not mistaken for an extended private key", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `wsh(sortedmulti(1,xprv1,${msigKey(0)}/0/*))`;
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.doesNotThrow(() => buildWalletRecords(wallet, false, deps, 0));
+});
+
+test("a non-SLIP-132 private-looking prefix is not treated as an extended private key", () => {
+  const { buildWalletRecords } = loadModule();
+  const fake = "Aprv" + "1".repeat(90);
+  const body = `wsh(sortedmulti(1,${fake},${msigKey(0)}/0/*))`;
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.doesNotThrow(() => buildWalletRecords(wallet, false, deps, 0));
+});
+
+test("multisig refuses a descriptor with no extended public keys", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = "wsh(sortedmulti(1,notakey/0/*))";
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: no extended key found in watch-only descriptor" },
+  );
+});
+
+test("multisig refuses a non-xpub/tpub extended public key", () => {
+  const { buildWalletRecords } = loadModule();
+  const fakeYpub = "ypub" + "1".repeat(45) + "xpub" + "1".repeat(45);
+  const body = `wsh(sortedmulti(2,${msigKey(0)}/0/*,${fakeYpub}/0/*))`;
+  const wallet = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
+  };
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: multisig descriptors need the Base58Check codec to rewrite as xpub/tpub" },
+  );
+});
+
+test("buildWalletRecords refuses a hardened step after a public key", () => {
+  const { buildWalletRecords } = loadModule();
+  const body = `wpkh(${XPUB_TAIL_4H}/0h/*)`;
+  const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
+  assert.throws(
+    () => buildWalletRecords(wallet, false, deps, 0),
+    { name: "Error", message: "wallet.dat export: hardened step after a public key" },
+  );
+});
+
+test("private export wipes decoded key material", () => {
+  const { buildWalletRecords } = loadModule();
+  let capturedRaw, capturedSecret, capturedKeyHash;
+  const wipeDeps = {
+    ...deps,
+    base58Decode: (text) => {
+      const raw = deps.base58Decode(text);
+      if (text.startsWith("xprv") || text.startsWith("tprv")) capturedRaw = raw;
+      return raw;
+    },
+    publicKeyForPrivate: (secret) => {
+      capturedSecret = secret;
+      return deps.publicKeyForPrivate(secret);
+    },
+    sha256: (bytes) => {
+      const hash = deps.sha256(bytes);
+      capturedKeyHash = hash;
+      return hash;
+    },
+  };
+  const wallet = structuredClone(PRIVATE_WALLET);
+  wallet.accounts = [wallet.accounts[0]];
+  buildWalletRecords(wallet, true, wipeDeps, 0);
+  assert.ok(capturedRaw, "captured raw xprv payload");
+  assert.ok(capturedSecret, "captured secret");
+  assert.ok(capturedKeyHash, "captured key hash");
+  assert.ok(capturedRaw.every((byte) => byte === 0), "raw xprv payload is wiped");
+  assert.ok(capturedSecret.every((byte) => byte === 0), "secret is wiped");
+  assert.ok(capturedKeyHash.every((byte) => byte === 0), "key hash is wiped");
+});
+
+test("msig filename falls back when m or n is not a safe integer", () => {
+  const { walletDatFilename } = loadModule();
+  assert.equal(walletDatFilename({ kind: "msig", m: 2, n: undefined }, false), "entropylab-msig-watch-only-wallet.dat");
+  assert.equal(walletDatFilename({ kind: "msig", m: undefined, n: 3 }, false), "entropylab-msig-watch-only-wallet.dat");
+});
+
+test("filename rejects fingerprints with extra characters", () => {
+  const { walletDatFilename } = loadModule();
+  assert.equal(walletDatFilename({ masterFingerprint: "xx73C5DA0A" }, false), "watch-only-wallet.dat");
+  assert.equal(walletDatFilename({ masterFingerprint: "73C5DA0Axx" }, false), "watch-only-wallet.dat");
+});
+
+test("button label defaults to watch-only", () => {
+  const { walletDatButtonLabel } = loadModule();
+  assert.equal(walletDatButtonLabel(), "Download watch-only wallet.dat");
+});
