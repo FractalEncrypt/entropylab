@@ -191,6 +191,62 @@ const compressedPointOrNull = (bytes) => {
   }
 };
 
+// The key a P2WPKH spend (native or P2SH-wrapped) reveals: the last witness
+// item, which consensus requires to hash to the 20-byte key hash. Pasted data
+// that breaks that is refused rather than skipped, since the send flow would
+// drop a skipped input from its key sum while the chain counts it. A
+// consistent uncompressed key is ineligible under BIP-352 (null), as before.
+const p2wpkhWitnessKey = (keyhash, witness) => {
+  const key = witness[witness.length - 1];
+  if (!witness.length || !(key instanceof Uint8Array) || !equalBytes(hash160(key), keyhash)) {
+    throw new Error("A P2WPKH input's witness key does not hash to the key hash it spends. Check the pasted witness.");
+  }
+  return compressedPointOrNull(key);
+};
+
+// The pushes a scriptSig makes, in order, or null when the script is not
+// push-only or a push overruns it. OP_0 pushes empty, OP_1NEGATE pushes
+// [0x81] and OP_n pushes [n]; a P2SH scriptSig must be push-only (BIP 16).
+const scriptSigPushes = (scriptSig) => {
+  const pushes = [];
+  let offset = 0;
+  while (offset < scriptSig.length) {
+    const opcode = scriptSig[offset];
+    offset += 1;
+    if (opcode === 0x4f) {
+      pushes.push(Uint8Array.of(0x81));
+      continue;
+    }
+    if (opcode >= 0x51 && opcode <= 0x60) {
+      pushes.push(Uint8Array.of(opcode - 0x50));
+      continue;
+    }
+    let length;
+    if (opcode === 0x00) length = 0;
+    else if (opcode <= 0x4b) length = opcode;
+    else if (opcode === 0x4c || opcode === 0x4d || opcode === 0x4e) {
+      const width = opcode === 0x4c ? 1 : opcode === 0x4d ? 2 : 4;
+      if (offset + width > scriptSig.length) return null;
+      // Push lengths are little-endian in Bitcoin Script.
+      length = 0;
+      for (let i = width - 1; i >= 0; i--) length = length * 256 + scriptSig[offset + i];
+      offset += width;
+    } else {
+      return null;
+    }
+    if (offset + length > scriptSig.length) return null;
+    pushes.push(scriptSig.slice(offset, offset + length));
+    offset += length;
+  }
+  return pushes;
+};
+
+// BIP 141: a witness program is a version byte (OP_0 or OP_1..OP_16)
+// followed by one direct push of 2..40 bytes that ends the script.
+const isWitnessProgram = (script) => script.length >= 4 && script.length <= 42
+  && (script[0] === 0x00 || (script[0] >= 0x51 && script[0] <= 0x60))
+  && script[1] >= 2 && script[1] <= 40 && script[1] === script.length - 2;
+
 export function extractInputPubKey(vin) {
   const prevout = vinPrevoutScript(vin);
   const scriptSig = vin.scriptSig instanceof Uint8Array ? vin.scriptSig : hexToBytes(vin.scriptSig || "");
@@ -203,19 +259,52 @@ export function extractInputPubKey(vin) {
       const point = compressedPointOrNull(candidate);
       if (point) return { point, isTaproot: false };
     }
+    // A consistent uncompressed or hybrid key is ineligible under BIP-352,
+    // as before. A scriptSig with no 33- or 65-byte window hashing to the
+    // key hash is mangled paste: a valid P2PKH spend must reveal the key,
+    // and skipping the input would silently drop it from the key sum.
+    for (let i = scriptSig.length; i >= 65; i--) {
+      if (equalBytes(hash160(scriptSig.slice(i - 65, i)), spkHash)) return null;
+    }
+    throw new Error("A P2PKH input's scriptSig does not contain the key its prevout pays to. Check the pasted prevout and scriptSig.");
   }
   if (isP2sh(prevout)) {
-    const redeem = scriptSig.slice(1);
-    if (isP2wpkh(redeem) && witness.length) {
-      const point = compressedPointOrNull(witness[witness.length - 1]);
-      if (point) return { point, isTaproot: false };
+    // A valid P2SH spend's scriptSig is push-only and its last push is the
+    // redeem script the prevout hash commits to (BIP 16), with or without a
+    // witness. Pasted data that breaks that is refused, not skipped: the
+    // send flow treats a skipped input as ineligible and leaves it out of
+    // the key sum, while the chain would count a P2SH-P2WPKH input, so the
+    // output would be one the recipient never finds.
+    const pushes = scriptSigPushes(scriptSig);
+    const redeem = pushes && pushes.length ? pushes[pushes.length - 1] : null;
+    const committed = !!redeem && equalBytes(hash160(redeem), prevout.slice(2, 22));
+    const program = committed && isWitnessProgram(redeem);
+    // A redeem that is a witness program must be the scriptSig's single
+    // direct push (consensus WITNESS_MALLEATED_P2SH), and a legacy redeem
+    // must carry no witness (consensus WITNESS_UNEXPECTED).
+    const shapeOk = program
+      ? scriptSig.length === redeem.length + 1 && scriptSig[0] === redeem.length
+      : !witness.length;
+    if (!committed || !shapeOk) {
+      throw new Error("A P2SH input's scriptSig does not push the redeem script its prevout commits to. Check the pasted prevout and scriptSig.");
     }
+    if (program && isP2wpkh(redeem)) {
+      const point = p2wpkhWitnessKey(redeem.slice(2, 22), witness);
+      return point ? { point, isTaproot: false } : null;
+    }
+    // P2SH-P2WSH, future witness versions and consistent legacy P2SH redeems
+    // (e.g. multisig) are ineligible and skipped as before.
+    return null;
   }
-  if (isP2wpkh(prevout) && witness.length) {
-    const point = compressedPointOrNull(witness[witness.length - 1]);
+  if (isP2wpkh(prevout)) {
+    const point = p2wpkhWitnessKey(prevout.slice(2, 22), witness);
     if (point) return { point, isTaproot: false };
   }
-  if (isP2tr(prevout) && witness.length) {
+  if (isP2tr(prevout)) {
+    // Every P2TR spend carries a witness (consensus). Without one the pasted
+    // vin cannot show whether it is an ineligible NUMS script-path spend, and
+    // skipping it would drop a key-path input from the key sum.
+    if (!witness.length) throw new Error("A P2TR input has no witness. Check the pasted witness.");
     const stack = witness.slice();
     if (stack.length > 1 && stack[stack.length - 1][0] === 0x50) stack.pop();
     if (stack.length > 1) {
