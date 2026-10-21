@@ -25,7 +25,7 @@ const PROPRIETARY = new Set(["PSBT_IN_PROPRIETARY", "PSBT_OUT_PROPRIETARY", "PSB
 // BIP-174 fields a finalizer may clear (everything standard except UTXO
 // 0x00/0x01, proprietary 0xfc and unknown types), by key type byte.
 const FINALIZER_CLEARABLE_TYPES = new Set([
-  "02", "03", "04", "05", "06", "0a", "0b", "0c", "0d",
+  "02", "03", "04", "05", "06", "09", "0a", "0b", "0c", "0d",
   "13", "14", "15", "16", "17", "18", "1a", "1b", "1c",
 ]);
 
@@ -79,13 +79,19 @@ const keyType = (key) => lower(key).slice(0, 2);
 const numeric = (value) => (typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value);
 const finding = (code, severity, scope, index, field, evidence) => ({ code, severity, scope, index, field, evidence });
 
+const isPairArray = (pairs) => Array.isArray(pairs) && pairs.every(isObject);
 const structurallyComplete = (doc) => isObject(doc)
   && isObject(doc.tx)
   && Array.isArray(doc.tx.inputs)
+  && doc.tx.inputs.every(isObject)
   && Array.isArray(doc.tx.outputs)
+  && doc.tx.outputs.every(isObject)
   && Array.isArray(doc.inputs)
+  && doc.inputs.every(isPairArray)
   && Array.isArray(doc.outputs)
-  && Array.isArray(doc.globals);
+  && doc.outputs.every(isPairArray)
+  && Array.isArray(doc.globals)
+  && doc.globals.every(isObject);
 
 const unknownChecks = () => ({
   transactionBody: "unknown",
@@ -268,7 +274,11 @@ const parseAppendedSighash = (event) => {
   }
   if (event.name === "PSBT_IN_TAP_KEY_SIG" || event.name === "PSBT_IN_TAP_SCRIPT_SIG") {
     if (bytes === 64) return { appended: 0, tap: true };
-    if (bytes === 65) return { appended: parseInt(value.slice(-2), 16), tap: true };
+    if (bytes === 65) {
+      const appended = parseInt(value.slice(-2), 16);
+      if (appended === 0x00) return { malformed: true };
+      return { appended, tap: true };
+    }
     return { malformed: true };
   }
   return { malformed: true };
@@ -391,10 +401,11 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   const emitFinalization = (index) => {
     if (finalizationEmitted.has(index)) return;
     finalizationEmitted.add(index);
-    const entries = (options.verification?.signatures ?? []).filter((entry) => entry.index === index && FINAL_FIELDS.has(entry.name));
-    const verified = entries.length > 0 && entries.every((entry) => entry.valid === true);
     const removedFields = removedFieldsByInput.get(index) ?? [];
     const finalFields = addedFinalFieldsByInput.get(index) ?? [];
+    const entries = (options.verification?.signatures ?? []).filter((entry) => entry.index === index && FINAL_FIELDS.has(entry.name));
+    const covered = finalFields.every((name) => entries.some((entry) => entry.name === name));
+    const verified = covered && entries.length > 0 && entries.every((entry) => entry.valid === true);
     if (verified) {
       findings.push(finding("FINALIZED", "info", "input-map", index, null, { index, finalFields, removedFields, signatures: entries.length }));
       return;

@@ -705,3 +705,84 @@ test("F29 MuSig2 material added is a warning", () => {
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["MUSIG2_MATERIAL_ADDED", "warning"]]);
   assert.equal(report.verdict, "pass");
 });
+
+test("F30 a finalizer may clear PSBT_IN_POR_COMMITMENT", () => {
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
+    pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
+    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("09", "aa".repeat(32), "PSBT_IN_POR_COMMITMENT"),
+  ]] });
+  const after = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("08", "aa", "PSBT_IN_FINAL_SCRIPTWITNESS"),
+  ]] });
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_FINAL_SCRIPTWITNESS", pubkey: P1_HEX, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "pass");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["FINALIZED", "info"]]);
+});
+
+test("F31 malformed documents fail closed instead of throwing", () => {
+  const nullInput = {
+    tx: { version: 2, locktime: 0, inputs: [null], outputs: [] },
+    globals: [],
+    inputs: [[]],
+    outputs: [],
+    fee: { known: false },
+    psbtVersion: 0,
+  };
+  const nullInputReport = auditSigner(nullInput, nullInput);
+  assert.equal(nullInputReport.verdict, "fail");
+  assert.deepEqual(nullInputReport.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(nullInputReport.findings[0].evidence.reason, "malformed_document");
+
+  const badMap = {
+    tx: { version: 2, locktime: 0, inputs: [{ txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 }], outputs: [] },
+    globals: [],
+    inputs: [{}],
+    outputs: [],
+    fee: { known: false },
+    psbtVersion: 0,
+  };
+  const badMapReport = auditSigner(badMap, badMap);
+  assert.equal(badMapReport.verdict, "fail");
+  assert.deepEqual(badMapReport.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(badMapReport.findings[0].evidence.reason, "malformed_document");
+});
+
+test("F32 a 65-byte taproot signature with explicit SIGHASH_DEFAULT is malformed", () => {
+  const xonly = P1_HEX.slice(2);
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: "5120" + "22".repeat(32) }),
+    pair("17", xonly, "PSBT_IN_TAP_INTERNAL_KEY", { xonly }),
+  ]] });
+  const after = structuredClone(before);
+  after.inputs[0].push(pair("13", "11".repeat(64) + "00", "PSBT_IN_TAP_KEY_SIG", { signature: "11".repeat(64), sighash: "SIGHASH_DEFAULT" }));
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_TAP_KEY_SIG", pubkey: null, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "fail");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["SIGNATURE_ADDED", "info"],
+    ["SIGNATURE_MALFORMED", "critical"],
+  ]);
+  assert.equal(report.checks.signatures, "unverified");
+});
+
+test("F33 finalization requires verification for every added final field", () => {
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
+  ]] });
+  const after = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("07", "aa", "PSBT_IN_FINAL_SCRIPTSIG"),
+    pair("08", "bb", "PSBT_IN_FINAL_SCRIPTWITNESS"),
+  ]] });
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_FINAL_SCRIPTWITNESS", pubkey: P1_HEX, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "fail");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["FINALIZATION_INVALID", "critical"]]);
+  assert.equal(report.findings[0].evidence.reason, "no_signatures");
+});
