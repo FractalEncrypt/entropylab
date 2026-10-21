@@ -2081,8 +2081,18 @@ function hodlWalletDatDeps() {
       return body;
     },
     // Hardened-branch private key records are derived from the account xprv.
-    deriveExtendedPrivateChild: (extendedKeyText, index) =>
-      hodlHDKey.fromExtendedKey(hodlReversionExtendedKey(extendedKeyText, hodlExtendedKeyVersions.mainnet.x.prv)).deriveChild(index).privateExtendedKey,
+    deriveExtendedPrivateChild: (extendedKeyText, index) => {
+      let parent, child;
+      try {
+        parent = hodlHDKey.fromExtendedKey(hodlReversionExtendedKey(extendedKeyText, hodlExtendedKeyVersions.mainnet.x.prv));
+        child = parent.deriveChild(index);
+        return child.privateExtendedKey;
+      } finally {
+        // Both nodes are built here from text, so both are ours to wipe.
+        child?.wipePrivateData();
+        parent?.wipePrivateData();
+      }
+    },
     publicKeyForPrivate: (secret) => hodlSecp256k1.getPublicKey(secret, true),
     canonicalizeDescriptor: (descriptor) => canonicalizeWatchDescriptor(descriptor, {
       decode: (key) => hodlBase58Check.decode(key),
