@@ -82,6 +82,7 @@ const FUZZ_SEED = 0x5eed0240;
 const DEFAULT_ITERATIONS = 240;
 const EDITOR_ENV = fuzzEnv("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = EDITOR_ENV.iterations;
+const TEST_NAME = "seeded random walks: adding/removing inputs and outputs stays safe and correct";
 let rand = mulberry32(FUZZ_SEED);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
@@ -764,8 +765,8 @@ const OPS = [
 ];
 const OP_BAG = OPS.flatMap(([weight, fn]) => Array.from({ length: weight }, () => fn));
 
-test("seeded random walks: adding/removing inputs and outputs stays safe and correct", () => {
-  const results = runCases("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS }, (i, caseRand) => {
+test(TEST_NAME, () => {
+  const results = runCases("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: TEST_NAME }, (i, caseRand) => {
     rand = caseRand; // route the module-level helpers through the runCases PRNG
     const fixture = FIXTURES[i % FIXTURES.length];
     note(`fixture:${fixture.name}`);

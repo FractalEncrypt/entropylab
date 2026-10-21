@@ -51,6 +51,7 @@ const FUZZ_SEED = 0x5eed0174;
 const DEFAULT_ITERATIONS = 100;
 const PSBT_ENV = fuzzEnv("PSBT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = PSBT_ENV.iterations;
+const TEST_NAME = `psbtInspectDoc and @scure/btc-signer agree on mutated PSBTs (seed 0x${PSBT_ENV.seed.toString(16)}, ${PSBT_ENV.only === null ? ITERATIONS : 1} iterations)`;
 
 // --- fixtures and their unsigned-transaction layout --------------------------
 
@@ -214,9 +215,9 @@ test("the fixtures load and every one decodes identically on both sides before m
   }
 });
 
-test(`psbtInspectDoc and @scure/btc-signer agree on mutated PSBTs (seed 0x${PSBT_ENV.seed.toString(16)}, ${PSBT_ENV.only === null ? ITERATIONS : 1} iterations)`, () => {
+test(TEST_NAME, () => {
   assert.ok(Number.isSafeInteger(ITERATIONS) && ITERATIONS > 0, `PSBT_FUZZ_ITERATIONS must be a positive integer, got ${process.env.PSBT_FUZZ_ITERATIONS}`);
-  const results = runCases("PSBT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS }, (i, rand) => {
+  const results = runCases("PSBT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: TEST_NAME }, (i, rand) => {
     const rint = (n) => Math.floor(rand() * n);
     const pick = (items) => items[rint(items.length)];
     const fixture = pick(fixtures);

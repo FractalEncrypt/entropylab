@@ -57,6 +57,7 @@ import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
 const FUZZ_SEED = 0x5eed0001;
 const DEFAULT_CORPUS_SIZE = 72;
 const WALLET_EXPORT_ENV = fuzzEnv("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CORPUS_SIZE });
+const CORPUS_TEST_NAME = "every fuzzed wallet's records independently verify (Core's load check included)";
 let rand = mulberry32(FUZZ_SEED);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
@@ -449,7 +450,7 @@ const randomRows = () => {
   }
   return rows;
 };
-const corpus = runCases("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CORPUS_SIZE }, (i, caseRand) => {
+const corpus = runCases("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CORPUS_SIZE, testName: CORPUS_TEST_NAME }, (i, caseRand) => {
   rand = caseRand; // route the module-level helpers through the runCases PRNG
   if (i === 0) {
     note("digit-h-tail");
@@ -560,7 +561,7 @@ const corpus = runCases("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultI
 
 // --- tests --------------------------------------------------------------------
 
-test("every fuzzed wallet's records independently verify (Core's load check included)", () => {
+test(CORPUS_TEST_NAME, () => {
   for (const { wallet, includePrivate, creationTime, label } of corpus) {
     verifyWalletRecords(label, wallet, includePrivate, creationTime);
   }
@@ -610,7 +611,8 @@ test("the corpus covers every generator flavor", () => {
 test("defensive guards reject corrupted crypto dependencies", () => {
   if (WALLET_EXPORT_ENV.only !== null) return; // single-case replay: full corpus required
   const module_ = loadModule();
-  const wallet = corpus[2].wallet;
+  const wallet = (corpus[2] ?? corpus[0])?.wallet;
+  if (!wallet) return; // corpus too small (iterations < 1)
   const privateWallet = corpus.find(({ wallet: candidate, includePrivate }) =>
     includePrivate && expectedUnits(candidate, true).some((unit) => unit.privateDescriptor));
   assert.ok(privateWallet, "corpus fixture: at least one wallet carries private descriptors");
@@ -639,7 +641,8 @@ test("defensive guards reject corrupted crypto dependencies", () => {
 test("malformed wallet inputs fail loudly instead of writing a bad file", () => {
   if (WALLET_EXPORT_ENV.only !== null) return; // single-case replay: full corpus required
   const module_ = loadModule();
-  const wallet = corpus[2].wallet;
+  const wallet = (corpus[2] ?? corpus[0])?.wallet;
+  if (!wallet) return; // corpus too small (iterations < 1)
   assert.throws(() => module_.buildWalletRecords({ kind: "hd", network: "mainnet", accounts: [] }, false, fuzzDeps, 0), /no descriptors to export/);
   assert.throws(() => module_.buildWalletRecords({ kind: "hd", network: "mainnet", accounts: [{ ...wallet.accounts[0], def: { id: "bip999" } }] }, false, fuzzDeps, 0), /no descriptors to export/);
   const duplicate = { kind: "hd", network: "mainnet", accounts: [wallet.accounts[0], wallet.accounts[0]] };
@@ -656,10 +659,10 @@ test("malformed wallet inputs fail loudly instead of writing a bad file", () => 
   );
 });
 
-test("buildWalletDat defaults the birthday to the export time", { skip: !PYTHON_SQLITE || WALLET_EXPORT_ENV.only !== null }, () => {
+test("buildWalletDat defaults the birthday to the export time", { skip: !PYTHON_SQLITE || WALLET_EXPORT_ENV.only !== null || corpus.length === 0 }, () => {
   const module_ = loadModule();
   const before = Math.floor(Date.now() / 1000) - 1;
-  const bytes = module_.buildWalletDat(corpus[2].wallet, false, fuzzDeps);
+  const bytes = module_.buildWalletDat((corpus[2] ?? corpus[0]).wallet, false, fuzzDeps);
   const after = Math.floor(Date.now() / 1000) + 1;
   assert.equal(new TextDecoder().decode(bytes.subarray(0, 15)), "SQLite format 3");
   const report = sqliteReadBack(bytes);

@@ -10,26 +10,35 @@ export const mulberry32 = (seed) => {
   };
 };
 
-const envInt = (name, fallback) => {
+const envInt = (name, fallback, max = Number.MAX_SAFE_INTEGER) => {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
-  if (raw.trim() === "") throw new Error(`${name} must be a non-negative integer, got ${raw}`);
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a non-negative decimal integer, got ${raw}`);
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer, got ${raw}`);
+  if (!Number.isSafeInteger(value) || value < 0 || value > max) {
+    throw new Error(`${name} must be a non-negative decimal integer${max === Number.MAX_SAFE_INTEGER ? "" : ` no greater than ${max}`}, got ${raw}`);
+  }
   return value;
 };
 
 export const fuzzEnv = (prefix, { defaultSeed, defaultIterations }) => {
-  const seed = envInt(`${prefix}_SEED`, defaultSeed);
+  if (!Number.isSafeInteger(defaultSeed) || defaultSeed < 0 || defaultSeed > 0xffffffff) {
+    throw new Error(`default seed must be a 32-bit unsigned integer, got ${defaultSeed}`);
+  }
+  const seed = envInt(`${prefix}_SEED`, defaultSeed, 0xffffffff);
   const iterations = envInt(`${prefix}_ITERATIONS`, defaultIterations);
   const only = envInt(`${prefix}_ONLY`, null);
   return { seed, iterations, only };
 };
 
 const shellQuote = (value) => `'${value.replace(/'/g, "'\\''")}'`;
-const replayCommand = (prefix, seed, i) => {
+const replayCommand = (prefix, seed, iterations, defaultIterations, i, testName) => {
   const file = process.argv[1] ?? "test/unknown.test.mjs";
-  return `${prefix}_SEED=${seed} ${prefix}_ONLY=${i} node --test ${shellQuote(file)}`;
+  const env = [`${prefix}_SEED=${seed}`];
+  if (iterations !== defaultIterations) env.push(`${prefix}_ITERATIONS=${iterations}`);
+  env.push(`${prefix}_ONLY=${i}`);
+  const pattern = testName ? ` --test-name-pattern ${shellQuote(testName)}` : "";
+  return `${env.join(" ")} node --test${pattern} ${shellQuote(file)}`;
 };
 
 export const runCases = (prefix, opts, caseAt) => {
@@ -46,7 +55,23 @@ export const runCases = (prefix, opts, caseAt) => {
       if (only === null || i === only) results.push(result);
     } catch (error) {
       if (error && typeof error === "object" && typeof error.message === "string") {
-        error.message += `\nReplay: ${replayCommand(prefix, seed, i)}`;
+        let shrunk = null;
+        if (error.case !== undefined && typeof error.check === "function") {
+          try {
+            shrunk = shrink(error.case, (candidate) => {
+              try {
+                return error.check(candidate);
+              } catch {
+                return true;
+              }
+            });
+          } catch {
+            // shrinking is best-effort; never mask the original failure
+          }
+        }
+        const original = error.case !== undefined ? `\nOriginal case: ${JSON.stringify(error.case)}` : "";
+        const reduced = shrunk !== null ? `\nShrunk case: ${JSON.stringify(shrunk)}` : "";
+        error.message += `${original}${reduced}\nReplay: ${replayCommand(prefix, seed, iterations, opts.defaultIterations, i, opts.testName)}`;
       }
       throw error;
     }
@@ -109,10 +134,18 @@ export const shrink = (caseObj, predicate) => {
     const candidates = [];
     collectReductions(current, [], current, candidates);
     for (const candidate of candidates) {
-      if (size(candidate) < size(current) && predicate(candidate)) {
-        current = candidate;
-        changed = true;
-        break;
+      if (size(candidate) < size(current)) {
+        let fails;
+        try {
+          fails = predicate(candidate);
+        } catch {
+          fails = true;
+        }
+        if (fails) {
+          current = candidate;
+          changed = true;
+          break;
+        }
       }
     }
   }

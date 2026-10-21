@@ -57,6 +57,7 @@ const FUZZ_SEED = 0x5eed0341;
 const DEFAULT_CASES = 64;
 const SIGHASH_ENV = fuzzEnv("SIGHASH_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CASES });
 const ITERATIONS = SIGHASH_ENV.iterations;
+const TEST_NAME = `rust-bitcoin (WASM) and @scure/btc-signer sign the same legacy, BIP143, and BIP341 digests (seed 0x${SIGHASH_ENV.seed.toString(16)}, ${SIGHASH_ENV.only === null ? ITERATIONS : 1} cases)`;
 let rand = mulberry32(FUZZ_SEED);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
@@ -212,10 +213,10 @@ const signatureProblems = (psbt, idx) => {
 const elSighashSegwitV0All = (raw, idx, scriptCode, amount) =>
   withInput(raw, (p) => withInput(scriptCode, (sc) => withOutput(32, (o) => wasmExports().el_sighash_segwit_v0(p, raw.length, idx, sc, scriptCode.length, amount, o))));
 
-test(`rust-bitcoin (WASM) and @scure/btc-signer sign the same legacy, BIP143, and BIP341 digests (seed 0x${SIGHASH_ENV.seed.toString(16)}, ${SIGHASH_ENV.only === null ? ITERATIONS : 1} cases)`, () => {
+test(TEST_NAME, () => {
   let ran = 0;
   const seen = new Set();
-  const results = runCases("SIGHASH_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CASES }, (i, caseRand) => {
+  const results = runCases("SIGHASH_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CASES, testName: TEST_NAME }, (i, caseRand) => {
     rand = caseRand; // route the module-level helpers through the runCases PRNG
     const c = buildCase(i);
     seen.add(c.family);

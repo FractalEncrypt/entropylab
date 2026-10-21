@@ -24,6 +24,7 @@ const FUZZ_SEED = 0x5eed0032;
 const DEFAULT_ITERATIONS = 200;
 const HDKEY_ENV = fuzzEnv("HDKEY_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = HDKEY_ENV.iterations;
+const MASTER_TEST_NAME = `src/js/hdkey.js and @scure/bip32 derive identical nodes (seed 0x${HDKEY_ENV.seed.toString(16)}, ${HDKEY_ENV.only === null ? ITERATIONS : 1} iterations)`;
 
 // Mainnet BIP32 version bytes, passed explicitly to both implementations.
 const VERSIONS = { private: 0x0488ade4, public: 0x0488b21e };
@@ -67,9 +68,9 @@ const both = (where, leftFn, rightFn) => {
   return [l.node, r.node];
 };
 
-test(`src/js/hdkey.js and @scure/bip32 derive identical nodes (seed 0x${HDKEY_ENV.seed.toString(16)}, ${HDKEY_ENV.only === null ? ITERATIONS : 1} iterations)`, () => {
+test(MASTER_TEST_NAME, () => {
   assert.ok(Number.isSafeInteger(ITERATIONS) && ITERATIONS > 0, `HDKEY_FUZZ_ITERATIONS must be a positive integer, got ${process.env.HDKEY_FUZZ_ITERATIONS}`);
-  const results = runCases("HDKEY_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS }, (i, rand) => {
+  const results = runCases("HDKEY_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: MASTER_TEST_NAME }, (i, rand) => {
     const rint = (n) => Math.floor(rand() * n);
     const pick = (items) => items[rint(items.length)];
     const randomBytes = (n) => Uint8Array.from({ length: n }, () => rint(256));
@@ -109,8 +110,10 @@ test(`src/js/hdkey.js and @scure/bip32 derive identical nodes (seed 0x${HDKEY_EN
 // public-only node must be refused by both implementations, never computed.
 // A second fixed seed keeps the corpus above unchanged.
 const PUBLIC_FUZZ_SEED = 0x5eed0033;
-const PUBLIC_ENV = fuzzEnv("HDKEY_FUZZ", { defaultSeed: PUBLIC_FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
-test(`public derivation matches private derivation and refuses hardened steps (seed 0x${PUBLIC_ENV.seed.toString(16)}, ${PUBLIC_ENV.only === null ? ITERATIONS : 1} iterations)`, () => {
+const PUBLIC_ENV = fuzzEnv("HDKEY_PUB_FUZZ", { defaultSeed: PUBLIC_FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
+const PUBLIC_ITERATIONS = PUBLIC_ENV.iterations;
+const PUBLIC_TEST_NAME = `public derivation matches private derivation and refuses hardened steps (seed 0x${PUBLIC_ENV.seed.toString(16)}, ${PUBLIC_ENV.only === null ? PUBLIC_ITERATIONS : 1} iterations)`;
+test(PUBLIC_TEST_NAME, () => {
   const refused = (fn) => {
     try {
       fn();
@@ -120,7 +123,7 @@ test(`public derivation matches private derivation and refuses hardened steps (s
     return false;
   };
   let hardenedRefusals = 0, publicSteps = 0;
-  const results = runCases("HDKEY_FUZZ", { defaultSeed: PUBLIC_FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS }, (i, rand) => {
+  const results = runCases("HDKEY_PUB_FUZZ", { defaultSeed: PUBLIC_FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: PUBLIC_TEST_NAME }, (i, rand) => {
     const n = (limit) => Math.floor(rand() * limit);
     const index = () => (n(8) === 0 ? [0, 1, HARDENED_OFFSET - 1][n(3)] : n(HARDENED_OFFSET));
     const seed = Uint8Array.from({ length: 32 }, () => n(256));
@@ -150,9 +153,9 @@ test(`public derivation matches private derivation and refuses hardened steps (s
     });
     return true;
   });
-  assert.equal(results.length, PUBLIC_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
+  assert.equal(results.length, PUBLIC_ENV.only === null ? PUBLIC_ITERATIONS : 1, "every iteration ran to the end");
   // Both branches must actually have been exercised.
   if (PUBLIC_ENV.only === null) {
-    assert.ok(hardenedRefusals > ITERATIONS && publicSteps > ITERATIONS, `corpus too narrow: ${hardenedRefusals} hardened, ${publicSteps} unhardened steps`);
+    assert.ok(hardenedRefusals > PUBLIC_ITERATIONS && publicSteps > PUBLIC_ITERATIONS, `corpus too narrow: ${hardenedRefusals} hardened, ${publicSteps} unhardened steps`);
   }
 });
