@@ -343,21 +343,28 @@ const unsignedInputKey = (vin, index) => {
   const scalar = scalarFromBytes(typeof vin.private_key === "string" ? hexToBytes(vin.private_key) : vin.private_key);
   const pub = publicKeyForScalar(scalar);
   const mismatch = new Error(`Input ${index} private key does not match its eligible input public key.`);
-  // A key hash that matches the scalar's uncompressed key is consistent but
-  // ineligible under BIP-352, exactly as its signed form is skipped.
+  const point = Point.fromBytes(pub);
+  // A key hash that matches the scalar's uncompressed (0x04) or hybrid
+  // (0x06/0x07, SEC1) key encoding is consistent but ineligible under
+  // BIP-352, exactly as its signed form is skipped.
+  const uncompressed = point.toBytes(false);
+  const hybrid = Uint8Array.from(uncompressed);
+  hybrid[0] = pointHasEvenY(point) ? 0x06 : 0x07;
   const keyHashInput = (keyhash) => {
-    if (equalBytes(hash160(pub), keyhash)) return { point: Point.fromBytes(pub), isTaproot: false };
-    if (equalBytes(hash160(Point.fromBytes(pub).toBytes(false)), keyhash)) return null;
+    if (equalBytes(hash160(pub), keyhash)) return { point, isTaproot: false };
+    if (equalBytes(hash160(uncompressed), keyhash)) return null;
+    if (equalBytes(hash160(hybrid), keyhash)) return null;
     throw mismatch;
   };
   if (isP2pkh(prevout)) return keyHashInput(prevout.slice(3, 23));
   if (isP2wpkh(prevout)) return keyHashInput(prevout.slice(2, 22));
   if (isP2sh(prevout)) {
     // The scalar's P2SH-P2WPKH script: a914 || hash160(0014 || hash160(key)) || 87.
-    // Matching only the uncompressed key is consistent but ineligible, like the
-    // signed form. Any other P2SH (multisig, P2SH-P2WSH) cannot be told from a
-    // wrong key without its redeem script, so it is refused: paste the
-    // scriptSig (the redeem push needs no signature) and it is skipped.
+    // Matching only the uncompressed or hybrid key is consistent but
+    // ineligible, like the signed form. Any other P2SH (multisig,
+    // P2SH-P2WSH) cannot be told from a wrong key without its redeem
+    // script, so it is refused: paste the scriptSig (the redeem push needs
+    // no signature) and it is skipped.
     const p2shP2wpkh = (key) => {
       const redeem = new Uint8Array(22);
       redeem[1] = 0x14;
@@ -369,8 +376,9 @@ const unsignedInputKey = (vin, index) => {
       script[22] = 0x87;
       return script;
     };
-    if (equalBytes(p2shP2wpkh(pub), prevout)) return { point: Point.fromBytes(pub), isTaproot: false };
-    if (equalBytes(p2shP2wpkh(Point.fromBytes(pub).toBytes(false)), prevout)) return null;
+    if (equalBytes(p2shP2wpkh(pub), prevout)) return { point, isTaproot: false };
+    if (equalBytes(p2shP2wpkh(uncompressed), prevout)) return null;
+    if (equalBytes(p2shP2wpkh(hybrid), prevout)) return null;
     throw mismatch;
   }
   if (isP2tr(prevout)) {
@@ -550,19 +558,30 @@ export function p2trAddressFromXonly(xonly, network = "mainnet") {
 // string, or the published-vector { scriptPubKey: { hex } } form).
 export const vinPrevoutScript = (vin) => (vin.prevout instanceof Uint8Array ? vin.prevout : hexToBytes(typeof vin.prevout === "string" ? vin.prevout : vin.prevout.scriptPubKey.hex));
 
-const normalizeVin = (vin) => ({
-  txid: vin.txid,
-  vout: vin.vout,
-  scriptSig: vin.scriptSig || "",
-  txinwitness: vin.txinwitness || "",
-  // The witness-array form extractInputPubKey accepts; anything else is
-  // left out, as before, and txinwitness is used.
-  // Witness items may be bytes or hex strings (JSON); any other item throws
-  // in hexToBytes, so a witness that cannot be read is never ignored.
-  witness: Array.isArray(vin.witness) && vin.witness.length ? vin.witness.map((item) => (item instanceof Uint8Array ? item : hexToBytes(item))) : undefined,
-  prevout: vinPrevoutScript(vin),
-  private_key: vin.private_key,
-});
+// A vin whose witness array is read as bytes: hex-string items (JSON) become
+// bytes, byte arrays are kept, and any other item throws in hexToBytes, so a
+// witness that cannot be read is never ignored. The app's send flow applies
+// this to each pasted vin before anything reads its witness.
+export const normalizeVinWitness = (vin) => (
+  vin && typeof vin === "object" && Array.isArray(vin.witness) && vin.witness.length
+    ? { ...vin, witness: vin.witness.map((item) => (item instanceof Uint8Array ? item : hexToBytes(item))) }
+    : vin
+);
+
+const normalizeVin = (raw) => {
+  const vin = normalizeVinWitness(raw);
+  return {
+    txid: vin.txid,
+    vout: vin.vout,
+    scriptSig: vin.scriptSig || "",
+    txinwitness: vin.txinwitness || "",
+    // The witness-array form extractInputPubKey accepts; anything else is
+    // left out, as before, and txinwitness is used.
+    witness: Array.isArray(vin.witness) && vin.witness.length ? vin.witness : undefined,
+    prevout: vinPrevoutScript(vin),
+    private_key: vin.private_key,
+  };
+};
 
 // BIP-352 spends a taproot input with "the private key corresponding to the
 // taproot output key (i.e. the tweaked private key)": the BIP-341 key-path

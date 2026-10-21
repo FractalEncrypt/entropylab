@@ -532,3 +532,31 @@ test("a witness array of hex strings is read, and an empty array does not hide t
   assert.equal(bytesToHex(extractInputPubKey(vin).point.toBytes(true)), key);
   assert.equal(eligibleInputKeys([vin]).pubkeys.length, 1);
 });
+
+test("unsigned hybrid-key inputs are skipped like their uncompressed form", () => {
+  // SEC1 hybrid encoding: the uncompressed body under 0x06 (even y) or 0x07
+  // (odd y). G is a published constant with even y; -G (scalar n-1, n
+  // published) shares its x with the odd-y prefix.
+  const scalar = "0000000000000000000000000000000000000000000000000000000000000001";
+  const negScalar = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
+  const g = secp256k1.getPublicKey(hexToBytes(scalar), true);
+  const negG = secp256k1.getPublicKey(hexToBytes(negScalar), true);
+  assert.equal(bytesToHex(g), "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+  assert.equal(bytesToHex(negG), "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+  const hybrid = hexToBytes("06" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8");
+  const negHybrid = Uint8Array.from(secp256k1.Point.fromBytes(negG).toBytes(false));
+  negHybrid[0] = 0x07;
+  const wrapped = (key) => { const redeem = hexToBytes("0014" + bytesToHex(hash160(key))); return "a914" + bytesToHex(hash160(redeem)) + "87"; };
+  const unsigned = (prevout, key = scalar) => ({ txid: "77".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout, private_key: key });
+  // The signed form (scriptSig pushing the hybrid key) is skipped, so the
+  // unsigned form must be too: consistent but ineligible under BIP-352.
+  assert.equal(extractInputPubKey({ txid: "77".repeat(32), vout: 0, scriptSig: "47" + "30" + "44" + "00".repeat(69) + "41" + bytesToHex(hybrid), txinwitness: "", prevout: "76a914" + bytesToHex(hash160(hybrid)) + "88ac" }), null);
+  assert.deepEqual(eligibleInputKeys([unsigned("76a914" + bytesToHex(hash160(hybrid)) + "88ac")]).pubkeys, []);
+  assert.deepEqual(eligibleInputKeys([unsigned("0014" + bytesToHex(hash160(hybrid)))]).pubkeys, []);
+  assert.deepEqual(eligibleInputKeys([unsigned(wrapped(hybrid))]).pubkeys, []);
+  assert.deepEqual(eligibleInputKeys([unsigned("76a914" + bytesToHex(hash160(negHybrid)) + "88ac", negScalar)]).pubkeys, []);
+  // A key hash matching no encoding of the scalar's key is still refused.
+  assert.throws(() => eligibleInputKeys([unsigned("76a914" + "00".repeat(20) + "88ac")]), /does not match its eligible input public key/);
+  assert.throws(() => eligibleInputKeys([unsigned("0014" + "00".repeat(20))]), /does not match its eligible input public key/);
+  assert.throws(() => eligibleInputKeys([unsigned(wrapped(hexToBytes("02" + "00".repeat(32))))]), /does not match its eligible input public key/);
+});

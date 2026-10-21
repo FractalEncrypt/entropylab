@@ -22,6 +22,7 @@ import {
   spendPrivForOutput,
   taprootOutputPrivateKey,
   vinHasSpendData,
+  normalizeVinWitness,
   vinPrevoutScript,
   bytesToHex as hodlSpBytesToHex,
 } from "./bip352.js";
@@ -12058,7 +12059,11 @@ function hodlSpDeriveVinKeys(vins) {
   const derived = [];
   let complete = false;
   try {
-    const resolved = vins.map((vin, i) => {
+    const resolved = vins.map((rawVin, i) => {
+      // A pasted witness array may carry hex-string items (JSON); read them
+      // as bytes before anything reads the witness, exactly as the library
+      // path does in normalizeVin, so both flows see the same input.
+      const vin = normalizeVinWitness(rawVin);
       // The published BIP-352 vectors carry raw per-input scalars; the UI flow
       // derives from the session instead. (The library function keeps vector
       // support for the test suite.)
