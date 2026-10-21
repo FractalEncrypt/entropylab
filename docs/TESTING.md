@@ -4,7 +4,7 @@ EntropyLab handles seeds, keys and transactions, so every change is tested well 
 
 ## 1. The test suite
 
-- **About 2,500 tests** run on every pull request (`npm run test:ci`: 2,500 at rock `63752da5`, 2026-10-21). A guard test fails CI if any test file on disk is missing from that list, so no suite is silently skipped.
+- **About 2,500 tests** run on every pull request (`npm run test:ci`, the CI job "complete dependency-free suite": 2,500 at rock `63752da5`, 2026-10-21). A guard test fails CI if any test file on disk is missing from that list, so no suite is silently skipped.
 - **Published vectors, not our own outputs.** Expected values come from the specifications and from independent implementations: BIP 39 (TREZOR vectors), BIP 32, BIP 143, BIP 174 PSBT vectors, the official BIP 352 send-and-receive vectors (`test/fixtures/bip352-send-and-receive.json`), and Bitcoin Core's `tx_valid.json` and sighash vectors (`test/fixtures/core/`).
 - **The page checks itself on load.** Before any input is wired, the page runs published vectors against its own WASM modules and refuses to start if one fails (see the README).
 - **Rejected input is tested as carefully as accepted input.** Security-sensitive parsing and validation changes must include cases the code must refuse, not only cases it must accept (pull request checklist).
@@ -21,7 +21,7 @@ Five fuzzers generate thousands of random cases and compare EntropyLab's answer 
 | `test/psbt-editor-fuzz.test.mjs` | random edit walks through the PSBT editor, checked by the PSBT layer |
 | `test/wallet-export-fuzz.test.mjs` | an independent check of every generated wallet.dat, including Bitcoin Core's load checks |
 
-Default runs are deterministic (fixed seeds), so a CI failure always reproduces.
+Default runs are deterministic (fixed seeds), so a CI failure always reproduces. CI also runs separate fuzz jobs: LifeHash against the C++ reference and against the official implementation, and multisig outputs against `@scure/btc-signer`.
 
 ## 3. Mutation testing
 
@@ -33,7 +33,7 @@ Mutation testing changes the code on purpose (flips a comparison, deletes a line
 
 ## 4. In the browser
 
-- **Browser suite** (`npm run test:browser`): the built page is driven headless in Chrome and Firefox, including the memory-residue checks.
+- **Browser suite** (`npm run test:browser`): the built page is driven headless, including the memory-residue checks. CI runs it in Firefox on every pull request (the "Firefox integration suite" job); locally it also runs in Chrome/Chromium when one is installed.
 - **Memory-residue audit:** whether secrets survive in process memory after use and after End Session. See [Residue_Audit.md](Residue_Audit.md).
 - **Adversarial nightly:** a scheduled workflow (`.github/workflows/jev-adversarial.yml`, daily at 05:37 UTC) builds the page fresh and runs adversarial scenarios against it.
 

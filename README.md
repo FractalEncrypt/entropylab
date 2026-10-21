@@ -781,7 +781,7 @@ with `npm ci`; every local and CI operation is exposed as an npm script:
 npm test                    # run all tests, including the headless-Firefox suite
 npm run test:ci             # the CI subset: network-check, ui-defaults, source invariants
 npm run test:validate       # validate source and security invariants
-npm run test:browser        # test crypto, sanitization, networking, exports in headless Firefox
+npm run test:browser        # test crypto, sanitization, networking, exports in a headless browser (Firefox in CI; Chrome/Chromium too when installed)
 npm run build               # compile src/ into the generated root files
 npm run build:wasm          # rebuild the committed crypto WASM artifact (needs Rust)
 npm run verify              # verify the site artifact (entropylab.html, assets)
@@ -797,8 +797,9 @@ carry the generated output, so they stop conflicting on it. The staging step
 copies the verified `entropylab.html` to a deployment-only `index.html`,
 allowing both the site root and `/entropylab.html` to serve the same
 application without committing a second application artifact. CI runs the
-test suites that need no browser; the headless-Firefox suite runs locally
-where a Firefox binary is available. Local checks and CI/CD use the same
+full test list (`npm run test:ci`) and the headless-Firefox browser suite on
+every pull request; locally the browser suite also runs in Chrome/Chromium
+when one is installed. Local checks and CI/CD use the same
 commands; the workflow contains no separate build implementation.
 
 The browser suite runs the assembled application in headless Firefox against a
