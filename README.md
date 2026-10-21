@@ -22,9 +22,9 @@ shares those exact modules with downstream tests and artifact publication.
 For local testing after Rust changes, run `npm run build:wasm` before
 `npm run build && npm test`; the checked-in modules may predate the changes.
 
-How the code is tested (the CI suite, differential fuzzing, mutation testing
-and the review and red-team process) is summarised in
-[docs/TESTING.md](docs/TESTING.md).
+How the code is tested (the CI suite, Bitcoin Core interop checks,
+differential fuzzing, mutation testing, and the October 2026 review record)
+is summarised in [docs/TESTING.md](docs/TESTING.md).
 
 Clearing a Key or Multisig station cancels its pending derivation. Leaving
 the page clears rendered seed-word copies and prevents a late derivation or
