@@ -21,6 +21,7 @@ import {
   isP2sh,
   isP2tr,
   isP2wpkh,
+  normalizeVinWitness,
   scanSilentPaymentOutputs,
   taprootOutputPrivateKey,
   spendPrivForOutput,
@@ -62,13 +63,13 @@ const makeResolver = (tweak = taprootOutputPrivateKey) => new Function(
   "indexHdKey", "matchOwnership", "extractInputPubKey", "vinPrevoutScript",
   "isP2pkh", "isP2sh", "isP2tr", "isP2wpkh",
   "p2pkhScript", "p2shP2wpkhScript", "p2trKeyScript", "p2wpkhScript",
-  "taprootOutputPrivateKey", "vinHasSpendData",
+  "taprootOutputPrivateKey", "vinHasSpendData", "normalizeVinWitness",
   `${loadSlice("hodlFingerprintHex")}; ${loadSlice("hodlSpWipeVinKeys")}; ${loadSlice("hodlSpDeriveVinKeys")}; return hodlSpDeriveVinKeys;`,
 )(
   indexHdKey, matchOwnership, extractInputPubKey, vinPrevoutScript,
   isP2pkh, isP2sh, isP2tr, isP2wpkh,
   p2pkhScript, p2shP2wpkhScript, p2trKeyScript, p2wpkhScript,
-  tweak, vinHasSpendData,
+  tweak, vinHasSpendData, normalizeVinWitness,
 );
 const hodlSpDeriveVinKeys = makeResolver();
 const hodlSpWipeVinKeys = new Function(`${loadSlice("hodlSpWipeVinKeys")}; return hodlSpWipeVinKeys;`)();
@@ -295,6 +296,22 @@ test("non-Taproot session scalars retain their exact bytes", () => {
       assert.deepEqual(vins[0].private_key,node.privateKey);
       hodlSpWipeVinKeys(vins);
     }
+  } finally {node.wipePrivateData();}
+});
+
+test("a hex-string witness array resolves like its txinwitness form", () => {
+  // The library path (normalizeVin) reads a witness array of hex strings;
+  // the send flow must accept the same pasted shape instead of refusing it
+  // with "witness key does not hash" before the items are read as bytes.
+  setup();
+  const path="m/84'/1'/0'/0/0", node=SESSION.derive(path), pub=node.publicKey;
+  try {
+    const script=bytesToHex(p2wpkhScript(pub)), keyHex=bytesToHex(pub);
+    const byArray=hodlSpDeriveVinKeys([vinOf(script,{path,txinwitness:"",witness:["00".repeat(71),keyHex]})]);
+    const byHex=hodlSpDeriveVinKeys([vinOf(script,{path,txinwitness:"0121"+keyHex})]);
+    assert.deepEqual(byArray[0].private_key,node.privateKey);
+    assert.deepEqual(byArray[0].private_key,byHex[0].private_key);
+    hodlSpWipeVinKeys([byArray[0],byHex[0]]);
   } finally {node.wipePrivateData();}
 });
 
