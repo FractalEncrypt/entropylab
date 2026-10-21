@@ -19,6 +19,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as scureBip39 from "@scure/bip39";
 import { wordlist as scureEnglish } from "@scure/bip39/wordlists/english.js";
+import { wordlist as spanish } from "@scure/bip39/wordlists/spanish.js";
 import { entropyToMnemonic, mnemonicToEntropy, mnemonicToSeedSync, validateMnemonic } from "../src/js/bip39.js";
 
 const hexToBytes = (hex) => new Uint8Array(hex.match(/.{2}/g).map((b) => parseInt(b, 16)));
@@ -98,8 +99,8 @@ test("entropyToMnemonic: exactly 16/20/24/28/32-byte Uint8Arrays are accepted", 
 });
 
 test("entropyToMnemonic: a non-English wordlist is refused with the exact error", () => {
-  assert.throws(() => entropyToMnemonic(hexToBytes(VECTOR_ENTROPY), scureEnglish), Error);
-  assert.throws(() => entropyToMnemonic(hexToBytes(VECTOR_ENTROPY), scureEnglish), /Only the BIP39 English wordlist is supported/);
+  assert.throws(() => entropyToMnemonic(hexToBytes(VECTOR_ENTROPY), spanish), Error);
+  assert.throws(() => entropyToMnemonic(hexToBytes(VECTOR_ENTROPY), spanish), /Only the BIP39 English wordlist is supported/);
 });
 
 test("entropyToMnemonic wipes its decoded copy of the mnemonic", () => {
@@ -113,8 +114,8 @@ test("entropyToMnemonic wipes its decoded copy of the mnemonic", () => {
 // --- mnemonicToEntropy ----------------------------------------------------
 
 test("mnemonicToEntropy: a non-English wordlist is refused with the exact error", () => {
-  assert.throws(() => mnemonicToEntropy(VECTOR_PHRASE, scureEnglish), Error);
-  assert.throws(() => mnemonicToEntropy(VECTOR_PHRASE, scureEnglish), /Only the BIP39 English wordlist is supported/);
+  assert.throws(() => mnemonicToEntropy(VECTOR_PHRASE, spanish), Error);
+  assert.throws(() => mnemonicToEntropy(VECTOR_PHRASE, spanish), /Only the BIP39 English wordlist is supported/);
 });
 
 test("mnemonicToEntropy: a checksum failure is refused with the exact error", () => {
@@ -157,7 +158,7 @@ test("whitespace and NFKD handling matches @scure/bip39", () => {
   const folded = VECTOR_PHRASE.replace(" abandon", "\u3000abandon");
   assert.equal(bytesToHex(mnemonicToEntropy(folded)), VECTOR_ENTROPY);
   assert.equal(bytesToHex(mnemonicToEntropy(folded)), bytesToHex(scureBip39.mnemonicToEntropy(folded, scureEnglish)));
-  assert.deepEqual(mnemonicToSeedSync(folded), mnemonicToSeedSync(VECTOR_PHRASE));
+  assert.deepEqual(mnemonicToSeedSync(folded), scureBip39.mnemonicToSeedSync(folded, ""));
   // Everything the single-space tokenization rejects is refused everywhere.
   for (const bad of [
     VECTOR_PHRASE.replace(" abandon", "\tabandon"),
@@ -176,7 +177,7 @@ test("whitespace and NFKD handling matches @scure/bip39", () => {
 
 test("validateMnemonic: a non-English wordlist fails closed", () => {
   assert.equal(validateMnemonic(VECTOR_PHRASE), true);
-  assert.equal(validateMnemonic(VECTOR_PHRASE, scureEnglish), false);
+  assert.equal(validateMnemonic(VECTOR_PHRASE, spanish), false);
   assert.equal(validateMnemonic(VECTOR_PHRASE, []), false);
 });
 
@@ -213,10 +214,23 @@ test("mnemonicToSeedSync: a non-string mnemonic is refused before hashing", () =
 });
 
 test("mnemonicToSeedSync: a mnemonic with a lone surrogate is refused, not hashed as U+FFFD", { skip: typeof "".isWellFormed !== "function" && "needs String.prototype.isWellFormed (Node >= 20)" }, () => {
+  // The isWellFormed guard is what refuses this phrase, so removing that
+  // guard makes this test fail: mnemonicToSeedSync does no wordlist or
+  // checksum check, and isCanonicalPhrase accepts the phrase (\S matches a
+  // lone surrogate and it is twelve single-space-separated tokens), so
+  // without the guard TextEncoder would silently hash the surrogate as
+  // U+FFFD and return a seed instead of throwing. The guard is not an
+  // equivalent mutant.
   const phrase = `${VECTOR_PHRASE.slice(0, -5)}abou\uD800t`;
   assert.equal(phrase.split(" ").length, 12);
   assert.equal(phrase.isWellFormed(), false);
   assert.throws(() => mnemonicToSeedSync(phrase), invalidMnemonic);
+});
+
+test("mnemonicToSeedSync: a passphrase with a lone surrogate is refused, not hashed as U+FFFD", () => {
+  // saltFor's isWellFormed guard: without it, TextEncoder would silently
+  // substitute U+FFFD into the PBKDF2 salt and derive a different wallet.
+  assert.throws(() => mnemonicToSeedSync(VECTOR_PHRASE, "abou\uD800t"), /Invalid passphrase/);
 });
 
 test("mnemonicToSeedSync: a non-canonical phrase is refused before hashing", () => {
