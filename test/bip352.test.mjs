@@ -403,3 +403,21 @@ test("a P2TR input with no witness is refused, not skipped", () => {
   // With a key-path signature the same input is eligible.
   assert.equal(extractInputPubKey({ ...vin, txinwitness: "0140" + "5a".repeat(64) }).isTaproot, true);
 });
+
+test("a large legacy P2SH redeem pushed with OP_PUSHDATA1/2/4 is read little-endian and stays ineligible", () => {
+  const key = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+  // 1-of-8 multisig: OP_1 <8 x 33-byte key> OP_8 OP_CHECKMULTISIG, 275 bytes.
+  const redeem = hexToBytes("51" + ("21" + key).repeat(8) + "58ae");
+  assert.equal(redeem.length, 275);
+  const prevout = "a914" + bytesToHex(hash160(redeem)) + "87";
+  const sig = "47" + "30" + "44" + "00".repeat(69);
+  const vin = (push) => ({ txid: "66".repeat(32), vout: 0, scriptSig: "00" + sig + push + bytesToHex(redeem), txinwitness: "", prevout });
+  // 275 = 0x0113: OP_PUSHDATA2 13 01, OP_PUSHDATA4 13 01 00 00.
+  assert.equal(extractInputPubKey(vin("4d1301")), null);
+  assert.equal(extractInputPubKey(vin("4e13010000")), null);
+  // The big-endian reading (0x1301 = 4865) would overrun; so does a length one too long.
+  assert.throws(() => extractInputPubKey(vin("4d1401")), /redeem script its prevout commits to/);
+  // A 37-byte redeem pushed with OP_PUSHDATA1 is read the same way.
+  const small = hexToBytes("5121" + key + "51ae");
+  assert.equal(extractInputPubKey({ txid: "66".repeat(32), vout: 1, scriptSig: "00" + sig + "4c25" + bytesToHex(small), txinwitness: "", prevout: "a914" + bytesToHex(hash160(small)) + "87" }), null);
+});

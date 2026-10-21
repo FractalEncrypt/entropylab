@@ -227,8 +227,9 @@ const scriptSigPushes = (scriptSig) => {
     else if (opcode === 0x4c || opcode === 0x4d || opcode === 0x4e) {
       const width = opcode === 0x4c ? 1 : opcode === 0x4d ? 2 : 4;
       if (offset + width > scriptSig.length) return null;
+      // Push lengths are little-endian in Bitcoin Script.
       length = 0;
-      for (let i = 0; i < width; i++) length = length * 256 + scriptSig[offset + i];
+      for (let i = width - 1; i >= 0; i--) length = length * 256 + scriptSig[offset + i];
       offset += width;
     } else {
       return null;
