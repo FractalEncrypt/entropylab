@@ -35,9 +35,18 @@ test("fuzzEnv defaults and overrides", () => {
   });
   withEnv(prefix, {
     [`${prefix}_SEED`]: "16",
-    [`${prefix}_ITERATIONS`]: "3",
+    [`${prefix}_ITERATIONS`]: "30",
   }, () => {
-    assert.deepEqual(fuzzEnv(prefix, { defaultSeed: 7, defaultIterations: 9 }), { seed: 16, iterations: 3 });
+    assert.deepEqual(fuzzEnv(prefix, { defaultSeed: 7, defaultIterations: 9 }), { seed: 16, iterations: 30 });
+  });
+  // The knob only widens: a smaller run would fail the coverage floors.
+  for (const narrower of ["0", "1", "8"]) {
+    withEnv(prefix, { [`${prefix}_ITERATIONS`]: narrower }, () => {
+      assert.throws(() => fuzzEnv(prefix, { defaultSeed: 7, defaultIterations: 9 }), /can only widen the run/);
+    });
+  }
+  withEnv(prefix, { [`${prefix}_ITERATIONS`]: "9" }, () => {
+    assert.equal(fuzzEnv(prefix, { defaultSeed: 7, defaultIterations: 9 }).iterations, 9);
   });
 });
 

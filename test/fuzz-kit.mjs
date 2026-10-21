@@ -34,6 +34,12 @@ export const fuzzEnv = (prefix, { defaultSeed, defaultIterations }) => {
   const iterationsRaw = process.env[`${prefix}_ITERATIONS`];
   const seed = seedRaw === undefined ? defaultSeed : envInt(`${prefix}_SEED`, seedRaw, 0xffffffff);
   const iterations = iterationsRaw === undefined ? defaultIterations : envInt(`${prefix}_ITERATIONS`, iterationsRaw, Number.MAX_SAFE_INTEGER);
+  // The knob widens a run. Each fuzzer's coverage floors ("every flavor
+  // exercised", minimum build counts) are calibrated to its default count, so
+  // a smaller run would fail them for no defect: refuse it up front.
+  if (iterations < defaultIterations) {
+    throw new Error(`${prefix}_ITERATIONS can only widen the run: got ${iterations}, the default is ${defaultIterations}`);
+  }
   return { seed, iterations };
 };
 
