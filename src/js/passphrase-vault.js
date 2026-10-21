@@ -230,7 +230,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // that replaces a selected character one for one leaves the field
     // identical too; that cannot be told from a cancel, so it is not taken:
     // a mask character never enters the vault on a guess.)
-    if (value === prior || (typeof event.data === "string" && event.data === "")) {
+    if (value === prior) {
       render(start);
       return;
     }
@@ -286,18 +286,29 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     pending = null;
   });
 
+  // Any change to the vault made from outside the field ends an open
+  // composition: a compositionend that arrives later would apply its stale
+  // indices to the new contents (mask bullets into the vault).
+  const endComposition = () => {
+    composing = null;
+    pending = null;
+  };
+
   return {
     // The on-screen keyboard: insert at the caret, or delete before it.
     insert: (text) => {
+      endComposition();
       const [start, end] = caret();
       apply(start, end, text, "insertText");
     },
     deleteBackward: () => {
+      endComposition();
       const [start, end] = caret();
       apply(start === end ? Math.max(0, start - 1) : start, end, "", "deleteContentBackward");
     },
     // Script-side: the field shows `bytes` (a stored passphrase), or nothing.
     setBytes: (bytes) => {
+      endComposition();
       vault.setBytes(bytes);
       if (active()) render(vault.length);
       else {
@@ -306,6 +317,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
       }
     },
     clear: () => {
+      endComposition();
       vault.clear();
       field.value = "";
     },
@@ -313,14 +325,12 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // coming back to it. Either switch ends any composition: a late
     // compositionend from before it must be ignored.
     unmask: () => {
-      composing = null;
-      pending = null;
+      endComposition();
       field.value = vault.text();
       vault.clear();
     },
     mask: () => {
-      composing = null;
-      pending = null;
+      endComposition();
       vault.setText(field.value);
       render(vault.length);
     },

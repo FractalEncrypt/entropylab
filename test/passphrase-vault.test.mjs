@@ -338,6 +338,57 @@ test("a compositionend that arrives after a blur still commits, and the field is
   masked(field, vault);
 });
 
+// Reviews of #1027 (GLM 5.3, Kimi K3, DeepSeek V4.1): a change made to the
+// vault from outside the field during an open composition must end it, or
+// the late compositionend applies stale indices to the new contents.
+test("a stored passphrase loaded during a composition ends it: the late compositionend is ignored", () => {
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  api.setBytes(new TextEncoder().encode("new"));
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "new");
+  masked(field, vault);
+});
+
+test("an on-screen keyboard edit during a composition ends it", () => {
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(2);
+  field.dispatchEvent({ type: "compositionstart" });
+  api.insert("c");
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "abc");
+  masked(field, vault);
+});
+
+test("an empty composition committed over a selection deletes the selection", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  // The composing text was deleted and the empty composition committed: the
+  // field lost the selected character.
+  field.value = VAULT_MASK;
+  field.dispatchEvent({ type: "compositionend", data: "" });
+  assert.equal(vault.text(), "b");
+  masked(field, vault);
+});
+
+test("without event data, mask bullets read back over a selection are never taken", () => {
+  const { field, vault } = bound();
+  field.type("abc");
+  field.select(0, 2);
+  field.dispatchEvent({ type: "compositionstart" });
+  // A browser without CompositionEvent.data, whose field shows one bullet
+  // where two characters were selected.
+  field.value = VAULT_MASK.repeat(2);
+  field.dispatchEvent({ type: "compositionend" });
+  assert.equal(vault.text(), "abc");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives
