@@ -191,7 +191,10 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     event.preventDefault();
     let from = start, to = end, text = "";
     if (type.startsWith("insert")) {
-      if (type === "insertLineBreak" || type === "insertParagraph") return;
+      if (type === "insertLineBreak" || type === "insertParagraph") {
+        pending = null; // prevented, so no input event will consume it
+        return;
+      }
       text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
     } else if (type === "deleteContentBackward") {
       if (start === end) from = Math.max(0, start - 1);
@@ -204,6 +207,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     } else if (type.startsWith("delete") && type.endsWith("Forward")) {
       if (start === end) to = vault.length;
     } else if (!type.startsWith("delete")) {
+      pending = null; // prevented, so no input event will consume it
       return; // undo, redo, formatting: nothing in a field of bullets to do
     }
     pending = null;
@@ -213,15 +217,27 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   field.addEventListener("compositionstart", () => {
     if (!active()) return;
     const [start, end] = caret();
-    composing = { start, end, before: vault.length };
+    composing = { start, end, before: vault.length, value: field.value };
   });
   field.addEventListener("compositionend", () => {
     if (!active() || !composing) return;
-    const { start, end, before } = composing;
+    const { start, end, before, value: prior } = composing;
     composing = null;
     pending = null;
     const value = field.value, added = value.length - (before - (end - start));
-    apply(start, end, value.slice(start, start + Math.max(0, added)), "insertCompositionText");
+    const text = value.slice(start, start + Math.max(0, added));
+    // A cancelled composition (Esc, a blur) restores what the field held at
+    // compositionstart — the mask — so the text read back is the mask's own
+    // bullets where the vault holds the passphrase. Nothing was committed:
+    // take nothing, and never copy masked characters into the vault. A bullet
+    // committed at a collapsed caret covers no vault text, so it is the
+    // user's own character and is kept.
+    const maskOverSelection = end > start && text.length > 0 && text === VAULT_MASK.repeat(text.length);
+    if (value === prior || maskOverSelection) {
+      render(start);
+      return;
+    }
+    apply(start, end, text, "insertCompositionText");
   });
 
   // An edit the browser made itself, or a value set by script. Runs on the

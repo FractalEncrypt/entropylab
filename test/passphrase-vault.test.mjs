@@ -163,6 +163,83 @@ test("an IME composition is taken into the vault when it ends", () => {
   assert.equal(field.selectionStart, 2);
 });
 
+// Red-team F2: compositionend cannot tell a committed composition from a
+// cancelled one. Esc (or a blur) makes the browser restore what the field
+// held at compositionstart — the mask — and the handler used to read that
+// back as the committed text: over a selection the "inserted" text is the
+// mask's own bullets, and they went into the vault. The mask is one bullet
+// per character either way, so the passphrase silently gained U+2022.
+test("a cancelled composition over a selection leaves the vault unchanged", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  // The browser shows the composition over the selection while it runs.
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.value = "と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // Esc: the browser restores what the field held at compositionstart.
+  field.value = VAULT_MASK.repeat(2);
+  field.dispatchEvent({ type: "compositionend" });
+  assert.equal(vault.text(), "ab", "a cancelled composition commits nothing");
+  assert.ok(!vault.text().includes(VAULT_MASK), "a mask bullet must never enter the vault");
+  masked(field, vault);
+});
+
+test("a composition committed over a selection still inserts its text", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "東", cancelable: false, isComposing: true });
+  field.value = "東•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "compositionend" });
+  assert.equal(vault.text(), "東b");
+  masked(field, vault);
+  assert.equal(field.selectionStart, 1);
+});
+
+test("a bullet committed at a collapsed caret is the user's own character and is kept", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "•", cancelable: false, isComposing: true });
+  field.value = "•••";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "compositionend" });
+  assert.equal(vault.text(), "a•b");
+  masked(field, vault);
+});
+
+// Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
+// `pending` still holding the caret. The next edit the browser makes by
+// itself — an autofill, a password manager, an Android-IME commit — arrives
+// as `input` with no beforeinput and was spliced into the vault at those
+// stale indices instead of replacing it: an autofilled "secret" became
+// "aecreb" while the mask showed the expected six bullets.
+test("a prevented Enter or undo leaves no stale caret for the next browser edit", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  assert.equal(field.edit("insertParagraph"), false, "Enter is prevented: a single-line field");
+  assert.equal(vault.text(), "ab");
+  // A password manager fills the field: an input event with no beforeinput.
+  field.value = "secret";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(vault.text(), "secret");
+  masked(field, vault);
+  field.select(2);
+  assert.equal(field.edit("historyUndo"), false, "undo is prevented: the browser's history holds nothing");
+  assert.equal(vault.text(), "secret");
+  field.value = "hunter2";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(vault.text(), "hunter2");
+  masked(field, vault);
+  assert.ok(!vault.text().includes(VAULT_MASK), "a mask bullet must never enter the vault");
+});
+
 test("an edit the browser will not let a page cancel is moved into the vault", () => {
   const { field, vault } = bound();
   field.type("ab");
