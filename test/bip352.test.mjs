@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HDKey } from "@scure/bip32";
 import { secp256k1 } from "../src/js/secp256k1.js";
+import { hash160 } from "../src/js/hashes.js";
 import {
   BIP352_K_MAX,
   createLabeledSilentPaymentAddress,
@@ -329,4 +330,76 @@ test("deliberately coincident generated outputs are both kept (issue #332)", () 
   assert.equal(result.outputs.length, 2, "both requested outputs must be returned");
   assert.equal(result.outputs[1], result.outputs[0], "the crafted outputs coincide");
   assert.equal(result.outputs[0], base.outputs[0], "the first output is untouched");
+});
+
+test("P2SH commitment is checked with or without a witness; legacy P2SH stays ineligible", () => {
+  const hash160Hex = (bytes) => bytesToHex(hash160(bytes));
+  const key = hexToBytes("03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873");
+  // BIP143's P2SH-P2WPKH worked example redeem script.
+  const redeem = hexToBytes("001479091972186c449eb1ded22b78e40d009bdf0089");
+  const base = {
+    txid: "11".repeat(32),
+    vout: 0,
+    scriptSig: "16" + bytesToHex(redeem),
+    txinwitness: "02" + "47" + "00".repeat(71) + "21" + bytesToHex(key),
+    prevout: "a914" + hash160Hex(redeem) + "87",
+  };
+  // The BIP143 vector still returns the key, and a consistent P2SH-P2WSH
+  // spend (BIP143's redeem 0020a16b…cb54) is still ineligible.
+  assert.equal(bytesToHex(extractInputPubKey(base).point.toBytes(true)), bytesToHex(key));
+  const p2wshRedeem = hexToBytes("0020a16b5755f7f6f96dbd65f5f0d6ab9418b89af4b1f14a1bb8a09062c35f0dcb54");
+  assert.equal(extractInputPubKey({ ...base, scriptSig: "22" + bytesToHex(p2wshRedeem), prevout: "a914" + hash160Hex(p2wshRedeem) + "87" }), null);
+  // A pasted vin with no witness and one mangled field must be refused, not
+  // silently dropped from the sender's key sum while the chain counts it.
+  const noWitness = { ...base, txinwitness: "" };
+  assert.throws(() => extractInputPubKey({ ...noWitness, prevout: "a914" + "00".repeat(20) + "87" }), /redeem script its prevout commits to/);
+  assert.throws(() => extractInputPubKey({ ...noWitness, scriptSig: bytesToHex(redeem) }), /redeem script its prevout commits to/);
+  assert.throws(() => eligibleInputKeys([{ ...noWitness, prevout: "a914" + "00".repeat(20) + "87" }]), /redeem script its prevout commits to/);
+  // A legacy P2SH 1-of-1 multisig spend: consistent, ineligible, no witness.
+  const multisigKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+  const multisigRedeem = hexToBytes("5121" + multisigKey + "51ae");
+  const multisig = {
+    txid: "33".repeat(32),
+    vout: 0,
+    scriptSig: "00" + "47" + "30" + "44" + "00".repeat(69) + "25" + bytesToHex(multisigRedeem),
+    txinwitness: "",
+    prevout: "a914" + hash160Hex(multisigRedeem) + "87",
+  };
+  assert.equal(extractInputPubKey(multisig), null);
+  // The same spend carrying a witness is consensus-invalid (WITNESS_UNEXPECTED).
+  assert.throws(() => extractInputPubKey({ ...multisig, txinwitness: "0140" + "5a".repeat(64) }), /redeem script its prevout commits to/);
+  // A mistyped prevout, and a non-push opcode in front of the redeem push.
+  assert.throws(() => extractInputPubKey({ ...multisig, prevout: "a914" + "00".repeat(20) + "87" }), /redeem script its prevout commits to/);
+  assert.throws(() => extractInputPubKey({ ...multisig, scriptSig: "76" + multisig.scriptSig }), /redeem script its prevout commits to/);
+});
+
+test("a P2PKH input reveals its key or is refused", () => {
+  const hash160Hex = (bytes) => bytesToHex(hash160(bytes));
+  const compressed = hexToBytes("03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873");
+  // The secp256k1 generator point in uncompressed form (published constant).
+  const uncompressed = hexToBytes("0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8");
+  const scriptSigFor = (keyBytes) => "47" + "30" + "44" + "00".repeat(69) + bytesToHex(Uint8Array.of(keyBytes.length)) + bytesToHex(keyBytes);
+  const vinFor = (keyBytes) => ({
+    txid: "44".repeat(32),
+    vout: 0,
+    scriptSig: scriptSigFor(keyBytes),
+    txinwitness: "",
+    prevout: "76a914" + hash160Hex(keyBytes) + "88ac",
+  });
+  // A compressed key hashing to the key hash is eligible, as before.
+  assert.equal(bytesToHex(extractInputPubKey(vinFor(compressed)).point.toBytes(true)), bytesToHex(compressed));
+  // An uncompressed key is consistent but ineligible under BIP-352.
+  assert.equal(extractInputPubKey(vinFor(uncompressed)), null);
+  // A scriptSig holding a key that does not hash to the prevout's key hash
+  // is mangled paste: skipping the input would silently drop it from the
+  // key sum while the chain counts it.
+  assert.throws(() => extractInputPubKey({ ...vinFor(uncompressed), scriptSig: scriptSigFor(compressed) }), /does not contain the key/);
+});
+
+test("a P2TR input with no witness is refused, not skipped", () => {
+  const vin = { txid: "55".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout: "5120" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" };
+  assert.throws(() => extractInputPubKey(vin), /P2TR input has no witness/);
+  assert.throws(() => eligibleInputKeys([vin]), /P2TR input has no witness/);
+  // With a key-path signature the same input is eligible.
+  assert.equal(extractInputPubKey({ ...vin, txinwitness: "0140" + "5a".repeat(64) }).isTaproot, true);
 });
