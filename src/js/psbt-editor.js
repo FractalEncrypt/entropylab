@@ -686,6 +686,26 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
   // many of the map's last pairs after the capped rows, so the add is never
   // invisible (red-team F7 round 4). Cleared when another document loads.
   const addedPairs = new Map();
+  // The keys are map positions, so deleting an input or output shifts every
+  // later map of that kind down one index and the counts would point at the
+  // wrong maps: the added pair is elided again and the map now at the old
+  // index renders an extra overflow row (red-team F7 round 5). Re-key on the
+  // delete — option (a): the editor has no reorder operation (adds append,
+  // only deletes shift indices), so re-keying on delete covers every shift,
+  // and tracking pair identity instead would add bookkeeping for no extra
+  // case. The deleted map's count goes with it; clearing everything would
+  // make the other maps' added pairs invisible.
+  const shiftAddedPairs = (kind, removed) => {
+    for (const [key, count] of [...addedPairs]) {
+      const [keyKind, keyIndex] = key.split(":");
+      if (keyKind !== kind) continue;
+      addedPairs.delete(key);
+      const index = Number(keyIndex);
+      if (index > removed) addedPairs.set(`${kind}:${index - 1}`, count);
+      else if (index < removed) addedPairs.set(key, count);
+      // index === removed: the deleted map's count is dropped with it.
+    }
+  };
   let resultBytes = null; // last successfully built PSBT
   let stale = false; // true while the current fields do not build; resultBytes is then the last valid build
   let pristineTx = null; // signingAnchor of the document the current signing pairs commit to; null while unknown
@@ -1310,19 +1330,34 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
     out.querySelectorAll("[data-txin-del]").forEach((button) =>
       button.addEventListener("click", () => {
         const index = Number(button.dataset.txinDel);
+        const before = doc;
         mutate((draft) => {
           draft.tx.inputs.splice(index, 1);
           draft.inputs.splice(index, 1);
         });
+        // An accepted delete shifted every later input map down one index:
+        // re-key the added-pair counts so each stays on its map, and
+        // re-render — mutate's render used the stale keys. A rejected delete
+        // restored the document, so the keys still match.
+        if (doc !== before) {
+          shiftAddedPairs("input", index);
+          render();
+        }
       })
     );
     out.querySelectorAll("[data-txout-del]").forEach((button) =>
       button.addEventListener("click", () => {
         const index = Number(button.dataset.txoutDel);
+        const before = doc;
         mutate((draft) => {
           draft.tx.outputs.splice(index, 1);
           draft.outputs.splice(index, 1);
         });
+        // Same re-key for the output maps.
+        if (doc !== before) {
+          shiftAddedPairs("output", index);
+          render();
+        }
       })
     );
 

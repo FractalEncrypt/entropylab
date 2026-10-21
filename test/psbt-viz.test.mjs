@@ -912,6 +912,15 @@ const extractEditorConst = (name) => {
   throw new Error(`unbalanced braces in ${name}`);
 };
 
+// extractEditorConst with a passthrough for a const the fix adds: null when
+// the source has no such const, so the harness can substitute a no-op and
+// the behaviour assertions fail on the claimed reason, not on the extractor
+// (the cappedHtml/renderBudget passthrough pattern above).
+const tryExtractEditorConst = (name) => {
+  const source = readFileSync(join(repoRoot, "src/js/psbt-editor.js"), "utf8");
+  return source.includes(`const ${name} = `) ? extractEditorConst(name) : null;
+};
+
 const pairRowsForTest = () => {
   const stubs = {
     PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
@@ -1052,7 +1061,11 @@ const editorRenderForTest = (doc) => {
   };
   const names = Object.keys(stubs);
   const render = new Function(...names, `${extractEditorConst("pairRows")}\n${extractEditorConst("render")}\nreturn render;`)(...names.map((name) => stubs[name]));
-  return { render, out, addedPairs: stubs.addedPairs };
+  // The delete handlers' added-pairs re-key, with a no-op passthrough on the
+  // pre-fix source so the round-5 tests fail on the stale keys (the claimed
+  // reason), not on a missing const.
+  const shiftAddedPairs = new Function("addedPairs", `${tryExtractEditorConst("shiftAddedPairs") ?? "const shiftAddedPairs = () => {};"}\nreturn shiftAddedPairs;`)(stubs.addedPairs);
+  return { render, out, addedPairs: stubs.addedPairs, shiftAddedPairs };
 };
 
 // A synthetic editor document: inputCount inputs whose maps carry
@@ -1113,6 +1126,53 @@ test("a pair added to an over-cap map renders after the capped rows, so the user
   const html = out.innerHTML;
   assert.ok(html.includes('data-pair="500"'), "the added pair (index 500) renders past the cap");
   assert.ok(!html.includes("more pairs"), "all 501 pairs render: 500 capped rows plus the added one");
+});
+
+test("a pair added to an over-cap input map stays visible after an earlier input is deleted (F7 round 5)", () => {
+  const doc = editorDoc(3, 0);
+  // Input 1's map is over the cap; input 2's small map is the neighbour that
+  // lands on the stale "input:1" key after the delete.
+  doc.inputs[1] = Array.from({ length: 501 }, (_, pair) => ({ key: "fc00", value: pair.toString(16), name: "PSBT_IN_PROPRIETARY", decoded: null }));
+  doc.inputs[2] = ["aa", "bb", "cc"].map((value) => ({ key: "fc00", value, name: "PSBT_IN_PROPRIETARY", decoded: null }));
+  const { render, out, addedPairs, shiftAddedPairs } = editorRenderForTest(doc);
+  addedPairs.set("input:1", 1); // what the Add Pair handler records per accepted add
+  render();
+  assert.ok(out.innerHTML.includes('data-pair="500"'), "the added pair renders for input 1 before the delete");
+  // What an accepted delete of input 0 does: splice the transaction input
+  // and its map, re-key the added-pair counts, and re-render.
+  doc.tx.inputs.splice(0, 1);
+  doc.inputs.splice(0, 1);
+  shiftAddedPairs("input", 0);
+  render();
+  const html = out.innerHTML;
+  // The over-cap map is now input 0: its added pair (index 500) must still
+  // render, and 501 pairs with one overflow slot elide nothing.
+  assert.ok(html.includes('data-pair="500"'), "the added pair still renders after the delete");
+  assert.ok(!html.includes("more pairs (not rendered)"), "the added pair is not elided");
+  // The neighbour (old input 2, three pairs, nothing added) now sits at the
+  // stale key: it must not render the extra overflow row the stale count
+  // would grant it (its last pair rendered twice).
+  const neighbour = html.slice(html.indexOf('data-psbted-section="input:1"'), html.indexOf('data-psbted-section="output:0"'));
+  assert.equal(dataRows(neighbour), 3, "the neighbouring map renders exactly its three pairs");
+});
+
+test("a pair added to an over-cap output map stays visible after an earlier output is deleted (F7 round 5)", () => {
+  const doc = editorDoc(1, 0, 3);
+  doc.outputs[1] = Array.from({ length: 501 }, (_, pair) => ({ key: "fc00", value: pair.toString(16), name: "PSBT_OUT_PROPRIETARY", decoded: null }));
+  doc.outputs[2] = ["aa", "bb", "cc"].map((value) => ({ key: "fc00", value, name: "PSBT_OUT_PROPRIETARY", decoded: null }));
+  const { render, out, addedPairs, shiftAddedPairs } = editorRenderForTest(doc);
+  addedPairs.set("output:1", 1); // what the Add Pair handler records per accepted add
+  render();
+  assert.ok(out.innerHTML.includes('data-pair="500"'), "the added pair renders for output 1 before the delete");
+  doc.tx.outputs.splice(0, 1);
+  doc.outputs.splice(0, 1);
+  shiftAddedPairs("output", 0);
+  render();
+  const html = out.innerHTML;
+  assert.ok(html.includes('data-pair="500"'), "the added pair still renders after the delete");
+  assert.ok(!html.includes("more pairs (not rendered)"), "the added pair is not elided");
+  const neighbour = html.slice(html.indexOf('data-psbted-section="output:1"'));
+  assert.equal(dataRows(neighbour), 3, "the neighbouring map renders exactly its three pairs");
 });
 
 test("a small PSBT renders every editor row and section with no elision line", () => {
