@@ -1307,6 +1307,15 @@ test("bitcoind loads a generated msig Taproot watch-only wallet.dat", { skip: !B
 // - buildWalletRecords HD xprv routing: needs a valid fixture or a fail-closed
 //   HD-specific error; the current source stores the xprv verbatim, so a
 //   no-leak assertion would fail. Left alive until the source fails closed.
+// - branchRangeFromRows' row filter (null rows, indexes at or above
+//   0x80000000): the old test pinned that malformed rows are silently
+//   ignored and the range falls back to 0..1000 — fail-open — so it was
+//   deleted rather than kept as false coverage; those boundaries stay alive
+//   until the source fails closed. (Index 0 is still covered.)
+// - walletDescriptorUnits' unknown-script account skip (the
+//   `type === undefined` continue): the old assertion pinned that a
+//   malformed account is silently omitted; left alive until the source
+//   fails closed.
 
 const validDescriptorWithLength = (target) => {
   const base = `wpkh([00000000]${XPUB_TAIL_4H}/0/*)`;
@@ -1360,41 +1369,26 @@ test("multi-digit branch steps are parsed to the end of the descriptor", () => {
 test("unsupported descriptor path shapes are refused", () => {
   const { buildWalletRecords } = loadModule();
   const twoStep = `wpkh(${XPUB_TAIL_4H}/0/0/*)`;
-  assert.throws(() => buildWalletRecords(mutantHdWallet(`${twoStep}#${descriptorChecksum(twoStep)}`), false, deps, 0));
+  assert.throws(() => buildWalletRecords(mutantHdWallet(`${twoStep}#${descriptorChecksum(twoStep)}`), false, deps, 0), /unsupported descriptor path shape/);
   const hardenedIndex = `wpkh(${XPUB_TAIL_4H}/2147483648/*)`;
-  assert.throws(() => buildWalletRecords(mutantHdWallet(`${hardenedIndex}#${descriptorChecksum(hardenedIndex)}`), false, deps, 0));
+  assert.throws(() => buildWalletRecords(mutantHdWallet(`${hardenedIndex}#${descriptorChecksum(hardenedIndex)}`), false, deps, 0), /unsupported descriptor path shape/);
 });
 
-
-test("branch ranges ignore null rows and include index 0 but not out-of-range indexes", () => {
+test("a branch row at index 0 counts toward the next index", () => {
   const { walletDescriptorUnits } = loadModule();
-  const wallet = structuredClone(WATCH_ONLY_WALLET);
-  wallet.accounts = [wallet.accounts[0]];
-  wallet.accounts[0].addressBranches = [{ branch: 0, rows: [null, { index: 5 }] }];
-  const units = walletDescriptorUnits(wallet, false);
-  assert.equal(units[0].nextIndex, 6);
-  assert.equal(units[0].rangeStart, 5);
-  assert.equal(units[0].rangeEnd, 1005);
-
   const zero = structuredClone(WATCH_ONLY_WALLET);
   zero.accounts = [zero.accounts[0]];
   zero.accounts[0].addressBranches = [{ branch: 0, rows: [{ index: 0 }] }];
   assert.equal(walletDescriptorUnits(zero, false)[0].nextIndex, 1);
-
-  const tooHigh = structuredClone(WATCH_ONLY_WALLET);
-  tooHigh.accounts = [tooHigh.accounts[0]];
-  tooHigh.accounts[0].addressBranches = [{ branch: 0, rows: [{ index: 0x80000000 }] }];
-  const highUnit = walletDescriptorUnits(tooHigh, false)[0];
-  assert.deepEqual(
-    { nextIndex: highUnit.nextIndex, rangeStart: highUnit.rangeStart, rangeEnd: highUnit.rangeEnd },
-    { nextIndex: 0, rangeStart: 0, rangeEnd: 1000 },
-  );
 });
 
 test("msig addressBranches add branches beyond the default window", () => {
   const { walletDescriptorUnits } = loadModule();
   const wallet = structuredClone(MSIG_WALLET);
-  const desc2 = MSIG_WALLET.receiveDescriptor;
+  // A different branch step on the same key set, with its own checksum: as a
+  // copy of the receive descriptor, the assertion below could not tell the
+  // branch's own descriptor from the wallet's fallback.
+  const desc2 = msigDesc(2);
   wallet.addressBranches = [{ branch: 2, publicDescriptor: desc2 }];
   const units = walletDescriptorUnits(wallet, false);
   assert.equal(units.length, 3);
@@ -1406,7 +1400,9 @@ test("msig branches are exported in ascending branch order", () => {
   const wallet = structuredClone(MSIG_WALLET);
   const desc0 = MSIG_WALLET.receiveDescriptor;
   const desc1 = MSIG_WALLET.changeDescriptor;
-  const desc2 = MSIG_WALLET.receiveDescriptor;
+  // Distinct from desc0: with branch 2 reusing the receive descriptor, a
+  // descending sort produced the same expected array.
+  const desc2 = msigDesc(2);
   wallet.addressBranches = [
     { branch: 2, publicDescriptor: desc2 },
     { branch: 0, publicDescriptor: desc0 },
@@ -1468,7 +1464,6 @@ test("walletDescriptorUnits refuses non-HD wallets without throwing", () => {
   const { walletDescriptorUnits } = loadModule();
   assert.deepEqual(walletDescriptorUnits(null, false), []);
   assert.deepEqual(walletDescriptorUnits({ kind: "hd" }, false), []);
-  assert.deepEqual(walletDescriptorUnits({ kind: "hd", accounts: [{}] }, false), []);
 });
 
 test("HD branches are exported in ascending branch order", () => {
@@ -1571,7 +1566,7 @@ test("bip388Supported refuses branches outside 0 and 1", () => {
 
 test("buildWalletRecords refuses a null wallet", () => {
   const { buildWalletRecords } = loadModule();
-  assert.throws(() => buildWalletRecords(null, false, deps, 0));
+  assert.throws(() => buildWalletRecords(null, false, deps, 0), /unknown network/);
 });
 
 // The 78-byte check lives in extendedKeyBody, which the writer reaches only
@@ -1632,7 +1627,7 @@ test("multisig refuses a descriptor with no extended public keys", () => {
     script: "p2wsh",
     receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
   };
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /no extended key found/);
 });
 
 test("multisig refuses a non-xpub/tpub extended public key", () => {
@@ -1648,21 +1643,21 @@ test("multisig refuses a non-xpub/tpub extended public key", () => {
     script: "p2wsh",
     receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
   };
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /Base58Check codec/);
 });
 
 test("buildWalletRecords refuses a hardened step after a public key", () => {
   const { buildWalletRecords } = loadModule();
   const body = `wpkh(${XPUB_TAIL_4H}/0h/*)`;
   const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /hardened step after a public key/);
 });
 
-// Pins only that the buffers handed to the injected dependencies are zeroed
-// before buildWalletRecords returns; copies taken inside the module are not
-// observable through this seam, so this is not a proof that every secret
-// copy is wiped.
-test("private export wipes decoded key material", () => {
+// Checks only the buffers passed to the injected dependencies: they must be
+// zeroed before buildWalletRecords returns. Copies taken inside the module
+// are not observable through this seam, so this is not a proof that every
+// secret copy is wiped.
+test("private export zeroes the key buffers passed to injected dependencies", () => {
   const { buildWalletRecords } = loadModule();
   const capturedRaw = [], capturedSecret = [], capturedKeyHash = [];
   const wipeDeps = {
