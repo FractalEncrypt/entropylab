@@ -13,7 +13,7 @@ import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { psbtVizHtml } from "../src/js/psbt-viz.js";
 import * as vizModule from "../src/js/psbt-viz.js";
 import { comparePsbtDocs } from "../src/js/psbt-diff.js";
-import { psbtDiffHtml } from "../src/js/psbt-editor.js";
+import { psbtDiffHtml, satsToBtc } from "../src/js/psbt-editor.js";
 import { addressFromScript } from "../src/js/addresses.js";
 import { MiniDocument } from "./mini-dom.mjs";
 
@@ -595,8 +595,12 @@ const hodlRenderPsbtForTest = () => {
     // runnable on the pre-fix source, so the count assertions below fail on
     // the claimed reason (uncapped rendering), not on a missing export.
     cappedHtml: vizModule.cappedHtml ?? ((items, renderOne) => items.map(renderOne).join("")),
+    // Same passthrough pattern for the view render budget: an infinite
+    // budget before the fix, the real one after.
+    renderBudget: vizModule.renderBudget ?? (() => ({ take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } })),
     hodlInspectorNetwork: () => "mainnet",
-    inspectPsbtInscriptions: () => ({ inputs: [], envelopes: [] }),
+    inspectPsbtInscriptions: (psbt) => psbt.stubInscriptions || { inputs: [], envelopes: [] },
+    describeEnvelope: (envelope) => [`envelope ${envelope.envelopeIndex}`],
     hodlPsbtReferenceVerdict: () => ({ state: "complete", problems: [], unlisted: 0 }),
     hodlT: (text, vars) => String(text).replace(/\{(\w+)\}/g, (match, key) => (vars && key in vars ? vars[key] : match)),
     hodlTText: (text) => text,
@@ -696,7 +700,7 @@ test("the inspector under the render cap renders every section and no elision li
 
 test("app.js shares the one PSBT_RENDER_LIMIT and cappedHtml with the PSBT views (no local duplicate)", () => {
   const source = readFileSync(join(repoRoot, "src/js/app.js"), "utf8");
-  assert.match(source, /import \{ PSBT_RENDER_LIMIT, cappedHtml \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
+  assert.match(source, /import \{ PSBT_RENDER_LIMIT, cappedHtml, renderBudget \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
   assert.doesNotMatch(source, /const PSBT_RENDER_LIMIT =/, "no duplicated local constant");
 });
 
@@ -726,14 +730,22 @@ test("cappedHtml renders every item under the cap, and caps with one elision lin
   assert.ok(cappedHtml(items, renderOne, "rows", (n) => `translated ${n}`).includes("translated 700"), "the caller-supplied line is used");
 });
 
-test("per-input policy warnings are capped at 500 with the elided count, and the analysis still covers every input (F7)", () => {
+test("per-input policy warnings render inline within the cap and are collected and capped past it, with the analysis covering every input (F7)", () => {
   const { render, captured } = hodlRenderPsbtForTest();
   const doc = inspectorDoc(1200, 1);
   // Every input declares SIGHASH_SINGLE: one policy warning per input.
   doc.inputs.forEach((map) => map.push({ type: 0x03, sighash: 3 }));
   const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
-  assert.equal((html.match(/<p class='psbt-bad'>/g) || []).length, 500, "warning paragraphs capped at 500");
-  assert.ok(html.includes("700 more warnings"), "the elided count appears");
+  // The first 500 inputs render their warning directly under their own
+  // section (rock's placement); the 700 over-cap inputs' warnings are
+  // collected and rendered capped at 500 after the loop: 500 + 500 in all.
+  assert.equal((html.match(/<p class='psbt-bad'>/g) || []).length, 1000, "500 inline + 500 collected warning paragraphs");
+  assert.ok(html.includes("200 more warnings"), "the collected list notes its elided count");
+  const input0 = html.indexOf("<strong>Input 0</strong>");
+  const warning0 = html.indexOf("input 0 requests SIGHASH_SINGLE");
+  const input1 = html.indexOf("<strong>Input 1</strong>");
+  assert.ok(input0 !== -1 && warning0 !== -1 && input1 !== -1, "the section and its warning both render");
+  assert.ok(input0 < warning0 && warning0 < input1, "an in-cap input's warning sits under its own section");
   assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the policy check still covers all 1,200 inputs");
   assert.ok(html.includes("0.02399000 BTC"), "fee covers every input: 1,200 × 2,000 − 1,000 sats");
 });
@@ -927,4 +939,219 @@ test("the editor's pair tables cap rendered rows per map and note the elided cou
   const small = pairRows("global", map.slice(0, 2), 0);
   assert.equal((small.match(/<tr role="row">\s*<td /g) || []).length, 2, "every pair renders under the cap");
   assert.ok(!small.includes("(not rendered)"), "no elision line under the cap");
+});
+
+// --- F7 round 4: one render budget per view -------------------------------
+// The per-list cap bounds one list, but nested lists multiply: 500 capped
+// map sections of 200 pairs still render 100,000 rows. Every PSBT view now
+// also shares one total render budget (PSBT_RENDER_BUDGET rows/sections/
+// boxes, spent in document order); past it the view renders one muted line
+// with the counted leftovers. Within the caps every view renders exactly as
+// before — the inspector's per-input warnings included.
+
+test("the view render budget is exported from psbt-viz.js and grants only what is left", () => {
+  assert.equal(vizModule.PSBT_RENDER_BUDGET, 2000);
+  const renderBudget = vizModule.renderBudget ?? (() => ({ take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } }));
+  const budget = renderBudget(3);
+  assert.equal(budget.take(2), 2);
+  assert.equal(budget.take(2), 1, "only what is left is granted");
+  assert.ok(budget.spent, "the budget is spent");
+  assert.equal(budget.take(1), 0, "a spent budget grants nothing");
+});
+
+test("cappedHtml spends from the view's render budget when one is passed", () => {
+  const renderBudget = vizModule.renderBudget ?? (() => ({ take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } }));
+  const budget = renderBudget(5);
+  const renderOne = (item) => `<i>${item}</i>`;
+  const first = vizModule.cappedHtml([1, 2, 3], renderOne, "rows", undefined, budget);
+  assert.equal(first, "<i>1</i><i>2</i><i>3</i>", "the budget grants what the cap would show");
+  const second = vizModule.cappedHtml([4, 5, 6, 7], renderOne, "rows", undefined, budget);
+  assert.equal((second.match(/<i>/g) || []).length, 2, "only the remaining budget renders");
+  assert.ok(second.includes("2 more rows"), "the elision line counts what the budget cut");
+});
+
+test("an in-cap PSBT renders each per-input warning directly under its own input section, exactly like rock", () => {
+  const { render } = hodlRenderPsbtForTest();
+  // Three inputs, the middle one declaring SIGHASH_SINGLE: rock renders the
+  // policy warning between Input 1's section and Input 2's section.
+  const html = render(inspectorDoc(3, 1, 1), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  const input1 = html.indexOf("<strong>Input 1</strong>");
+  const warning = html.indexOf("input 1 requests SIGHASH_SINGLE");
+  const input2 = html.indexOf("<strong>Input 2</strong>");
+  assert.ok(input1 !== -1 && warning !== -1 && input2 !== -1, "the section and its warning both render");
+  assert.ok(input1 < warning && warning < input2, "the warning immediately follows its own input section");
+  assert.ok(!html.includes("(not rendered)"), "no elision line for a small PSBT");
+});
+
+test("the inspector's whole view stays within the render budget when every input warns (F7)", () => {
+  const { render, captured } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(1200, 1);
+  // Every input declares SIGHASH_SINGLE and carries one inscription
+  // envelope: two warning paragraphs per input, 2,400 in all.
+  doc.inputs.forEach((map) => map.push({ type: 0x03, sighash: 3 }));
+  doc.stubInscriptions = {
+    inputs: Array.from({ length: 1200 }, () => ({ envelopes: [{ envelopeIndex: 0, source: "stub", bodyBytes: 10 }] })),
+    envelopes: [],
+  };
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  const sections = (html.match(/<strong>Input \d+<\/strong>/g) || []).length;
+  const outputs = (html.match(/<strong>Output \d+<\/strong>/g) || []).length;
+  const warnings = (html.match(/<p class='psbt-(?:bad|warn)'>/g) || []).length;
+  assert.equal(sections, 500, "input sections capped at 500");
+  assert.equal(outputs, 1, "the one output renders");
+  // 1 output block + 500 inputs × (1 section + 2 warnings) = 1,501 units
+  // before the collected warnings; the budget then grants 499 of the 500
+  // capped collected warnings: exactly PSBT_RENDER_BUDGET units in all.
+  assert.equal(sections + outputs + warnings, vizModule.PSBT_RENDER_BUDGET ?? 2000, "the view renders exactly up to the budget");
+  assert.equal(warnings, 1499, "1,000 inline + 499 collected warnings");
+  assert.ok(html.includes("901 more warnings"), "the collected list notes what the budget cut");
+  assert.ok(html.includes("700 more inputs"), "the inputs elision line");
+  assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the policy check still covers all 1,200 inputs");
+  assert.ok(html.includes("0.02399000 BTC"), "fee covers every input: 1,200 × 2,000 − 1,000 sats");
+});
+
+// render() and pairRows() are closures inside initPsbtEditor, so they are
+// extracted from psbt-editor.js source and evaluated with stubs — the same
+// harness pattern as hodlRenderPsbt above, reusing extractEditorConst.
+// pairRows is evaluated alongside render so the view's render budget flows
+// through the real row renderer; `out` captures the rendered HTML and
+// `addedPairs` plays the Add Pair handler's record-keeping. The stubs are
+// the editor's own contracts (every free variable of both closures).
+const editorRenderForTest = (doc) => {
+  const out = { innerHTML: "" };
+  const stubs = {
+    PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
+    renderBudget: vizModule.renderBudget ?? (() => ({ take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } })),
+    addedPairs: new Map(),
+    doc,
+    out,
+    stale: false,
+    insane: false,
+    network: () => "mainnet",
+    syncActions: () => {},
+    bind: () => {},
+    satsToBtc,
+    escapeHtml: (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+    addressFor: () => null,
+    opReturnSummary: () => null,
+    publicValueHtml: (value) => String(value),
+    copyIcon: () => "",
+    cellLabel: () => "",
+    KV_COLUMNS: { field: "Field", key: "Key (hex)", value: "Value (hex)", decoded: "Decoded" },
+    TXIN_COLUMNS: { txid: "Previous txid", vout: "vout", seq: "sequence" },
+    TXOUT_COLUMNS: { value: "Value (sats)", script: "scriptPubKey" },
+    PAIR_TYPES: { global: [], input: [], output: [] },
+    EXPAND_LIMIT: 80,
+    describePair: () => ({ text: "", tone: "" }),
+    pairNoteHtml: () => "",
+    expandableHtml: (text) => String(text),
+    psbtOutputNotesHtml: () => "",
+    psbtVizHtml: () => "",
+    psbtProblemsHtml: () => "",
+    psbtSanitizeHtml: () => "",
+  };
+  const names = Object.keys(stubs);
+  const render = new Function(...names, `${extractEditorConst("pairRows")}\n${extractEditorConst("render")}\nreturn render;`)(...names.map((name) => stubs[name]));
+  return { render, out, addedPairs: stubs.addedPairs };
+};
+
+// A synthetic editor document: inputCount inputs whose maps carry
+// pairsPerInput proprietary pairs each, outputCount outputs with empty maps.
+const editorDoc = (inputCount, pairsPerInput, outputCount = 1) => ({
+  psbtVersion: 0,
+  tx: {
+    version: 2,
+    locktime: 0,
+    inputs: Array.from({ length: inputCount }, (_, vout) => ({ txid: "11".repeat(32), vout, scriptSig: "", sequence: 0xffffffff })),
+    outputs: Array.from({ length: outputCount }, () => ({ value: "1000", scriptPubKey: "0014" + "22".repeat(20), asm: "" })),
+  },
+  globals: [],
+  inputs: Array.from({ length: inputCount }, (_, map) =>
+    Array.from({ length: pairsPerInput }, (_, pair) => ({ key: "fc00", value: (map * pairsPerInput + pair).toString(16), name: "PSBT_IN_PROPRIETARY", decoded: null }))),
+  outputs: Array.from({ length: outputCount }, () => []),
+  fee: { known: false },
+});
+
+// Data rows only: the header rows are <tr role="row"><th…, the data rows
+// <tr role="row"><td… (the same distinction the pairRows test above makes).
+const dataRows = (html) => (html.match(/<tr role="row">\s*<td /g) || []).length;
+
+test("the editor bounds the whole view to the render budget: 500 maps × 200 pairs cannot multiply past it (F7)", () => {
+  const { render, out } = editorRenderForTest(editorDoc(500, 200));
+  render();
+  const html = out.innerHTML;
+  // Document order: 500 input rows + 1 output row + the global section (its
+  // empty map renders its no-pairs row), then whole input-map sections of
+  // 1 + 200 units until the budget is spent — 7 full sections and one of
+  // 1 + 90: 500 + 1 + 1 + 7 × 200 + 90 = 1,992 rows, never over the budget.
+  assert.equal(dataRows(html), 1992, "rows render in document order up to the budget");
+  assert.ok(dataRows(html) <= (vizModule.PSBT_RENDER_BUDGET ?? 2000), "never over the budget");
+  assert.ok(html.includes('data-psbted-section="input:7"'), "the section the budget cuts mid-table still renders");
+  assert.ok(!html.includes('data-psbted-section="input:8"'), "no section renders past the budget");
+  // The single budget line counts every unit not rendered from the stop
+  // point: 500 input rows + 1 output row + 1 global section + 500 × (1
+  // section + 200 pairs) + 1 output-map section = 101,003 units of demand;
+  // 2,000 rendered, 99,003 elided.
+  assert.ok(html.includes("99003"), "the budget line counts every elided section and pair");
+  assert.ok(html.includes("(not rendered)"), "the budget line appears");
+});
+
+test("when both the inputs table and the input map sections are capped, the second note names the maps (F7)", () => {
+  const { render, out } = editorRenderForTest(editorDoc(1200, 0));
+  render();
+  const html = out.innerHTML;
+  assert.equal((html.match(/700 more inputs \(not rendered\)/g) || []).length, 1, "the transaction table's note appears once");
+  assert.equal((html.match(/700 more input maps \(not rendered\)/g) || []).length, 1, "the map sections' note names the maps");
+});
+
+test("a pair added to an over-cap map renders after the capped rows, so the user sees it (F7)", () => {
+  const doc = editorDoc(1, 0);
+  doc.globals = Array.from({ length: 501 }, (_, pair) => ({ key: "fc00", value: pair.toString(16), name: "PSBT_GLOBAL_PROPRIETARY", decoded: null }));
+  const { render, out, addedPairs } = editorRenderForTest(doc);
+  addedPairs.set("global:0", 1); // what the Add Pair handler records per accepted add
+  render();
+  const html = out.innerHTML;
+  assert.ok(html.includes('data-pair="500"'), "the added pair (index 500) renders past the cap");
+  assert.ok(!html.includes("more pairs"), "all 501 pairs render: 500 capped rows plus the added one");
+});
+
+test("a small PSBT renders every editor row and section with no elision line", () => {
+  const { render, out } = editorRenderForTest(editorDoc(3, 2, 2));
+  render();
+  const html = out.innerHTML;
+  // 3 input rows + 2 output rows + 3 maps × 2 pair rows; the empty global
+  // map and the two empty output maps render their no-pairs rows.
+  assert.equal(dataRows(html), 3 + 2 + 6 + 3, "every row renders");
+  for (const target of ["input:0", "input:1", "input:2", "output:0", "output:1"]) {
+    assert.ok(html.includes(`data-psbted-section="${target}"`), `section ${target} renders`);
+  }
+  assert.ok(!html.includes("(not rendered)"), "no elision line under the caps");
+});
+
+test("the compare view bounds the whole report to the render budget: 500 maps × 200 changes cannot multiply past it (F7)", () => {
+  const doc = (value) => ({
+    tx: {
+      version: 2,
+      locktime: 0,
+      inputs: Array.from({ length: 500 }, (_, vout) => ({ txid: "11".repeat(32), vout, scriptSig: "", sequence: 0xffffffff })),
+      outputs: [],
+    },
+    globals: [],
+    inputs: Array.from({ length: 500 }, () => Array.from({ length: 200 }, () => ({ key: "fc00", value, name: "PSBT_IN_PROPRIETARY", decoded: null }))),
+    outputs: [],
+    fee: { known: false },
+  });
+  const before = doc("aa"), after = doc("bb");
+  const diff = comparePsbtDocs(before, after);
+  assert.equal(diff.changes.length, 100000, "every changed pair is analysed");
+  const html = psbtDiffHtml(diff, before, after, "mainnet");
+  // 9 full sections of 200 rows and one of 190: 1,990 rows, never over the
+  // budget; 10 sections render, the 11th would not fit.
+  const rows = (html.match(/<tr><td/g) || []).length;
+  assert.equal(rows, 1990, "rows render in document order up to the budget");
+  assert.ok(rows <= (vizModule.PSBT_RENDER_BUDGET ?? 2000), "never over the budget");
+  assert.equal((html.match(/key-value map<\/h3>/g) || []).length, 10, "sections render until the budget is spent");
+  // 500 sections × (1 + 200 rows) = 100,500 units of demand; 2,000 render,
+  // so the single budget line counts 98,500 elided sections and changes.
+  assert.ok(html.includes("98500"), "the budget line counts every elided section and change");
 });

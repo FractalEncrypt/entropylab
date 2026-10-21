@@ -34,16 +34,46 @@ const escapeHtml = (text) =>
 // rendering stops at the cap, with the elided count noted under the list.
 export const PSBT_RENDER_LIMIT = 500;
 
+// One total render budget per view (red-team F7, round 4): the per-list cap
+// bounds one list, but nested lists multiply — 500 capped map sections of
+// 200 pairs still render 100,000 rows. The budget bounds the whole view:
+// every row, map section and diagram box spends one unit, lists render in
+// document order, and when the budget is spent the view stops rendering and
+// one muted line notes how much was elided (counted, never rendered).
+// Analysis, totals and verdicts still cover every element.
+export const PSBT_RENDER_BUDGET = 2000;
+
+export const renderBudget = (units = PSBT_RENDER_BUDGET) => {
+  let left = units;
+  return {
+    // Spend up to `count` units; returns how many were granted (0 once spent).
+    take: (count = 1) => {
+      const granted = Math.max(0, Math.min(count, left));
+      left -= granted;
+      return granted;
+    },
+    get left() {
+      return left;
+    },
+    get spent() {
+      return left <= 0;
+    },
+  };
+};
+
 // The one capped-list renderer every PSBT view shares: the first
 // PSBT_RENDER_LIMIT items rendered by renderOne, then — when more exist — a
 // single muted line noting how many were elided (n as a plain integer).
 // Analysis, totals and verdicts are computed by the callers over ALL items
 // before this runs; only rendering stops at the cap. app.js passes `line`
 // so the elision text goes through hodlT like its existing input/output
-// lines; the plain modules use the default line built from `noun`.
-export const cappedHtml = (items, renderOne, noun, line) => {
-  const shown = items.slice(0, PSBT_RENDER_LIMIT).map(renderOne).join("");
-  const more = items.length - PSBT_RENDER_LIMIT;
+// lines; the plain modules use the default line built from `noun`. A caller
+// holding the view's render budget passes it as `budget`: the rendered items
+// spend from it, and the elision line then also counts what the budget cut.
+export const cappedHtml = (items, renderOne, noun, line, budget) => {
+  const granted = budget ? budget.take(Math.min(items.length, PSBT_RENDER_LIMIT)) : Math.min(items.length, PSBT_RENDER_LIMIT);
+  const shown = items.slice(0, granted).map(renderOne).join("");
+  const more = items.length - granted;
   if (more <= 0) return shown;
   const text = line ? line(more) : `…and ${more} more ${noun} (not rendered).`;
   return shown + `<p class="muted">${text}</p>`;
@@ -275,10 +305,17 @@ const outputBox = (doc, index, network, copyIcon) => {
 // SVG layer ships empty: psbt-editor.js measures the laid-out boxes and
 // draws the connector paths into it (no layout in this pure module).
 export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
-  const inputs = doc.tx.inputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
-  const outputs = doc.tx.outputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
-  const moreInputs = Math.max(0, doc.tx.inputs.length - PSBT_RENDER_LIMIT);
-  const moreOutputs = Math.max(0, doc.tx.outputs.length - PSBT_RENDER_LIMIT);
+  // The boxes spend from one render budget like every PSBT view; with the
+  // per-side cap at PSBT_RENDER_LIMIT the two columns can never spend it
+  // (2 × PSBT_RENDER_LIMIT < PSBT_RENDER_BUDGET), so the per-side elision
+  // lines below remain the only notes the diagram needs.
+  const budget = renderBudget();
+  const shownInputs = budget.take(Math.min(doc.tx.inputs.length, PSBT_RENDER_LIMIT));
+  const shownOutputs = budget.take(Math.min(doc.tx.outputs.length, PSBT_RENDER_LIMIT));
+  const inputs = doc.tx.inputs.slice(0, shownInputs).map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
+  const outputs = doc.tx.outputs.slice(0, shownOutputs).map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
+  const moreInputs = doc.tx.inputs.length - shownInputs;
+  const moreOutputs = doc.tx.outputs.length - shownOutputs;
   // Column totals ride in the hint lines; the inputs side can only total
   // when every input carries a claim (doc.totalIn is null otherwise).
   const inputsHint = doc.totalIn === null
