@@ -110,6 +110,12 @@ test("every expected value matches an independent implementation", () => {
   assert.equal(expected("P2SH-P2WPKH address (BIP49)"), btc.p2sh(btc.p2wpkh(pub(49))).address);
   assert.equal(expected("P2WPKH address (BIP84)"), btc.p2wpkh(pub(84)).address);
   assert.equal(expected("P2TR address (BIP86)"), btc.p2tr(pub(86).slice(1)).address);
+  // The Lightning node-key self-tests pin the published roots the LND/LDK
+  // derivations start from (the node pubkeys themselves are differentials
+  // against @scure in test/lightning.test.mjs).
+  assert.equal(expected("LND node key (aezeed, mainnet)"), `m/1017'/0'/6'/0/0 ${v1.privateExtendedKey}`);
+  assert.equal(expected("LND node key (aezeed, testnet)"), `m/1017'/1'/6'/0/0 ${v1.privateExtendedKey}`);
+  assert.equal(expected("LDK node key (ldk-node)"), `m/0' ${root.privateExtendedKey}`);
   const one = new Uint8Array(32);
   one[31] = 1;
   const msghash = nobleSha256(utf8ToBytes("Satoshi Nakamoto"));
