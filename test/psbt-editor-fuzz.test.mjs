@@ -60,7 +60,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { psbtEditorBuildDoc, dropSigningPairs } from "../src/js/psbt-editor.js";
 import { psbtBuildBytes, psbtInspectDoc } from "../src/js/psbt-wasm.js";
-import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
+import { fuzzEnv, mulberry32, replayLine, withReplay } from "./fuzz-kit.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -83,7 +83,7 @@ const DEFAULT_ITERATIONS = 240;
 const EDITOR_ENV = fuzzEnv("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = EDITOR_ENV.iterations;
 const TEST_NAME = "seeded random walks: adding/removing inputs and outputs stays safe and correct";
-let rand = mulberry32(FUZZ_SEED);
+let rand = mulberry32(EDITOR_ENV.seed);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
 const chance = (p) => rand() < p;
@@ -765,55 +765,40 @@ const OPS = [
 ];
 const OP_BAG = OPS.flatMap(([weight, fn]) => Array.from({ length: weight }, () => fn));
 
-const runWalk = (i, fixture) => {
-  note(`fixture:${fixture.name}`);
-  // The editor anchors the signing pairs to the loaded transaction; the
-  // first edit that moves the transaction drops them.
-  const state = { doc: structuredClone(fixture.doc), poisoned: null, anchor: JSON.stringify(fixture.doc.tx) };
-  const opCount = 3 + rint(10);
-  for (let j = 0; j < opCount; j++) {
-    const label = `iteration ${i} (${fixture.name}) op ${j}`;
-    // A field edit that left the document unbuildable is usually followed
-    // by the repair keystroke — or by the user trying a structural edit
-    // anyway, which must bounce off. Both are forced here so the walk
-    // exercises them instead of wandering off.
-    if (state.poisoned && chance(0.6)) {
-      repairOp(state, label);
-      continue;
-    }
-    if (state.poisoned && chance(0.43)) {
-      pick([(s, l) => addElementOp(s, l, pick(["input", "output"])), (s, l) => deleteElementOp(s, l, pick(["input", "output"])), addPairOp, deletePairOp])(state, label);
-      continue;
-    }
-    pick(OP_BAG)(state, label);
-  }
-  // Every walk ends on a building document: repair any poisoned field and
-  // rebuild once more.
-  if (state.poisoned) repairOp(state, `iteration ${i} (${fixture.name}) final repair`);
-  mustBuild(structuredClone(state.doc), `iteration ${i} (${fixture.name}) final rebuild`);
-  note("walk-complete");
-};
-
 test(TEST_NAME, () => {
-  const results = runCases("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: TEST_NAME }, (i, caseRand) => {
-    const fixture = FIXTURES[i % FIXTURES.length];
-    const values = [];
-    const recordingRand = () => { const v = caseRand(); values.push(v); return v; };
-    rand = recordingRand;
-    try {
-      runWalk(i, fixture);
-    } catch (error) {
-      if (!(error instanceof assert.AssertionError)) throw error;
+  try {
+    for (let i = 0; i < ITERATIONS; i++) {
+      const fixture = FIXTURES[i % FIXTURES.length];
+      note(`fixture:${fixture.name}`);
+      // The editor anchors the signing pairs to the loaded transaction; the
+      // first edit that moves the transaction drops them.
+      const state = { doc: structuredClone(fixture.doc), poisoned: null, anchor: JSON.stringify(fixture.doc.tx) };
+      const opCount = 3 + rint(10);
+      for (let j = 0; j < opCount; j++) {
+        const label = `iteration ${i} (${fixture.name}) op ${j}`;
+        // A field edit that left the document unbuildable is usually followed
+        // by the repair keystroke — or by the user trying a structural edit
+        // anyway, which must bounce off. Both are forced here so the walk
+        // exercises them instead of wandering off.
+        if (state.poisoned && chance(0.6)) {
+          repairOp(state, label);
+          continue;
+        }
+        if (state.poisoned && chance(0.43)) {
+          pick([(s, l) => addElementOp(s, l, pick(["input", "output"])), (s, l) => deleteElementOp(s, l, pick(["input", "output"])), addPairOp, deletePairOp])(state, label);
+          continue;
+        }
+        pick(OP_BAG)(state, label);
+      }
+      // Every walk ends on a building document: repair any poisoned field and
+      // rebuild once more.
+      if (state.poisoned) repairOp(state, `iteration ${i} (${fixture.name}) final repair`);
+      mustBuild(structuredClone(state.doc), `iteration ${i} (${fixture.name}) final rebuild`);
+      note("walk-complete");
     }
-    return { i, fixture: fixture.name, values };
-  }, ({ i, fixture: fixtureName, values }) => {
-    const fixture = FIXTURES.find((f) => f.name === fixtureName);
-    if (!fixture) throw new Error(`unknown fixture ${fixtureName}`);
-    const queue = [...values];
-    rand = () => (queue.length ? queue.shift() : 0);
-    runWalk(i, fixture);
-  });
-  assert.equal(results.length, EDITOR_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
+  } catch (error) {
+    throw withReplay(error, replayLine("PSBT_EDITOR_FUZZ", EDITOR_ENV.seed, ITERATIONS, TEST_NAME, "test/psbt-editor-fuzz.test.mjs"));
+  }
 });
 
 // --- deterministic guards: the properties above, proven without the PRNG -----
@@ -986,7 +971,6 @@ test("the field oracle rejects and repairs both ways of creating a null prevout"
 // The fuzzer guards itself: with a dead pool or a swallowed oracle these
 // flavors and volumes would silently vanish.
 test("the walk covered every flavor and volume floor", () => {
-  if (EDITOR_ENV.only !== null) return; // single-case replay: coverage guards do not apply
   const required = [
     ...FIXTURES.map((fixture) => `fixture:${fixture.name}`),
     "ok:add-input", "ok:add-output", "ok:del-input", "ok:del-output", "ok:del-input-to-floor", "ok:del-output-to-floor",

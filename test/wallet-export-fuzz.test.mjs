@@ -47,7 +47,7 @@ import {
   sha256,
   sqliteReadBack,
 } from "./wallet-export-harness.mjs";
-import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
+import { fuzzEnv, mulberry32, replayLine, withReplay } from "./fuzz-kit.mjs";
 
 // --- deterministic randomness ------------------------------------------------
 
@@ -57,8 +57,12 @@ import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
 const FUZZ_SEED = 0x5eed0001;
 const DEFAULT_CORPUS_SIZE = 72;
 const WALLET_EXPORT_ENV = fuzzEnv("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CORPUS_SIZE });
+const ITERATIONS = WALLET_EXPORT_ENV.iterations;
+// Three tests below read corpus[2]; a smaller corpus is a setup error, not a
+// fuzz failure, so it is refused here with a clear message.
+if (ITERATIONS < 3) throw new Error(`WALLET_EXPORT_FUZZ_ITERATIONS must be at least 3 (the corpus tests use its first three wallets), got ${ITERATIONS}`);
 const CORPUS_TEST_NAME = "every fuzzed wallet's records independently verify (Core's load check included)";
-let rand = mulberry32(FUZZ_SEED);
+let rand = mulberry32(WALLET_EXPORT_ENV.seed);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
 const chance = (p) => rand() < p;
@@ -450,121 +454,128 @@ const randomRows = () => {
   }
   return rows;
 };
-const corpus = runCases("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CORPUS_SIZE, testName: CORPUS_TEST_NAME }, (i, caseRand) => {
-  rand = caseRand; // route the module-level helpers through the runCases PRNG
-  if (i === 0) {
+const corpus = [];
+{
+  // Iteration 0 and 1 force the <digit>h corruption class into the corpus.
+  if (ITERATIONS > 0) {
     note("digit-h-tail");
-    return { wallet: { kind: "hd", network: "mainnet", accounts: [forcedAccounts([XPUB_TAIL_4H, XPUB_TAIL_2H])] }, includePrivate: false, creationTime: 0, label: "iteration 0 (known digit-h vectors)" };
+    corpus.push({ wallet: { kind: "hd", network: "mainnet", accounts: [forcedAccounts([XPUB_TAIL_4H, XPUB_TAIL_2H])] }, includePrivate: false, creationTime: 0, label: "iteration 0 (known digit-h vectors)" });
   }
-  if (i === 1) {
+  if (ITERATIONS > 1) {
     note("digit-h-tail");
-    return { wallet: { kind: "hd", network: "mainnet", accounts: [forcedAccounts([SCANNED_TAIL_KEY, XPUB_TAIL_4H])] }, includePrivate: false, creationTime: 0, label: "iteration 1 (scanned digit-h key)" };
+    corpus.push({ wallet: { kind: "hd", network: "mainnet", accounts: [forcedAccounts([SCANNED_TAIL_KEY, XPUB_TAIL_4H])] }, includePrivate: false, creationTime: 0, label: "iteration 1 (scanned digit-h key)" });
   }
-  const label = `iteration ${i}`;
-  const network = pick(["mainnet", "testnet", "signet", "regtest"]);
-  note(`network:${network}`);
-  const coin = network === "mainnet" ? 0 : 1;
-  const family = network === "mainnet" ? "mainnet" : "test";
-  const includePrivate = chance(0.5);
-  note(includePrivate ? "private-export" : "watch-only-export");
-  const typeCount = 1 + rint(TYPE_ORDER.length);
-  const types = [...TYPE_ORDER].sort(() => rand() - 0.5).slice(0, typeCount);
-  const accounts = [];
-  for (const type of types) {
-    note(`type:${type}`);
-    const poolEntry = POOL[coin][PURPOSE[type]];
-    const defaultLetter = DEFAULT_LETTER[type] === "x" && family === "test" ? "t"
-      : DEFAULT_LETTER[type] === "y" && family === "test" ? "u"
-      : DEFAULT_LETTER[type] === "z" && family === "test" ? "v"
-      : DEFAULT_LETTER[type];
-    // Occasionally encode the same node under a different SLIP-132 prefix:
-    // the version bytes are irrelevant to the records but exercise the
-    // key-extraction alternation.
-    const odd = chance(0.15);
-    const letter = odd ? pick(Object.keys(KEY_VERSIONS[family].pub)) : defaultLetter;
-    if (odd) note("odd-version-letter");
-    const [origin, originStyle] = randomOrigin(type, coin, poolEntry.account);
-    note(`origin:${originStyle}`);
-    let xpub = extendedKey(poolEntry.node, network, letter, false);
-    let xprv = extendedKey(poolEntry.node, network, letter, true);
-    if (chance(0.4)) {
-      xpub = mutateKeyHeader(xpub);
-      xprv = mutateKeyHeader(xprv);
-      note("mutated-header");
+  for (let i = 2; i < ITERATIONS; i++) {
+    const label = `iteration ${i}`;
+    const network = pick(["mainnet", "testnet", "signet", "regtest"]);
+    note(`network:${network}`);
+    const coin = network === "mainnet" ? 0 : 1;
+    const family = network === "mainnet" ? "mainnet" : "test";
+    const includePrivate = chance(0.5);
+    note(includePrivate ? "private-export" : "watch-only-export");
+    const typeCount = 1 + rint(TYPE_ORDER.length);
+    const types = [...TYPE_ORDER].sort(() => rand() - 0.5).slice(0, typeCount);
+    const accounts = [];
+    for (const type of types) {
+      note(`type:${type}`);
+      const poolEntry = POOL[coin][PURPOSE[type]];
+      const defaultLetter = DEFAULT_LETTER[type] === "x" && family === "test" ? "t"
+        : DEFAULT_LETTER[type] === "y" && family === "test" ? "u"
+        : DEFAULT_LETTER[type] === "z" && family === "test" ? "v"
+        : DEFAULT_LETTER[type];
+      // Occasionally encode the same node under a different SLIP-132 prefix:
+      // the version bytes are irrelevant to the records but exercise the
+      // key-extraction alternation.
+      const odd = chance(0.15);
+      const letter = odd ? pick(Object.keys(KEY_VERSIONS[family].pub)) : defaultLetter;
+      if (odd) note("odd-version-letter");
+      const [origin, originStyle] = randomOrigin(type, coin, poolEntry.account);
+      note(`origin:${originStyle}`);
+      let xpub = extendedKey(poolEntry.node, network, letter, false);
+      let xprv = extendedKey(poolEntry.node, network, letter, true);
+      if (chance(0.4)) {
+        xpub = mutateKeyHeader(xpub);
+        xprv = mutateKeyHeader(xprv);
+        note("mutated-header");
+      }
+      if (/[0-9]h$/.test(xpub)) note("digit-h-tail");
+      const withChecksum = (body) => (chance(0.9) ? `${body}#${descriptorChecksum(body)}` : (note("no-checksum"), body));
+      const account = {
+        def: { id: type },
+        receiveDescriptor: withChecksum(WRAP[type](`${origin}${xpub}/0/*`)),
+        changeDescriptor: withChecksum(WRAP[type](`${origin}${xpub}/1/*`)),
+      };
+      if (includePrivate && chance(0.7)) {
+        account.receiveDescriptorPriv = withChecksum(WRAP[type](`${origin}${xprv}/0/*`));
+        account.changeDescriptorPriv = withChecksum(WRAP[type](`${origin}${xprv}/1/*`));
+        note("private-descriptor");
+      } else if (includePrivate) {
+        note("private-missing");
+      }
+      // Address rows drive the descriptor range records. Cover the modern
+      // addressBranches shape (sometimes only one branch present), the legacy
+      // receive/change arrays it falls back from, and no rows at all.
+      const rowsFlavor = pick(["none", "branches", "branches-partial", "legacy"]);
+      if (rowsFlavor === "branches") {
+        account.addressBranches = [{ branch: 0, rows: randomRows() }, { branch: 1, rows: randomRows() }];
+        note("rows:branches");
+      } else if (rowsFlavor === "branches-partial") {
+        account.addressBranches = [{ branch: 0, rows: randomRows() }];
+        note("rows:branches-partial");
+      } else if (rowsFlavor === "legacy") {
+        account.receive = randomRows();
+        account.change = randomRows();
+        note("rows:legacy");
+      } else {
+        note("rows:none");
+      }
+      accounts.push(account);
     }
-    if (/[0-9]h$/.test(xpub)) note("digit-h-tail");
-    const withChecksum = (body) => (chance(0.9) ? `${body}#${descriptorChecksum(body)}` : (note("no-checksum"), body));
-    const account = {
-      def: { id: type },
-      receiveDescriptor: withChecksum(WRAP[type](`${origin}${xpub}/0/*`)),
-      changeDescriptor: withChecksum(WRAP[type](`${origin}${xpub}/1/*`)),
-    };
-    if (includePrivate && chance(0.7)) {
-      account.receiveDescriptorPriv = withChecksum(WRAP[type](`${origin}${xprv}/0/*`));
-      account.changeDescriptorPriv = withChecksum(WRAP[type](`${origin}${xprv}/1/*`));
-      note("private-descriptor");
-    } else if (includePrivate) {
-      note("private-missing");
+    // Accounts the exporter must skip: unknown script types and accounts
+    // missing one descriptor.
+    if (chance(0.15)) {
+      accounts.push({ def: { id: "bip999" }, receiveDescriptor: accounts[0].receiveDescriptor, changeDescriptor: accounts[0].changeDescriptor });
+      note("skipped:unknown-type");
     }
-    // Address rows drive the descriptor range records. Cover the modern
-    // addressBranches shape (sometimes only one branch present), the legacy
-    // receive/change arrays it falls back from, and no rows at all.
-    const rowsFlavor = pick(["none", "branches", "branches-partial", "legacy"]);
-    if (rowsFlavor === "branches") {
-      account.addressBranches = [{ branch: 0, rows: randomRows() }, { branch: 1, rows: randomRows() }];
-      note("rows:branches");
-    } else if (rowsFlavor === "branches-partial") {
-      account.addressBranches = [{ branch: 0, rows: randomRows() }];
-      note("rows:branches-partial");
-    } else if (rowsFlavor === "legacy") {
-      account.receive = randomRows();
-      account.change = randomRows();
-      note("rows:legacy");
-    } else {
-      note("rows:none");
+    if (chance(0.15)) {
+      // An account with no descriptors at all is still skipped entirely.
+      accounts.push({ def: { id: types[0] }, receiveDescriptor: null, changeDescriptor: null });
+      note("skipped:no-descriptors");
     }
-    accounts.push(account);
-  }
-  // Accounts the exporter must skip: unknown script types and accounts
-  // missing one descriptor.
-  if (chance(0.15)) {
-    accounts.push({ def: { id: "bip999" }, receiveDescriptor: accounts[0].receiveDescriptor, changeDescriptor: accounts[0].changeDescriptor });
-    note("skipped:unknown-type");
-  }
-  if (chance(0.15)) {
-    // An account with no descriptors at all is still skipped entirely.
-    accounts.push({ def: { id: types[0] }, receiveDescriptor: null, changeDescriptor: null });
-    note("skipped:no-descriptors");
-  }
-  if (chance(0.15)) {
-    // A single-branch account of a type not already present exports its one
-    // branch (issue #366): partial coverage, not a hidden export.
-    const spare = TYPE_ORDER.find((type) => !types.includes(type));
-    if (spare) {
-      const poolEntry = POOL[coin][PURPOSE[spare]];
-      const letter = DEFAULT_LETTER[spare] === "x" && family === "test" ? "t"
-        : DEFAULT_LETTER[spare] === "y" && family === "test" ? "u"
-        : DEFAULT_LETTER[spare] === "z" && family === "test" ? "v"
-        : DEFAULT_LETTER[spare];
-      const xpub = extendedKey(poolEntry.node, network, letter, false);
-      const origin = `[00000000/${PURPOSE[spare]}h/${coin}h/0h]`;
-      accounts.push({
-        def: { id: spare },
-        receiveDescriptor: `${WRAP[spare](`${origin}${xpub}/0/*`)}#${descriptorChecksum(WRAP[spare](`${origin}${xpub}/0/*`))}`,
-        changeDescriptor: null,
-      });
-      note("partial:single-branch");
+    if (chance(0.15)) {
+      // A single-branch account of a type not already present exports its one
+      // branch (issue #366): partial coverage, not a hidden export.
+      const spare = TYPE_ORDER.find((type) => !types.includes(type));
+      if (spare) {
+        const poolEntry = POOL[coin][PURPOSE[spare]];
+        const letter = DEFAULT_LETTER[spare] === "x" && family === "test" ? "t"
+          : DEFAULT_LETTER[spare] === "y" && family === "test" ? "u"
+          : DEFAULT_LETTER[spare] === "z" && family === "test" ? "v"
+          : DEFAULT_LETTER[spare];
+        const xpub = extendedKey(poolEntry.node, network, letter, false);
+        const origin = `[00000000/${PURPOSE[spare]}h/${coin}h/0h]`;
+        accounts.push({
+          def: { id: spare },
+          receiveDescriptor: `${WRAP[spare](`${origin}${xpub}/0/*`)}#${descriptorChecksum(WRAP[spare](`${origin}${xpub}/0/*`))}`,
+          changeDescriptor: null,
+        });
+        note("partial:single-branch");
+      }
     }
+    corpus.push({ wallet: { kind: "hd", network, accounts }, includePrivate, creationTime: pick(CREATION_TIMES), label });
   }
-  return { wallet: { kind: "hd", network, accounts }, includePrivate, creationTime: pick(CREATION_TIMES), label };
-}, ({ wallet, includePrivate, creationTime, label }) => {
-  verifyWalletRecords(label, wallet, includePrivate, creationTime);
-});
+}
 
 // --- tests --------------------------------------------------------------------
 
 test(CORPUS_TEST_NAME, () => {
-  assert.equal(corpus.length, WALLET_EXPORT_ENV.only === null ? WALLET_EXPORT_ENV.iterations : 1, "every corpus wallet was generated and verified");
+  try {
+    for (const { wallet, includePrivate, creationTime, label } of corpus) {
+      verifyWalletRecords(label, wallet, includePrivate, creationTime);
+    }
+  } catch (error) {
+    throw withReplay(error, replayLine("WALLET_EXPORT_FUZZ", WALLET_EXPORT_ENV.seed, ITERATIONS, CORPUS_TEST_NAME, "test/wallet-export-fuzz.test.mjs"));
+  }
 });
 
 test("every fuzzed wallet.dat is a well-formed SQLite database for its network", () => {
@@ -593,7 +604,6 @@ test("a slice of the corpus verifies with the real SQLite C library", { skip: !P
 });
 
 test("the corpus covers every generator flavor", () => {
-  if (WALLET_EXPORT_ENV.only !== null) return; // single-case replay: coverage guards do not apply
   for (const flavor of [
     "network:mainnet", "network:testnet", "network:signet", "network:regtest",
     "type:bip44", "type:bip49", "type:bip84", "type:bip86",
@@ -609,10 +619,8 @@ test("the corpus covers every generator flavor", () => {
 });
 
 test("defensive guards reject corrupted crypto dependencies", () => {
-  if (WALLET_EXPORT_ENV.only !== null) return; // single-case replay: full corpus required
   const module_ = loadModule();
-  const wallet = (corpus[2] ?? corpus[0])?.wallet;
-  if (!wallet) return; // corpus too small (iterations < 1)
+  const wallet = corpus[2].wallet;
   const privateWallet = corpus.find(({ wallet: candidate, includePrivate }) =>
     includePrivate && expectedUnits(candidate, true).some((unit) => unit.privateDescriptor));
   assert.ok(privateWallet, "corpus fixture: at least one wallet carries private descriptors");
@@ -639,10 +647,8 @@ test("defensive guards reject corrupted crypto dependencies", () => {
 });
 
 test("malformed wallet inputs fail loudly instead of writing a bad file", () => {
-  if (WALLET_EXPORT_ENV.only !== null) return; // single-case replay: full corpus required
   const module_ = loadModule();
-  const wallet = (corpus[2] ?? corpus[0])?.wallet;
-  if (!wallet) return; // corpus too small (iterations < 1)
+  const wallet = corpus[2].wallet;
   assert.throws(() => module_.buildWalletRecords({ kind: "hd", network: "mainnet", accounts: [] }, false, fuzzDeps, 0), /no descriptors to export/);
   assert.throws(() => module_.buildWalletRecords({ kind: "hd", network: "mainnet", accounts: [{ ...wallet.accounts[0], def: { id: "bip999" } }] }, false, fuzzDeps, 0), /no descriptors to export/);
   const duplicate = { kind: "hd", network: "mainnet", accounts: [wallet.accounts[0], wallet.accounts[0]] };
@@ -659,10 +665,10 @@ test("malformed wallet inputs fail loudly instead of writing a bad file", () => 
   );
 });
 
-test("buildWalletDat defaults the birthday to the export time", { skip: !PYTHON_SQLITE || WALLET_EXPORT_ENV.only !== null || corpus.length === 0 }, () => {
+test("buildWalletDat defaults the birthday to the export time", { skip: !PYTHON_SQLITE || corpus.length === 0 }, () => {
   const module_ = loadModule();
   const before = Math.floor(Date.now() / 1000) - 1;
-  const bytes = module_.buildWalletDat((corpus[2] ?? corpus[0]).wallet, false, fuzzDeps);
+  const bytes = module_.buildWalletDat(corpus[2].wallet, false, fuzzDeps);
   const after = Math.floor(Date.now() / 1000) + 1;
   assert.equal(new TextDecoder().decode(bytes.subarray(0, 15)), "SQLite format 3");
   const report = sqliteReadBack(bytes);

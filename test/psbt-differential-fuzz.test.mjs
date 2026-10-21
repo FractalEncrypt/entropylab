@@ -43,7 +43,7 @@ import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { serializeTx } from "../src/js/tx.js";
 import { sha256 } from "../src/js/hashes.js";
-import { fuzzEnv, runCases } from "./fuzz-kit.mjs";
+import { fuzzEnv, mulberry32, replayLine, withReplay } from "./fuzz-kit.mjs";
 
 // --- deterministic randomness ------------------------------------------------
 
@@ -217,27 +217,28 @@ test("the fixtures load and every one decodes identically on both sides before m
 
 test(TEST_NAME, () => {
   assert.ok(Number.isSafeInteger(ITERATIONS) && ITERATIONS > 0, `PSBT_FUZZ_ITERATIONS must be a positive integer, got ${process.env.PSBT_FUZZ_ITERATIONS}`);
-  const results = runCases("PSBT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: TEST_NAME }, (i, rand) => {
+  try {
+    const rand = mulberry32(PSBT_ENV.seed);
     const rint = (n) => Math.floor(rand() * n);
     const pick = (items) => items[rint(items.length)];
-    const fixture = pick(fixtures);
-    const { bytes, change } = mutate(fixture, rand);
-    return { i, fixture: fixture.name, bytes: hex(bytes), change };
-  }, ({ i, fixture: fixtureName, bytes: bytesHex, change }) => {
-    const bytes = fromHex(bytesHex);
-    const where = `iteration ${i}, fixture ${fixtureName}, ${change}`;
-    const left = entropyLab(bytes), right = scure(bytes);
-    if (left.error || right.error) {
-      assert.ok(left.error && right.error,
-        `${where}: only ${left.error ? "@scure/btc-signer" : "psbtInspectDoc (rust-bitcoin)"} accepted\n  psbtInspectDoc:    ${left.error ?? "accepted"}\n  @scure/btc-signer: ${right.error ?? "accepted"}`);
-    } else {
-      assert.equal(left.txid, right.txid, `${where}: unsigned txid differs\n  psbtInspectDoc:    ${left.txid}\n  @scure/btc-signer: ${right.txid}`);
-      assert.equal(left.outputs.length, right.outputs.length, `${where}: output count differs`);
-      left.outputs.forEach((output, index) => {
-        assert.equal(output.amount, right.outputs[index].amount, `${where}: output ${index} amount differs\n  psbtInspectDoc:    ${output.amount}\n  @scure/btc-signer: ${right.outputs[index].amount}`);
-        assert.equal(output.script, right.outputs[index].script, `${where}: output ${index} script differs\n  psbtInspectDoc:    ${output.script}\n  @scure/btc-signer: ${right.outputs[index].script}`);
-      });
+    for (let i = 0; i < ITERATIONS; i++) {
+      const fixture = pick(fixtures);
+      const { bytes, change } = mutate(fixture, rand);
+      const where = `iteration ${i}, fixture ${fixture.name}, ${change}`;
+      const left = entropyLab(bytes), right = scure(bytes);
+      if (left.error || right.error) {
+        assert.ok(left.error && right.error,
+          `${where}: only ${left.error ? "@scure/btc-signer" : "psbtInspectDoc (rust-bitcoin)"} accepted\n  psbtInspectDoc:    ${left.error ?? "accepted"}\n  @scure/btc-signer: ${right.error ?? "accepted"}`);
+      } else {
+        assert.equal(left.txid, right.txid, `${where}: unsigned txid differs\n  psbtInspectDoc:    ${left.txid}\n  @scure/btc-signer: ${right.txid}`);
+        assert.equal(left.outputs.length, right.outputs.length, `${where}: output count differs`);
+        left.outputs.forEach((output, index) => {
+          assert.equal(output.amount, right.outputs[index].amount, `${where}: output ${index} amount differs\n  psbtInspectDoc:    ${output.amount}\n  @scure/btc-signer: ${right.outputs[index].amount}`);
+          assert.equal(output.script, right.outputs[index].script, `${where}: output ${index} script differs\n  psbtInspectDoc:    ${output.script}\n  @scure/btc-signer: ${right.outputs[index].script}`);
+        });
+      }
     }
-  });
-  assert.equal(results.length, PSBT_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
+  } catch (error) {
+    throw withReplay(error, replayLine("PSBT_FUZZ", PSBT_ENV.seed, ITERATIONS, TEST_NAME, "test/psbt-differential-fuzz.test.mjs"));
+  }
 });
