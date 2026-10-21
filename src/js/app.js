@@ -2180,19 +2180,6 @@ function hodlMsigCoreImportCodec() {
     encode: (bytes) => hodlBase58Check.encode(bytes)
   };
 }
-// The deepest address index the result displays on the two branches the Core
-// exports watch (receive/change): the importdescriptors JSON must see past
-// it, exactly as the wallet.dat writer does (wallet-export.js
-// branchRangeFromRows). Reads the same rows that lookup reads.
-function hodlMsigDisplayedAddressEnd(wallet) {
-  let end = null;
-  for (const branch of [0, 1]) {
-    const branchRows = wallet?.addressBranches?.find((entry) => entry?.branch === branch)?.rows;
-    const rows = Array.isArray(branchRows) ? branchRows : branch === 0 ? wallet?.receive : wallet?.change;
-    for (const row of rows ?? []) if (Number.isSafeInteger(row?.index) && row.index >= 0) end = end === null ? row.index : Math.max(end, row.index);
-  }
-  return end;
-}
 // Read public descriptors directly; the private wallet export view is never used.
 function hodlCoreImportDescriptorsWallet(scope) {
   if (scope === "msig") return hodlWalletResult?.kind === "msig" ? hodlWalletResult : null;
@@ -2200,32 +2187,47 @@ function hodlCoreImportDescriptorsWallet(scope) {
   const accounts = hodlWalletResult.accounts;
   return accounts.find((account) => account.def?.id === hodlAccountId) ?? accounts.find((account) => account.def?.id === "bip84") ?? accounts[0];
 }
+// Never spread the source account, branches, or rows: they may own private
+// getters. Copy only the fields needed by the shared branch/active mapping.
+function hodlCoreImportDescriptorsPublicWallet(wallet, scope) {
+  const indexes = rows => Array.isArray(rows) ? rows.map(row => ({ index: row?.index })) : [];
+  const publicAccount = {
+    def: wallet.def, script: wallet.script, branchStart: wallet.branchStart,
+    receiveDescriptor: wallet.receiveDescriptor, changeDescriptor: wallet.changeDescriptor,
+    receive: indexes(wallet.receive), change: indexes(wallet.change),
+    addressBranches: wallet.addressBranches?.map(entry => ({
+      branch: entry.branch, publicDescriptor: entry.publicDescriptor,
+      rows: Array.isArray(entry.rows) ? indexes(entry.rows) : indexes(entry.branch === 0 ? wallet.receive : entry.branch === 1 ? wallet.change : [])
+    }))
+  };
+  // A displayed branch without a public representation cannot be silently
+  // dropped. Legacy receive/change descriptors may supply rows-only entries.
+  for (const entry of publicAccount.addressBranches ?? []) {
+    const descriptor = entry.publicDescriptor ?? (entry.branch === 0 ? wallet.receiveDescriptor : entry.branch === 1 ? wallet.changeDescriptor : null);
+    if (!descriptor) throw new Error("A displayed branch has no public descriptor. Core watch-only export refused.");
+  }
+  return scope === "msig" ? { ...publicAccount, kind: "msig" } : { kind: "hd", accounts: [publicAccount] };
+}
 function hodlCoreImportDescriptorsJson(scope = "msig") {
   const wallet = hodlCoreImportDescriptorsWallet(scope);
-  if (!wallet?.receiveDescriptor && !wallet?.changeDescriptor) return "";
+  if (!wallet) return "";
   const codec = hodlMsigCoreImportCodec();
-  // Share wallet.dat's shape/kind guard, using a public-only projection so
-  // validation never evaluates a private descriptor or key getter.
-  const descriptors = { receiveDescriptor: wallet.receiveDescriptor, changeDescriptor: wallet.changeDescriptor };
-  const publicWallet = scope === "msig"
-    ? { kind: "msig", script: wallet.script, ...descriptors }
-    : { kind: "hd", accounts: [{ def: wallet.def, ...descriptors }] };
+  const publicWallet = hodlCoreImportDescriptorsPublicWallet(wallet, scope);
   const units = hodlWalletExport.walletDescriptorUnits(publicWallet, false);
-  if (!units.length) throw new Error("No supported watch-only descriptors to export.");
+  if (!units.length) return "";
   for (const unit of units) {
     hodlWalletExport.assertDescriptorShape(unit.descriptor, "watch-only", {
       checksum: hodlDescriptorChecksum, base58Decode: codec.decode
     }, unit.type, Boolean(unit.multiKey));
   }
   return buildImportDescriptorsJson({
-    receiveDescriptor: wallet.receiveDescriptor,
-    changeDescriptor: wallet.changeDescriptor,
+    descriptorUnits: units,
+    branchHardened: wallet.branchHardened === true,
     // Recovery-only multisig shapes still scan from genesis even when the
     // shared birthday picker says "now". Key Station uses its chosen birthday.
-    timestamp: hodlWalletDatBirthday === "now" && (scope !== "msig" || hodlWalletExport.walletDatSupported(wallet)) ? "now" : 0,
+    timestamp: hodlWalletDatBirthday === "now" && (scope !== "msig" || hodlWalletExport.walletDatSupported(publicWallet)) ? "now" : 0,
     decode: codec.decode,
-    encode: codec.encode,
-    rangeEnd: hodlMsigDisplayedAddressEnd(wallet)
+    encode: codec.encode
   });
 }
 function hodlCoreImportDescriptorsButtons(prefix) {
@@ -2233,6 +2235,7 @@ function hodlCoreImportDescriptorsButtons(prefix) {
     <button class="btn secondary" id="${prefix}-copy-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Copy Core importdescriptors")}</button>`;
 }
 function hodlCoreImportDescriptorsNote(wallet) {
+  if (wallet.branchStart > 0) return hodlT("Imports the displayed public branches. Bitcoin Core uses branch {branch} for new receiving addresses, starting at address index 0. Verify that address on another trusted wallet or signer before funding.", { branch: wallet.branchStart });
   // Core starts at index 0 even when the displayed address window starts later.
   const receiveRows = wallet.addressBranches?.find((entry) => entry.branch === 0)?.rows ?? wallet.receive ?? [];
   return receiveRows.some((row) => row.index === 0)
@@ -2240,15 +2243,16 @@ function hodlCoreImportDescriptorsNote(wallet) {
     : hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress is this wallet's receive index 0, which is not in the address window shown above — display from index 0 or verify it on a signer before funding.");
 }
 function hodlKeyCoreImportDescriptorsMarkup(account) {
-  if (!account?.receiveDescriptor && !account?.changeDescriptor) return "";
+  if (!account?.receiveDescriptor && !account?.changeDescriptor && !account?.addressBranches?.some(entry => entry.publicDescriptor)) return "";
   return `<div class="wallet-data-actions no-print" id="key-core-importdescriptors">
-    <p class="edge-note is-public" id="key-core-importdescriptors-help">${hodlCoreImportDescriptorsNote(account)} ${hodlT("Exports only the selected script type, using the wallet birthday under Downloads below.")}</p>
+    <p class="edge-note is-public" id="key-core-importdescriptors-help">${hodlCoreImportDescriptorsNote(account)} ${hodlT("Exports the selected script type's displayed branches, using the wallet birthday under Downloads below.")}</p>
     ${hodlCoreImportDescriptorsButtons("key")}
+    <p class="edge-note is-private" id="key-core-importdescriptors-error" role="alert"></p>
   </div>`;
 }
 function hodlMsigCoreImportDescriptorsMarkup() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
-  if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor) return "";
+  if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor && !hodlWalletResult.addressBranches?.some(entry => entry.publicDescriptor)) return "";
   const coreNote = hodlCoreImportDescriptorsNote(hodlWalletResult);
   const walletDat = hodlWalletExport.walletDatSupported(hodlWalletResult);
   // The footer the key view uses: the Downloads title, what the export is, the
@@ -2279,12 +2283,18 @@ function hodlMsigBip388Markup() {
     <p class="muted" id="msig-bip388-help">${hodlT("BIP 388 wallet policy (template and co-signer xpubs) for wallets that register policies. Watch-only; no private keys.")}</p>
   </div>`;
 }
+function hodlCoreImportDescriptorsError(scope, spec) {
+  if (scope === "msig") return hodlSetWorkspaceError(scope, spec);
+  const error = document.getElementById("key-core-importdescriptors-error");
+  if (error) error.textContent = hodlFormatErrorSpec(spec);
+}
 function hodlCopyCoreImportDescriptors(scope = "msig") {
+  hodlCoreImportDescriptorsError(scope, null);
   let json = "";
   try {
     json = hodlCoreImportDescriptorsJson(scope);
   } catch (error) {
-    hodlSetWorkspaceError(scope, hodlErrorSpecFrom(error));
+    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
     return;
   }
   if (!json) return;
@@ -2305,11 +2315,12 @@ function hodlCopyCoreImportDescriptors(scope = "msig") {
   copyText(json).then(done);
 }
 function hodlDownloadCoreImportDescriptors(scope = "msig") {
+  hodlCoreImportDescriptorsError(scope, null);
   let json = "";
   try {
     json = hodlCoreImportDescriptorsJson(scope);
   } catch (error) {
-    hodlSetWorkspaceError(scope, hodlErrorSpecFrom(error));
+    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
     return;
   }
   if (!json) return;

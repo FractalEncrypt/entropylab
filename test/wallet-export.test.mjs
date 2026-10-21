@@ -1105,9 +1105,9 @@ test("the Core JSON download covers the displayed address window plus Core's loo
   ui.captured.blob = null;
   ui.elements.get("msig-save-importdescriptors").click();
   const entries = JSON.parse(ui.captured.blob.parts[0]);
-  for (const entry of entries) assert.deepEqual(entry.range, [0, 6002], "saved JSON range");
+  for (const entry of entries) assert.deepEqual(entry.range, [0, entry.internal ? 6000 : 6002], "saved per-branch JSON range");
   ui.elements.get("msig-copy-importdescriptors").click();
-  for (const entry of JSON.parse(ui.copies.at(-1))) assert.deepEqual(entry.range, [0, 6002], "copied JSON range");
+  for (const entry of JSON.parse(ui.copies.at(-1))) assert.deepEqual(entry.range, [0, entry.internal ? 6000 : 6002], "copied per-branch JSON range");
   ui.elements.clear();
 });
 

@@ -48,9 +48,9 @@ const parse = (json) => JSON.parse(json);
 function keyExportHarness() {
   const source = read("src/js/app.js");
   const context = vm.createContext({ buildImportDescriptorsJson, hodlBase58Check: codec,
-    hodlWalletExport: loadModule(), hodlDescriptorChecksum: descriptorChecksum,
+    hodlWalletExport: loadModule(), hodlDescriptorChecksum: descriptorChecksum, hodlT: text => text,
     hodlWalletDatBirthday: "genesis", hodlAccountId: "bip84", hodlWalletResult: null });
-  for (const name of ["hodlMsigCoreImportCodec", "hodlMsigDisplayedAddressEnd", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson"]) {
+  for (const name of ["hodlMsigCoreImportCodec", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson", "hodlCoreImportDescriptorsPublicWallet", "hodlCoreImportDescriptorsError", "hodlCopyCoreImportDescriptors", "hodlDownloadCoreImportDescriptors", "hodlKeyCoreImportDescriptorsMarkup", "hodlCoreImportDescriptorsNote", "hodlCoreImportDescriptorsButtons"]) {
     const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
     assert.ok(match, `application export adapter ${name} exists`);
     vm.runInContext(match[0], context);
@@ -80,7 +80,7 @@ test("Key Station exports only the selected public account with the existing bir
     ui.hodlRevealPrivate = true;
     assert.deepEqual(parse(ui.hodlCoreImportDescriptorsJson("calc")), [false, true].map(internal => ({
       desc: internal ? account.changeDescriptor : account.receiveDescriptor,
-      active: true, internal, timestamp: birthday === "now" ? "now" : 0, range: [0, 6002],
+      active: true, internal, timestamp: birthday === "now" ? "now" : 0, range: [0, internal ? 6002 : 6000],
     })));
   }
   ui.hodlAccountId = "stale-account";
@@ -91,6 +91,86 @@ test("Key Station exports only the selected public account with the existing bir
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
   ui.hodlWalletResult = { kind: "single" };
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
+});
+
+// The expected branch mapping is stated independently of the adapter: only
+// branch 1 in a window starting at 0 is internal; the first external branch
+// is active, and additional external branches stay watched but inactive.
+const CUSTOM_WINDOWS = [[0, 1], [1, 1], [2, 1], [0, 4], [1, 3], [3, 2]];
+function customAccount(purpose, network, start, count, hardened = false) {
+  const mainnet = network === "mainnet";
+  const node = HDKey.fromMasterSeed(seed, mainnet ? undefined : { public: 0x043587cf, private: 0x04358394 })
+    .derive(`m/${purpose}'/${mainnet ? 0 : 1}'/0'`);
+  const wrap = key => purpose === 49 ? `sh(wpkh(${key}))` : `${purpose === 44 ? "pkh" : purpose === 86 ? "tr" : "wpkh"}(${key})`;
+  const addressBranches = Array.from({ length: count }, (_, offset) => {
+    const branch = start + offset;
+    const key = hardened ? `${node.deriveChild(branch + 0x80000000).publicExtendedKey}/*` : `${node.publicExtendedKey}/${branch}/*`;
+    const body = wrap(key);
+    return { branch, publicDescriptor: `${body}#${harnessChecksum(body)}`, rows: [{ index: branch + 2,
+      get privateKey() { throw new Error("row private key read"); } }],
+      get privateDescriptor() { throw new Error("branch private descriptor read"); } };
+  });
+  const account = { def: { id: `bip${purpose}` }, branchStart: start, branchHardened: hardened, addressBranches,
+    receiveDescriptor: addressBranches.find(entry => entry.branch === 0)?.publicDescriptor ?? null,
+    changeDescriptor: addressBranches.find(entry => entry.branch === 1)?.publicDescriptor ?? null,
+    get privateNode() { throw new Error("private node read"); },
+    get receiveDescriptorPriv() { throw new Error("private descriptor read"); },
+    get changeDescriptorPriv() { throw new Error("private descriptor read"); } };
+  const net = mainnet ? NETWORK : { ...TEST_NETWORK, bech32: network === "regtest" ? "bcrt" : "tb" };
+  const expectedAddress = (branch, index) => {
+    const key = node.deriveChild(branch + (hardened ? 0x80000000 : 0)).deriveChild(index).publicKey;
+    return (purpose === 44 ? p2pkh(key, net) : purpose === 49 ? p2sh(p2wpkh(key, net), net) : purpose === 86 ? p2tr(key.slice(1), undefined, net) : p2wpkh(key, net)).address;
+  };
+  return { account, expectedAddress };
+}
+for (const [start, count] of CUSTOM_WINDOWS) {
+  test(`Key Station preserves branch window ${start}+${count} without reading private getters`, () => {
+    const ui = keyExportHarness();
+    const { account } = customAccount(84, "mainnet", start, count);
+    ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+    const entries = parse(ui.hodlCoreImportDescriptorsJson("calc"));
+    assert.deepEqual(entries, account.addressBranches.map((entry, offset) => ({
+      desc: entry.publicDescriptor, internal: start === 0 && entry.branch === 1,
+      active: offset === 0 || (start === 0 && entry.branch === 1), timestamp: 0, range: [0, 1002 + entry.branch],
+    })));
+    assert.ok(ui.hodlKeyCoreImportDescriptorsMarkup(account), "custom-only windows must offer an export control");
+  });
+}
+test("branch-aware exports retain the refusal of unrelated unhardened branch keys", () => {
+  const ui = keyExportHarness();
+  const { account } = customAccount(84, "mainnet", 0, 2);
+  const body = `wpkh(${master.derive("m/84'/0'/1'").publicExtendedKey}/1/*)`;
+  account.addressBranches[1].publicDescriptor = `${body}#${harnessChecksum(body)}`;
+  account.changeDescriptor = account.addressBranches[1].publicDescriptor;
+  ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /different keys/);
+});
+
+test("export refuses an unrepresentable custom branch instead of silently omitting it", () => {
+  const ui = keyExportHarness();
+  const { account } = customAccount(84, "mainnet", 0, 3);
+  account.addressBranches[2].publicDescriptor = null;
+  ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /public descriptor/);
+});
+test("Key Station export failures reach the result's error slot without copying or downloading", () => {
+  const ui = keyExportHarness();
+  const elements = { error: { textContent: "", hidden: true }, "key-core-importdescriptors-error": { textContent: "" } };
+  ui.document = { getElementById: id => elements[id] };
+  ui.hodlFormatErrorSpec = spec => spec?.raw ?? "";
+  ui.hodlErrorSpecFrom = error => ({ raw: error.message });
+  ui.hodlSetWorkspaceError = (_, spec) => { elements.error.textContent = spec?.raw ?? ""; };
+  ui.copyText = () => { assert.fail("a refused export must not copy"); };
+  ui.Blob = class { constructor() { assert.fail("a refused export must not download"); } };
+  const { account } = customAccount(84, "mainnet", 0, 2);
+  account.receiveDescriptor = "invalid";
+  account.addressBranches[0].publicDescriptor = "invalid";
+  ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+  for (const handler of [ui.hodlCopyCoreImportDescriptors, ui.hodlDownloadCoreImportDescriptors]) {
+    elements["key-core-importdescriptors-error"].textContent = "";
+    handler("calc");
+    assert.ok(elements["key-core-importdescriptors-error"].textContent, "failure was sent to a hidden input panel");
+  }
 });
 
 // Contract: export public descriptors for the selected script and wallet kind;
@@ -348,6 +428,19 @@ test("missing descriptors and a bad checksum are refused", () => {
   assert.throws(() => buildImportDescriptorsJson({ receiveDescriptor: corrupted }), /checksum does not match/);
 });
 
+test("branch-unit serialization preserves explicit flags and rejects private or invalid exports", () => {
+  const unit = { descriptor: receive, internal: false, active: false, rangeEnd: 999999 };
+  assert.deepEqual(parse(buildImportDescriptorsJson({ descriptorUnits: [unit] })), [{
+    desc: receive, internal: false, active: false, timestamp: 0, range: [0, 999999],
+  }]);
+  assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [] }), /No watch-only descriptors/);
+  assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [{ ...unit, active: "false" }] }), /explicit internal and active/);
+  assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [{ ...unit, rangeEnd: 1000000 }] }), /range span/);
+  assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [{ ...unit, descriptor: `wpkh(${master.privateExtendedKey}/0/*)` }] }), /private key/);
+  const corrupted = receive.slice(0, -1) + (receive.endsWith("0") ? "1" : "0");
+  assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [{ ...unit, descriptor: corrupted }] }), /checksum/);
+});
+
 test("filename includes the m-of-n policy when present", () => {
   assert.equal(coreImportDescriptorsFilename({ m: 3, n: 7 }), "entropylab-msig-3of7-importdescriptors.json");
   assert.equal(coreImportDescriptorsFilename({}), "entropylab-importdescriptors.json");
@@ -440,6 +533,47 @@ for (const network of Object.keys(CHAIN_FIXTURES)) {
           assert.equal(cli([wallet, "getnewaddress", "", type]).stdout.trim(), expected(0, 0));
           assert.equal(cli([wallet, "getrawchangeaddress", type]).stdout.trim(), expected(1, 0));
         }
+      }
+    });
+  });
+}
+
+for (const network of Object.keys(CHAIN_FIXTURES)) {
+  test(`Bitcoin Core preserves Key Station custom branches on ${network}`, { skip: !BITCOIND, timeout: 120000 }, async () => {
+    const ui = keyExportHarness();
+    await withChainNode(network, cli => {
+      const rpc = (...args) => JSON.parse(cli(args).stdout);
+      for (const purpose of [44, 49, 84, 86]) for (const [start, count, hardened] of [...CUSTOM_WINDOWS, [2, 2, true]]) {
+        const { account, expectedAddress } = customAccount(purpose, network, start, count, hardened);
+        ui.hodlAccountId = account.def.id;
+        ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+        const entries = parse(ui.hodlCoreImportDescriptorsJson("calc"));
+        assert.equal(entries.length, count, "no selected branch may be omitted");
+        assert.deepEqual(entries.map(entry => entry.internal), Array.from({ length: count }, (_, offset) => start === 0 && start + offset === 1));
+        assert.deepEqual(entries.map(entry => entry.active), Array.from({ length: count }, (_, offset) => offset === 0 || (start === 0 && start + offset === 1)));
+        const wallet = `-rpcwallet=custom-${purpose}-${start}-${count}-${Boolean(hardened)}`;
+        rpc("-named", "createwallet", `wallet_name=${wallet.slice(11)}`, "disable_private_keys=true", "blank=true");
+        assert.ok(rpc(wallet, "importdescriptors", JSON.stringify(entries)).every(entry => entry.success));
+        const stored = rpc(wallet, "listdescriptors").descriptors;
+        assert.equal(stored.length, count);
+        for (let offset = 0; offset < count; offset++) {
+          const branch = start + offset;
+          const entry = stored.find(entry => entry.desc === account.addressBranches[offset].publicDescriptor);
+          assert.ok(entry, "Core must retain every displayed descriptor");
+          // Core's help documents internal only for active descriptors. Actual
+          // external/change issuance is independently checked below; ischange
+          // in getaddressinfo is an address-book heuristic, not this flag.
+          if (entry.active) assert.equal(entry.internal, start === 0 && branch === 1);
+          assert.equal(entry.active, offset === 0 || (start === 0 && branch === 1));
+          assert.deepEqual(entry.range, [0, 1002 + branch]);
+          assert.deepEqual(rpc("deriveaddresses", entry.desc, `[${branch + 2},${branch + 2}]`), [expectedAddress(branch, branch + 2)]);
+          const info = rpc(wallet, "getaddressinfo", expectedAddress(branch, branch + 2));
+          assert.equal(info.ismine, true, "Core must actually watch the branch");
+        }
+        const type = { 44: "legacy", 49: "p2sh-segwit", 84: "bech32", 86: "bech32m" }[purpose];
+        assert.equal(cli([wallet, "getnewaddress", "", type]).stdout.trim(), expectedAddress(start, 0));
+        if (start === 0 && count > 1) assert.equal(cli([wallet, "getrawchangeaddress", type]).stdout.trim(), expectedAddress(1, 0));
+        else assert.notEqual(cli([wallet, "getrawchangeaddress", type], { check: false }).status, 0, "no change branch may be invented");
       }
     });
   });
