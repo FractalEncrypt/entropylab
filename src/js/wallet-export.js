@@ -146,10 +146,11 @@ var hodlWalletExport = (() => {
   // the account xpub sits directly before a "/", so it corrupts any xpub
   // ending in <digit>h (about 1 in 375 account keys) and produces a
   // DescriptorID that disagrees with the one Core recomputes at load
-  // (DBErrors::CORRUPT). The fingerprint is hex, so every "h" inside the
-  // origin marks a hardened step.
+  // (DBErrors::CORRUPT). The fingerprint is hex, so a hardened marker inside
+  // the origin is always a path step; the guard accepts h, H and ' alike,
+  // and Core's compat form renders every one of them as '.
   const toCompatForm = (body) =>
-    body.replace(/\[[0-9a-fA-F]{8}(?:\/\d+h?)*\]/g, (origin) => origin.replace(/h/g, "'"));
+    body.replace(/\[[0-9a-fA-F]{8}(?:\/\d+[h'H]?)*\]/g, (origin) => origin.replace(/\d+[h'H](?=[/\]])/g, (step) => `${step.slice(0, -1)}'`));
 
   const stripChecksum = (descriptor) => {
     const hash = descriptor.lastIndexOf("#");
@@ -364,15 +365,20 @@ var hodlWalletExport = (() => {
     `^wpkh\\(${KEY_EXPRESSION_PATTERN}\\)$`,
     `^tr\\(${KEY_EXPRESSION_PATTERN}\\)$`,
   ].map((source) => new RegExp(source));
+  // Bitcoin Core's ParseMulti refuses a threshold outside 1..n and caps the
+  // key count by script type: at most 20 keys in wsh (and sortedmulti_a), at
+  // most 15 in sh (the 520-byte push limit). Anything else would write a
+  // wallet.dat Core refuses to load.
   const MULTISIG_SHAPES = [
-    String.raw`^sh\((?:sorted)?multi\(\d+,(.*)\)\)$`,
-    String.raw`^wsh\((?:sorted)?multi\(\d+,(.*)\)\)$`,
-    String.raw`^sh\(wsh\((?:sorted)?multi\(\d+,(.*)\)\)\)$`,
-    String.raw`^tr\([0-9a-fA-F]{64},(?:sorted)?multi_a\(\d+,(.*)\)\)$`,
-  ].map((source) => new RegExp(source));
+    { source: String.raw`^sh\((?:sorted)?multi\((\d+),(.*)\)\)$`, maxKeys: 15 },
+    { source: String.raw`^wsh\((?:sorted)?multi\((\d+),(.*)\)\)$`, maxKeys: 20 },
+    { source: String.raw`^sh\(wsh\((?:sorted)?multi\((\d+),(.*)\)\)\)$`, maxKeys: 20 },
+    { source: String.raw`^tr\([0-9a-fA-F]{64},(?:sorted)?multi_a\((\d+),(.*)\)\)$`, maxKeys: 20 },
+  ].map(({ source, maxKeys }) => ({ pattern: new RegExp(source), maxKeys }));
   const KEY_LIST_ITEM_PATTERN = new RegExp(`^${KEY_EXPRESSION_PATTERN}$`);
   const UNSUPPORTED_DESCRIPTOR_SHAPE = "wallet.dat export: unsupported descriptor shape (supported: pkh(KEY), sh(wpkh(KEY)), wpkh(KEY), tr(KEY), sh/wsh/sh(wsh()) of multi/sortedmulti, tr(NUMS,sortedmulti_a))";
   const INVALID_EXTENDED_KEY = "wallet.dat export: descriptor key is not a valid extended key";
+  const INVALID_MULTISIG_THRESHOLD = "wallet.dat export: multisig threshold must be between 1 and the number of keys, and the key count within the script type's limit";
 
   // Throws unless the descriptor is exactly one of the supported shapes with
   // a self-consistent checksum (when one is present) and Base58Check-valid
@@ -390,10 +396,17 @@ var hodlWalletExport = (() => {
       return Boolean(key);
     });
     if (!matched) {
-      matched = MULTISIG_SHAPES.some((shape) => {
-        const list = body.match(shape);
+      matched = MULTISIG_SHAPES.some(({ pattern, maxKeys }) => {
+        const list = body.match(pattern);
         if (!list) return false;
-        for (const item of list[1].split(",")) {
+        const threshold = Number(list[1]);
+        const items = list[2].split(",");
+        // A leading zero ("01") is refused too: Core recomputes the
+        // DescriptorID from its own spelling, so the stored ID would not match.
+        if (!/^[1-9]\d*$/.test(list[1]) || !(threshold >= 1 && threshold <= items.length) || items.length > maxKeys) {
+          throw new Error(INVALID_MULTISIG_THRESHOLD);
+        }
+        for (const item of items) {
           const key = item.match(KEY_LIST_ITEM_PATTERN);
           if (!key) throw new Error(INVALID_EXTENDED_KEY);
           keys.push(key[1]);
@@ -454,10 +467,11 @@ var hodlWalletExport = (() => {
     const seenActive = new Set();
     for (const unit of units) {
       let stored = unit.descriptor; // public (watch-only) form with checksum, exactly as Core stores it
-      if (unit.multiKey) {
-        if (typeof deps.canonicalizeDescriptor === "function") stored = deps.canonicalizeDescriptor(stored);
-        if (PRIVATE_KEY.test(stored)) throw new Error("wallet.dat export: watch-only multisig refused an extended private key");
-      }
+      if (unit.multiKey && typeof deps.canonicalizeDescriptor === "function") stored = deps.canonicalizeDescriptor(stored);
+      // A watch-only export must never carry private key material: any
+      // extended private key in a stored descriptor, single-sig or multisig,
+      // is refused (spending material travels only in walletdescriptorkey).
+      if (PRIVATE_KEY.test(stored)) throw new Error("wallet.dat export: watch-only descriptor refused an extended private key");
       const body = stripChecksum(stored);
       const compatBody = toCompatForm(body);
       const compatDescriptor = `${compatBody}#${deps.checksum(compatBody)}`;
