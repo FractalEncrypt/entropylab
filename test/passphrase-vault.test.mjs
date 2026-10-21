@@ -422,6 +422,49 @@ test("a browser edit in the middle of a composition resets the field to the vaul
   masked(field, vault);
 });
 
+// Reviews of #1027 at f9480446 (GLM 5.3, Kimi K3, Muse Spark, DeepSeek V4.1).
+test("switching back to the vault never overwrites the plain text it is about to store", () => {
+  let vaultMode = true;
+  const { field, vault, api } = bound(() => vaultMode);
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  // The page sets the field's text and re-masks while that composition is
+  // still open: mask() must store the text it was given, not a re-rendered mask.
+  field.value = "plain passphrase";
+  api.mask();
+  assert.equal(vault.text(), "plain passphrase");
+  masked(field, vault);
+});
+
+test("a cancelable edit in the middle of a composition applies to the restored selection, once", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.value = "•と•";
+  field.setSelectionRange(2, 2);
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertText", data: "x", cancelable: true, isComposing: false });
+  assert.equal(vault.text(), "axb");
+  masked(field, vault);
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "axb", "the abandoned composition is not applied later");
+});
+
+test("an on-screen key during a composition over a selection replaces that selection", () => {
+  const { field, vault, api } = bound();
+  field.type("abc");
+  field.select(0, 2);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.value = "と•";
+  field.setSelectionRange(1, 1);
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  api.insert("x");
+  assert.equal(vault.text(), "xc");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives

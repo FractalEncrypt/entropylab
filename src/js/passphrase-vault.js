@@ -164,9 +164,26 @@ export class PassphraseVault {
 export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   let pending = null, composing = null, echoing = false;
   const caret = () => [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
-  const render = (at) => {
+  const render = (at, end = at) => {
     field.value = vault.mask();
-    field.setSelectionRange?.(at, at);
+    field.setSelectionRange?.(at, end);
+  };
+  // While a composition is open the field holds raw composing text, so its
+  // caret is not a vault index: drop the composition and put the mask back
+  // with the selection the composition began on.
+  const abandonComposition = () => {
+    const open = composing;
+    composing = null;
+    pending = null;
+    if (open && active()) render(open.start, open.end);
+  };
+  // A change made to the vault from outside the field ends any open
+  // composition without touching the field: mask() and unmask() read or set
+  // field.value themselves, so a render here would overwrite the text they
+  // move (it turned a plain-mode passphrase into bullets).
+  const endComposition = () => {
+    composing = null;
+    pending = null;
   };
   const echo = (inputType) => {
     echoing = true;
@@ -184,6 +201,10 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
 
   field.addEventListener("beforeinput", (event) => {
     if (!active()) return;
+    // A cancelable edit in the middle of a composition (the field holds raw
+    // composing text, so its caret is not a vault index): drop the
+    // composition first, then apply the edit to the restored selection.
+    if (composing && !event.isComposing && event.inputType !== "insertCompositionText" && event.cancelable) abandonComposition();
     const [start, end] = caret();
     pending = { start, end };
     const type = event.inputType || "";
@@ -267,10 +288,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
       // password manager) cannot be placed: the field mixes mask bullets and
       // raw composing text. Abandon both and show the vault as it is, a
       // visible reset rather than a silent splice at stale indices.
-      const at = composing.start;
-      composing = null;
-      pending = null;
-      render(at);
+      abandonComposition();
       return;
     }
     const value = field.value;
@@ -301,25 +319,17 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // Any change to the vault made from outside the field ends an open
   // composition: a compositionend that arrives later would apply its stale
   // indices to the new contents (mask bullets into the vault).
-  // While a composition is open the field holds raw composing text, so its
-  // caret is not a vault index: the mask is put back first, with the caret
-  // where the composition began.
-  const endComposition = () => {
-    const open = composing;
-    composing = null;
-    pending = null;
-    if (open && active()) render(open.start);
-  };
+
 
   return {
     // The on-screen keyboard: insert at the caret, or delete before it.
     insert: (text) => {
-      endComposition();
+      abandonComposition();
       const [start, end] = caret();
       apply(start, end, text, "insertText");
     },
     deleteBackward: () => {
-      endComposition();
+      abandonComposition();
       const [start, end] = caret();
       apply(start === end ? Math.max(0, start - 1) : start, end, "", "deleteContentBackward");
     },
