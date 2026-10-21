@@ -60,6 +60,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { psbtEditorBuildDoc, dropSigningPairs } from "../src/js/psbt-editor.js";
 import { psbtBuildBytes, psbtInspectDoc } from "../src/js/psbt-wasm.js";
+import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -78,17 +79,10 @@ const HEALTHY = FIXTURES.find((fixture) => fixture.name === "p2wpkh-1in-2out.b64
 
 // --- deterministic randomness (same fixed-seed policy as wallet-export-fuzz) --
 const FUZZ_SEED = 0x5eed0240;
-const ITERATIONS = 240;
-const mulberry32 = (seed) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
-const rand = mulberry32(FUZZ_SEED);
+const DEFAULT_ITERATIONS = 240;
+const EDITOR_ENV = fuzzEnv("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
+const ITERATIONS = EDITOR_ENV.iterations;
+let rand = mulberry32(FUZZ_SEED);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
 const chance = (p) => rand() < p;
@@ -771,7 +765,8 @@ const OPS = [
 const OP_BAG = OPS.flatMap(([weight, fn]) => Array.from({ length: weight }, () => fn));
 
 test("seeded random walks: adding/removing inputs and outputs stays safe and correct", () => {
-  for (let i = 0; i < ITERATIONS; i++) {
+  const results = runCases("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS }, (i, caseRand) => {
+    rand = caseRand; // route the module-level helpers through the runCases PRNG
     const fixture = FIXTURES[i % FIXTURES.length];
     note(`fixture:${fixture.name}`);
     // The editor anchors the signing pairs to the loaded transaction; the
@@ -799,7 +794,9 @@ test("seeded random walks: adding/removing inputs and outputs stays safe and cor
     if (state.poisoned) repairOp(state, `iteration ${i} (${fixture.name}) final repair`);
     mustBuild(structuredClone(state.doc), `iteration ${i} (${fixture.name}) final rebuild`);
     note("walk-complete");
-  }
+    return true;
+  });
+  assert.equal(results.length, EDITOR_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
 });
 
 // --- deterministic guards: the properties above, proven without the PRNG -----
@@ -972,6 +969,7 @@ test("the field oracle rejects and repairs both ways of creating a null prevout"
 // The fuzzer guards itself: with a dead pool or a swallowed oracle these
 // flavors and volumes would silently vanish.
 test("the walk covered every flavor and volume floor", () => {
+  if (EDITOR_ENV.only !== null) return; // single-case replay: coverage guards do not apply
   const required = [
     ...FIXTURES.map((fixture) => `fixture:${fixture.name}`),
     "ok:add-input", "ok:add-output", "ok:del-input", "ok:del-output", "ok:del-input-to-floor", "ok:del-output-to-floor",

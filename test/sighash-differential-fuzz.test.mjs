@@ -49,21 +49,15 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { wasmExports, withInput, withOutput } from "../src/js/entropylab-wasm.js";
+import { fuzzEnv, mulberry32, runCases } from "./fuzz-kit.mjs";
 
 // --- deterministic randomness ------------------------------------------------
 
 const FUZZ_SEED = 0x5eed0341;
-const CASES = 64;
-const mulberry32 = (seed) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
-const rand = mulberry32(FUZZ_SEED);
+const DEFAULT_CASES = 64;
+const SIGHASH_ENV = fuzzEnv("SIGHASH_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CASES });
+const ITERATIONS = SIGHASH_ENV.iterations;
+let rand = mulberry32(FUZZ_SEED);
 const rint = (n) => Math.floor(rand() * n);
 const pick = (items) => items[rint(items.length)];
 const randomBytes = (n) => Uint8Array.from({ length: n }, () => rint(256));
@@ -218,10 +212,11 @@ const signatureProblems = (psbt, idx) => {
 const elSighashSegwitV0All = (raw, idx, scriptCode, amount) =>
   withInput(raw, (p) => withInput(scriptCode, (sc) => withOutput(32, (o) => wasmExports().el_sighash_segwit_v0(p, raw.length, idx, sc, scriptCode.length, amount, o))));
 
-test(`rust-bitcoin (WASM) and @scure/btc-signer sign the same legacy, BIP143, and BIP341 digests (seed 0x${FUZZ_SEED.toString(16)}, ${CASES} cases)`, () => {
+test(`rust-bitcoin (WASM) and @scure/btc-signer sign the same legacy, BIP143, and BIP341 digests (seed 0x${SIGHASH_ENV.seed.toString(16)}, ${SIGHASH_ENV.only === null ? ITERATIONS : 1} cases)`, () => {
   let ran = 0;
   const seen = new Set();
-  for (let i = 0; i < CASES; i++) {
+  const results = runCases("SIGHASH_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_CASES }, (i, caseRand) => {
+    rand = caseRand; // route the module-level helpers through the runCases PRNG
     const c = buildCase(i);
     seen.add(c.family);
     // A SIGHASH_SINGLE signature whose input has no corresponding output is
@@ -246,7 +241,11 @@ test(`rust-bitcoin (WASM) and @scure/btc-signer sign the same legacy, BIP143, an
       assert.equal(hex(wasm), hex(scure), `${c.label}: el_sighash_segwit_v0 (SIGHASH_ALL) differs\n  entropylab-wasm:   ${hex(wasm)}\n  @scure/btc-signer: ${hex(scure)}`);
     }
     ran += 1;
+    return true;
+  });
+  assert.equal(results.length, SIGHASH_ENV.only === null ? ITERATIONS : 1, "every case ran to the end");
+  if (SIGHASH_ENV.only === null) {
+    assert.deepEqual([...seen].sort(), ["bip143", "bip341", "legacy"], "every sighash algorithm was exercised");
+    assert.equal(ran, ITERATIONS, "every case ran to the end");
   }
-  assert.deepEqual([...seen].sort(), ["bip143", "bip341", "legacy"], "every sighash algorithm was exercised");
-  assert.equal(ran, CASES, "every case ran to the end");
 });
