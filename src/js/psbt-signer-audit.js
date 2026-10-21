@@ -308,8 +308,6 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     }
   }
 
-  const diff = comparePsbtDocs(beforeDoc, afterDoc);
-
   const reorderedInputs = detectReorder(
     beforeDoc.tx.inputs,
     afterDoc.tx.inputs,
@@ -326,31 +324,50 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   if (reorderedOutputs) {
     findings.push(finding("TX_REORDERED", "critical", "transaction", null, null, { dimension: "outputs", order: reorderedOutputs.order }));
   }
-  const isReorderArtifact = (change, order) => {
-    if (change.scope !== "input-map" && change.scope !== "output-map") return true;
-    const afterIndex = change.index;
-    const beforeIndex = order[afterIndex];
-    if (beforeIndex === undefined) return false;
-    const beforePairs = mapPairs(beforeDoc, change.scope, beforeIndex);
-    const afterPairs = mapPairs(afterDoc, change.scope, afterIndex);
-    if (change.kind === "added") {
-      return beforePairs.some((pair) => pair.key === change.key && pair.value === change.after);
-    }
-    if (change.kind === "removed") {
-      return afterPairs.some((pair) => pair.key === change.key && pair.value === change.before);
-    }
-    return beforePairs.some((pair) => pair.key === change.key && pair.value === change.after);
-  };
-  const suppressed = (change) => {
-    if (reorderedInputs && (change.scope === "input" || change.scope === "input-map")) {
-      return change.scope === "input" || isReorderArtifact(change, reorderedInputs.order);
-    }
-    if (reorderedOutputs && (change.scope === "output" || change.scope === "output-map")) {
-      return change.scope === "output" || isReorderArtifact(change, reorderedOutputs.order);
+  // Identity matching: a reorder is only an artifact when each map follows its
+  // outpoint (inputs) or its scriptPubKey+amount (outputs). Pairing by identity
+  // and diffing the aligned maps reports every real change on an input or
+  // output that is still present exactly as it would be without the reorder.
+  // Duplicate identities cannot be paired unambiguously, so they fail closed.
+  const inputIdentity = (input) => `${lower(input.txid)}:${input.vout}`;
+  const outputIdentity = (output) => `${lower(output.scriptPubKey)}:${output.value}`;
+  const hasDuplicateIdentity = (items, identityOf) => {
+    const seen = new Set();
+    for (const item of items) {
+      const key = identityOf(item);
+      if (seen.has(key)) return true;
+      seen.add(key);
     }
     return false;
   };
-  const activeChanges = diff.changes.filter((change) => !suppressed(change));
+  const ambiguousInputs = Boolean(reorderedInputs) && hasDuplicateIdentity(beforeDoc.tx.inputs, inputIdentity);
+  const ambiguousOutputs = Boolean(reorderedOutputs) && hasDuplicateIdentity(beforeDoc.tx.outputs, outputIdentity);
+  if (ambiguousInputs) {
+    findings.push(finding("TX_INPUT_CHANGED", "critical", "input", null, null, { kind: "unpaired", reason: "ambiguous_identity", dimension: "inputs" }));
+  }
+  if (ambiguousOutputs) {
+    findings.push(finding("TX_OUTPUT_CHANGED", "critical", "output", null, null, { kind: "unpaired", reason: "ambiguous_identity", dimension: "outputs" }));
+  }
+  const inputOrder = reorderedInputs && !ambiguousInputs ? reorderedInputs.order : null;
+  const outputOrder = reorderedOutputs && !ambiguousOutputs ? reorderedOutputs.order : null;
+  const beforeView = (inputOrder || outputOrder)
+    ? {
+      ...beforeDoc,
+      tx: {
+        ...beforeDoc.tx,
+        inputs: inputOrder ? inputOrder.map((index) => beforeDoc.tx.inputs[index]) : beforeDoc.tx.inputs,
+        outputs: outputOrder ? outputOrder.map((index) => beforeDoc.tx.outputs[index]) : beforeDoc.tx.outputs,
+      },
+      inputs: inputOrder ? inputOrder.map((index) => beforeDoc.inputs[index]) : beforeDoc.inputs,
+      outputs: outputOrder ? outputOrder.map((index) => beforeDoc.outputs[index]) : beforeDoc.outputs,
+    }
+    : beforeDoc;
+  const diff = comparePsbtDocs(beforeView, afterDoc);
+  const activeChanges = diff.changes.filter((change) => {
+    if (ambiguousInputs && (change.scope === "input" || change.scope === "input-map")) return false;
+    if (ambiguousOutputs && (change.scope === "output" || change.scope === "output-map")) return false;
+    return true;
+  });
 
   const changeResult = computeChangeFindings(afterDoc, options.wallet);
   const verifiedChangeOutputs = changeResult.verified;
@@ -382,7 +399,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   }
 
   // Pre-pass: finalization candidates and the removals they may explain.
-  const beforeHasFinal = (index) => (beforeDoc.inputs?.[index] ?? []).some((pair) => FINAL_FIELDS.has(pair.name));
+  const beforeHasFinal = (index) => (beforeView.inputs?.[index] ?? []).some((pair) => FINAL_FIELDS.has(pair.name));
   const finalizationCandidates = new Set();
   const addedFinalFieldsByInput = new Map();
   const removedFieldsByInput = new Map();
@@ -483,7 +500,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     }
 
     if (scope === "input-map" && UTXO_FIELDS.has(name)) {
-      const beforePair = pairForChange(beforeDoc, change, "before");
+      const beforePair = pairForChange(beforeView, change, "before");
       const afterPair = pairForChange(afterDoc, change, "after");
       const beforeValues = utxoValues(beforePair);
       const afterValues = utxoValues(afterPair);
@@ -508,7 +525,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
         } else if (fullCommitment(value, tap)) {
           findings.push(finding("SIGHASH_DECLARATION_ADDED", "info", "input-map", index, null, { index, value }));
         } else if (weakSighash(value)) {
-          const originalDeclared = declaredSighash(beforeDoc, index);
+          const originalDeclared = declaredSighash(beforeView, index);
           const severity = originalDeclared === value ? "warning" : "critical";
           findings.push(finding("SIGHASH_DECLARATION_ADDED", severity, "input-map", index, null, { index, value }));
         }
@@ -570,7 +587,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     }
 
     if (DERIVATION_FIELDS.has(name) && kind === "changed") {
-      const beforePair = pairForChange(beforeDoc, change, "before");
+      const beforePair = pairForChange(beforeView, change, "before");
       const afterPair = pairForChange(afterDoc, change, "after");
       if (beforePair?.decoded && afterPair?.decoded && !beforePair.decodeError && !afterPair.decodeError) {
         const fingerprintBefore = lower(beforePair.decoded.fingerprint);
@@ -634,7 +651,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   for (const event of newSigEvents) {
     const pubkey = pubkeyForEvent(event);
     if (event.name === "PSBT_IN_TAP_KEY_SIG") {
-      if (!hasTaprootMaterial(beforeDoc, event.index)) {
+      if (!hasTaprootMaterial(beforeView, event.index)) {
         if (!unknownPubkeysByInput.has(event.index)) unknownPubkeysByInput.set(event.index, []);
         unknownPubkeysByInput.get(event.index).push(pubkey);
         continue;
@@ -649,7 +666,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       event.identityFinding = added;
       continue;
     }
-    const expected = expectedKeysFor(beforeDoc, event.index);
+    const expected = expectedKeysFor(beforeView, event.index);
     if (expected.size === 0) {
       if (!unknownPubkeysByInput.has(event.index)) unknownPubkeysByInput.set(event.index, []);
       unknownPubkeysByInput.get(event.index).push(pubkey);
@@ -702,7 +719,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       continue;
     }
 
-    const beforePolicy = declaredPolicy(beforeDoc, event.index);
+    const beforePolicy = declaredPolicy(beforeView, event.index);
     let expected = null;
     if (beforePolicy.invalid) {
       if (!declaredInvalidEmitted.has(event.index)) {
@@ -843,6 +860,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   else if (has("SIGHASH_MISMATCH")) sighashPolicy = "mismatch";
   else if (has("SIGHASH_WEAK")) sighashPolicy = "weak";
   else if (has("SIGHASH_DECLARATION_CHANGED")) sighashPolicy = "mismatch";
+  else if (has("SIGHASH_DECLARATION_ADDED", "critical")) sighashPolicy = "weak";
   else if (weakAsRequested.value) sighashPolicy = "weak_as_requested";
   else if (newSigEvents.length > 0) sighashPolicy = "full_commitment";
 
@@ -886,7 +904,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
 
   return {
     verdict,
-    equal: diff.equal,
+    equal: diff.equal && !reorderedInputs && !reorderedOutputs,
     checks: {
       transactionBody,
       utxoDeclarations,

@@ -942,3 +942,103 @@ test("F45 reorder does not hide a UTXO change on a present input", () => {
     ["UTXO_DECLARATION_CHANGED", "critical"],
   ]);
 });
+
+test("F46 a pure reorder with distinct per-input maps reports only TX_REORDERED", () => {
+  const base = baseDoc();
+  const inputs = [
+    { txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 },
+    { txid: "22".repeat(32), vout: 1, scriptSig: "", sequence: 4294967295 },
+  ];
+  const mapA = [
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
+  ];
+  const mapB = [
+    pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 }),
+    pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }),
+  ];
+  const before = baseDoc({ tx: { ...base.tx, inputs: [inputs[0], inputs[1]] }, inputs: [mapA, mapB] });
+  const after = baseDoc({ tx: { ...base.tx, inputs: [inputs[1], inputs[0]] }, inputs: [mapB, mapA] });
+  const report = auditSigner(before, after);
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["TX_REORDERED", "critical"]]);
+  assert.equal(report.checks.metadata, "unchanged");
+  assert.equal(report.checks.utxoDeclarations, "unchanged");
+});
+
+test("F47 a reorder does not hide a UTXO rewrite on a present input", () => {
+  const base = baseDoc();
+  const inputs = [
+    { txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 },
+    { txid: "22".repeat(32), vout: 1, scriptSig: "", sequence: 4294967295 },
+  ];
+  const cc = pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 });
+  const dd = pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 });
+  const before = baseDoc({ tx: { ...base.tx, inputs: [inputs[0], inputs[1]] }, inputs: [[cc], [dd]] });
+  const after = baseDoc({ tx: { ...base.tx, inputs: [inputs[1], inputs[0]] }, inputs: [[cc], [cc]] });
+  const report = auditSigner(before, after);
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["TX_REORDERED", "critical"],
+    ["UTXO_DECLARATION_CHANGED", "critical"],
+  ]);
+  assert.equal(report.findings[1].evidence.index, 0);
+  assert.equal(report.findings[1].evidence.beforeScriptPubKey, SCRIPT2);
+  assert.equal(report.findings[1].evidence.afterScriptPubKey, SCRIPT1);
+  assert.equal(report.checks.utxoDeclarations, "changed");
+});
+
+test("F48 a reorder attributes an added signature to the input that carries it", () => {
+  const base = baseDoc();
+  const inputs = [
+    { txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 },
+    { txid: "22".repeat(32), vout: 1, scriptSig: "", sequence: 4294967295 },
+  ];
+  const mapA = [
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
+  ];
+  const mapB = [
+    pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 }),
+    pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }),
+  ];
+  const sigB = pair("02" + P2_HEX, "22".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: "22".repeat(71), sighash: "SIGHASH_ALL" });
+  const before = baseDoc({ tx: { ...base.tx, inputs: [inputs[0], inputs[1]] }, inputs: [mapA, mapB] });
+  const after = baseDoc({ tx: { ...base.tx, inputs: [inputs[1], inputs[0]] }, inputs: [[...mapB, sigB], mapA] });
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P2_HEX, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["TX_REORDERED", "critical"],
+    ["SIGNATURE_ADDED", "info"],
+  ]);
+  assert.equal(report.findings[1].evidence.index, 0);
+  assert.equal(report.findings[1].evidence.pubkey, P2_HEX);
+  assert.equal(report.checks.signerKeys, "match");
+});
+
+test("F49 a reorder with duplicate outputs fails closed as unpaired", () => {
+  const base = baseDoc();
+  const outputs = [
+    { value: 100000, scriptPubKey: SCRIPT1 },
+    { value: 100000, scriptPubKey: SCRIPT1 },
+    { value: 40000, scriptPubKey: SCRIPT2 },
+  ];
+  const before = baseDoc({ tx: { ...base.tx, outputs }, outputs: [[], [], []] });
+  const after = baseDoc({ tx: { ...base.tx, outputs: [outputs[2], outputs[0], outputs[1]] }, outputs: [[], [], []] });
+  const report = auditSigner(before, after);
+  assert.equal(report.verdict, "fail");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["TX_REORDERED", "critical"],
+    ["TX_OUTPUT_CHANGED", "critical"],
+  ]);
+  assert.equal(report.findings[1].evidence.kind, "unpaired");
+});
+
+test("F50 an injected weak sighash declaration is reflected in sighashPolicy", () => {
+  const before = baseDoc();
+  const after = baseDoc({ inputs: [[
+    ...before.inputs[0],
+    pair("03", "02000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_NONE", sighashType: 2 }),
+  ]] });
+  const report = auditSigner(before, after);
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGHASH_DECLARATION_ADDED", "critical"]]);
+  assert.notEqual(report.checks.sighashPolicy, "none");
+});
