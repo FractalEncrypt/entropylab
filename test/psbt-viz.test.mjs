@@ -6,6 +6,9 @@
 // Run with `npm test` (part of the default and CI suites).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { psbtVizHtml } from "../src/js/psbt-viz.js";
 import * as vizModule from "../src/js/psbt-viz.js";
@@ -487,4 +490,194 @@ test("the editor summary carries one note per undefined witness output, and none
   assert.match(html, /<span class="psbted-note-warn">⚠ Output #1 pays to SegWit v2, which no active soft fork defines\./);
   assert.match(html, /<span class="muted">Output #2 is a pay-to-anchor \(P2A\)/);
   assert.match(html, /<span class="psbted-note-bad">✕ Output #3 is a 25-byte SegWit v0 program: no one can ever spend it\.<\/span>/);
+});
+
+// Red-team F7: a crafted PSBT passes the 5 MB / 100k-element load gates with
+// more inputs and outputs than the DOM survives. The diagram (and every PSBT
+// view through the shared PSBT_RENDER_LIMIT) renders at most 500 boxes per
+// side and notes the elided count, while totals, the fee and every warning
+// still cover the full document. The PSBTs are hand-assembled here: inputs
+// claiming a 2,000-sat P2WPKH witness UTXO each, outputs of 1,000 sats — so
+// for 1,200 in / 700 out the inspector computes totalIn 2,400,000, totalOut
+// 700,000 and fee 1,700,000 sats over every element, cap or no cap.
+const craftedPsbt = (inputCount, outputCount) => {
+  const le32 = (n) => [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff];
+  const le64 = (n) => [...le32(n), 0, 0, 0, 0];
+  const varint = (n) => (n < 0xfd ? [n] : n <= 0xffff ? [0xfd, n & 0xff, (n >> 8) & 0xff] : [0xfe, ...le32(n)]);
+  const script = [0x00, 0x14, ...new Array(20).fill(0x22)]; // P2WPKH
+  const tx = [
+    ...le32(2),
+    ...varint(inputCount),
+    ...Array.from({ length: inputCount }, (_, i) => [...new Array(32).fill(0x11), ...le32(i), 0x00, 0xff, 0xff, 0xff, 0xff]).flat(),
+    ...varint(outputCount),
+    ...Array.from({ length: outputCount }, () => [...le64(1000), script.length, ...script]).flat(),
+    ...le32(0),
+  ];
+  const witnessUtxo = [...le64(2000), script.length, ...script];
+  return new Uint8Array([
+    0x70, 0x73, 0x62, 0x74, 0xff, // "psbt\xff"
+    0x01, 0x00, ...varint(tx.length), ...tx, 0x00, // the global unsigned-transaction pair
+    ...Array.from({ length: inputCount }, () => [0x01, 0x01, witnessUtxo.length, ...witnessUtxo, 0x00]).flat(), // one witness-UTXO pair per input map
+    ...new Array(outputCount).fill(0x00), // one empty map per output
+  ]);
+};
+
+test("an oversize PSBT renders only 500 boxes per side, notes the elided counts, and keeps full-document totals (F7)", () => {
+  const doc = psbtInspectDoc(craftedPsbt(1200, 700));
+  assert.equal(doc.tx.inputs.length, 1200);
+  assert.equal(doc.tx.outputs.length, 700);
+  const html = psbtVizHtml(doc, "mainnet");
+  assert.equal(html.match(/data-viz="input:/g).length, 500, "input boxes capped at 500");
+  assert.equal(html.match(/data-viz="output:/g).length, 500, "output boxes capped at 500");
+  assert.ok(html.includes('data-viz="input:499"'), "input #499 is rendered");
+  assert.ok(!html.includes('data-viz="input:500"'), "input #500 is not rendered");
+  assert.ok(html.includes('data-viz="output:499"'), "output #499 is rendered");
+  assert.ok(!html.includes('data-viz="output:500"'), "output #500 is not rendered");
+  // One elision line per column, in the same element and class the editor
+  // uses for its truncated-problems note.
+  assert.ok(html.includes('<p class="muted">…and 700 more inputs (not rendered).</p>'), "inputs elision line");
+  assert.ok(html.includes('<p class="muted">…and 200 more outputs (not rendered).</p>'), "outputs elision line");
+  // Headings, totals and the fee still cover all 1,200 inputs and 700 outputs.
+  assert.match(html, /Inputs[\s\S]{0,40}\(1200\)/);
+  assert.match(html, /Outputs[\s\S]{0,40}\(700\)/);
+  assert.ok(html.includes(`${sats("2400000")} sats claimed, not verified`), "inputs total covers every input");
+  assert.ok(html.includes(`${sats("700000")} sats in total`), "outputs total covers every output");
+  assert.ok(html.includes(`${sats("1700000")} sats</span>`), "fee covers the full document");
+});
+
+test("a PSBT under the render cap renders every box and no elision line", () => {
+  const doc = psbtInspectDoc(craftedPsbt(3, 2));
+  const html = psbtVizHtml(doc, "mainnet");
+  assert.equal(html.match(/data-viz="input:/g).length, 3, "every input rendered");
+  assert.equal(html.match(/data-viz="output:/g).length, 2, "every output rendered");
+  assert.ok(!html.includes("(not rendered)"), "no elision line under the cap");
+  assert.ok(html.includes(`${sats("4000")} sats</span>`), "fee 6,000 in − 2,000 out");
+});
+
+// --- F7 round 2: the PSBT inspector (hodlRenderPsbt in app.js) ------------
+// app.js is the browser monolith: it exports nothing, so hodlRenderPsbt is
+// extracted from its source and evaluated with stubs for the helpers it
+// closes over. The extractor skips strings and comments, so the braces in
+// literals like "…and {n} more." do not fool the brace matcher.
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const extractAppFunction = (name) => {
+  const source = readFileSync(join(repoRoot, "src/js/app.js"), "utf8");
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name} not found in app.js`);
+  let depth = 0, state = "code", quote = "";
+  for (let i = start; i < source.length; i++) {
+    const char = source[i], next = source[i + 1];
+    if (state === "line") { if (char === "\n") state = "code"; continue; }
+    if (state === "block") { if (char === "*" && next === "/") { state = "code"; i++; } continue; }
+    if (state === "string") { if (char === "\\") i++; else if (char === quote) state = "code"; continue; }
+    if (char === "/" && next === "/") { state = "line"; i++; continue; }
+    if (char === "/" && next === "*") { state = "block"; i++; continue; }
+    if (char === "'" || char === '"' || char === "`") { state = "string"; quote = char; continue; }
+    if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) return source.slice(start, i + 1);
+  }
+  throw new Error(`unbalanced braces in ${name}`);
+};
+
+// The stubs are the inspector's own contracts: hodlWitUtxo reads an input's
+// witness-UTXO claim, hodlSighashPolicy its declared sighash type,
+// hodlRenderOutputHtml builds one output block. The crafted document gives
+// every input a 2,000-sat claim and every output 1,000 sats, so the fee over
+// ALL elements is arithmetic the test owns: 1,200 in / 700 out → 1,700,000
+// sats (0.017 BTC); 3 in / 2 out → 4,000 sats.
+const hodlRenderPsbtForTest = () => {
+  const captured = {};
+  const stubs = {
+    PSBT_RENDER_LIMIT: 500,
+    hodlInspectorNetwork: () => "mainnet",
+    inspectPsbtInscriptions: () => ({ inputs: [], envelopes: [] }),
+    hodlPsbtReferenceVerdict: () => ({ state: "complete", problems: [], unlisted: 0 }),
+    hodlT: (text, vars) => String(text).replace(/\{(\w+)\}/g, (match, key) => (vars && key in vars ? vars[key] : match)),
+    hodlTText: (text) => text,
+    hodlEscapeHtml: (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    hodlSessionOwnership: () => new Map(),
+    hodlRenderOutputHtml: (output, index) => `<p class='psbt-kv'><strong>Output ${index}</strong></p>`,
+    hodlOwnershipWarning: () => "",
+    hodlWitUtxo: (entries) => {
+      const claim = entries.find((entry) => entry.type === 0x01);
+      return claim ? { amount: claim.amount, script: claim.script } : null;
+    },
+    hodlNonWitUtxo: () => null,
+    hodlEq: () => false,
+    hodlSighashPolicy: (entries) => {
+      const declared = entries.find((entry) => entry.type === 0x03);
+      return declared ? declared.sighash : null;
+    },
+    hodlSighashLabel: (sighash) => ({ 1: "SIGHASH_ALL", 2: "SIGHASH_NONE", 3: "SIGHASH_SINGLE" }[sighash] ?? `SIGHASH_${sighash}`),
+    hodlPartialSigs: () => [],
+    hodlTapSigsParsed: () => [],
+    hodlFinalized: () => false,
+    hodlAddr: () => "bc1qstub",
+    hodlPublicInlineHtml: (value) => value,
+    hodlHexRev: (txid) => txid,
+    hodlSats: (sats) => (Number(sats) / 100000000).toFixed(8),
+    hodlCompareNonces: () => ({ reused: [], possible: [], crossKey: [] }),
+    hodlPsbtNonceCheck: () => ({ label: "ECDSA nonce reuse", state: "complete", detail: "" }),
+    hodlPsbtAnalysisSummary: (checks) => {
+      captured.checks = checks;
+      return "";
+    },
+  };
+  const names = Object.keys(stubs);
+  const render = new Function(...names, `${extractAppFunction("hodlRenderPsbt")}; return hodlRenderPsbt;`)(...names.map((name) => stubs[name]));
+  return { render, captured };
+};
+
+const inspectorDoc = (inputCount, outputCount, sighashAt = -1) => {
+  const script = new Uint8Array([0x00, 0x14, ...new Array(20).fill(0x22)]); // P2WPKH
+  return {
+    tx: {
+      version: 2,
+      locktime: 0,
+      inputs: Array.from({ length: inputCount }, (_, vout) => ({ txid: "11".repeat(32), vout, script: new Uint8Array(), sequence: 0xffffffff })),
+      outputs: Array.from({ length: outputCount }, () => ({ amount: 1000n, script })),
+    },
+    inputs: Array.from({ length: inputCount }, (_, index) => [
+      { type: 0x01, amount: 2000n, script },
+      ...(index === sighashAt ? [{ type: 0x03, sighash: 3 }] : []),
+    ]),
+    outputs: Array.from({ length: outputCount }, () => []),
+  };
+};
+
+test("a 1,200-input PSBT renders 500 input sections in the inspector, notes the elided counts, and still warns from input 900 (F7)", () => {
+  const { render, captured } = hodlRenderPsbtForTest();
+  const html = render(inspectorDoc(1200, 700, 900), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.equal(html.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 500, "input sections capped at 500");
+  assert.equal(html.match(/<strong>Output \d+<\/strong>/g)?.length ?? 0, 500, "output blocks capped at 500");
+  assert.ok(html.includes("<strong>Input 499</strong>"), "input #499 is rendered");
+  assert.ok(!html.includes("<strong>Input 500</strong>"), "input #500 is not rendered");
+  assert.ok(html.includes("<strong>Output 499</strong>"), "output #499 is rendered");
+  assert.ok(!html.includes("<strong>Output 500</strong>"), "output #500 is not rendered");
+  // One elision line per list, in the same element and class hodlRenderRawTx
+  // uses, with the count as a plain integer.
+  assert.ok(html.includes("<p class='muted'>…and 700 more inputs (not rendered).</p>"), "inputs elision line");
+  assert.ok(html.includes("<p class='muted'>…and 200 more outputs (not rendered).</p>"), "outputs elision line");
+  // The analysis still covers every element: input 900's declared
+  // SIGHASH_SINGLE is a policy problem even though its section is elided…
+  assert.ok(html.includes("input 900 requests SIGHASH_SINGLE"), "warning from elided input 900 still appears");
+  assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the summary's policy check saw input 900");
+  // …and the fee is computed over all 1,200 claims and 700 outputs:
+  // 1,200 × 2,000 − 700 × 1,000 = 1,700,000 sats.
+  assert.ok(html.includes("0.01700000 BTC"), "fee covers every input and output");
+});
+
+test("the inspector under the render cap renders every section and no elision line", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const html = render(inspectorDoc(3, 2), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.equal(html.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 3, "every input rendered");
+  assert.equal(html.match(/<strong>Output \d+<\/strong>/g)?.length ?? 0, 2, "every output rendered");
+  assert.ok(!html.includes("(not rendered)"), "no elision line under the cap");
+  assert.ok(html.includes("0.00004000 BTC"), "fee 3 × 2,000 − 2 × 1,000 = 4,000 sats");
+});
+
+test("app.js shares the one PSBT_RENDER_LIMIT with the PSBT views (no local duplicate)", () => {
+  const source = readFileSync(join(repoRoot, "src/js/app.js"), "utf8");
+  assert.match(source, /import \{ PSBT_RENDER_LIMIT \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
+  assert.doesNotMatch(source, /const PSBT_RENDER_LIMIT =/, "no duplicated local constant");
 });

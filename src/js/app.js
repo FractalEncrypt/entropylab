@@ -123,6 +123,9 @@ import { endSession as hodlEndSession, initEndSessionConfirm } from "./end-sessi
 import { initTextServiceOptOuts, initTranslationWarning } from "./text-services.js";
 import { initSecurityLog } from "./security-log.js";
 import { initConcealOnLeave } from "./conceal-on-leave.js";
+// One cap for every PSBT view: a crafted PSBT passes the load gates with more
+// elements than the DOM survives (red-team F7).
+import { PSBT_RENDER_LIMIT } from "./psbt-viz.js";
 const hodlBip39Wordlist = Object.freeze(bip39English);
 function hodlNote(key, vars) {
   return vars == null ? { key } : { key, vars };
@@ -12688,9 +12691,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx outputs") + " <span class='label-value'>(" + tx.outputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction sends bitcoin") + "</p>");
   let ownershipMap = hodlSessionOwnership(network);
-  tx.outputs.forEach((output, index) => {
+  // Output blocks are capped at PSBT_RENDER_LIMIT; the ownership warning
+  // below still analyses every output.
+  tx.outputs.slice(0, PSBT_RENDER_LIMIT).forEach((output, index) => {
     html.push(hodlRenderOutputHtml(output, index, network, ownershipMap, psbt.outputs[index], derivationBudget));
   });
+  if (tx.outputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more outputs (not rendered).", { n: tx.outputs.length - PSBT_RENDER_LIMIT }) + "</p>");
   html.push(hodlOwnershipWarning(tx.outputs, network, ownershipMap));
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
@@ -12745,7 +12751,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     let parsedTapSignatures = tapSignatures.reduce((count, tapSig) => count + (tapSig.r ? 1 : 0), 0);
     tapSignatureCount += parsedTapSignatures;
     let destinationHtml = claim && !destination.startsWith("script ") ? hodlPublicInlineHtml(destination, { className: "psbt-address", label: hodlTText("Address") }) : hodlEscapeHtml(destination);
-    html.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: index }) + "</strong> \xB7 " + hodlHexRev(previous.txid) + " : " + previous.vout + (claim ? "<br><span class='psbt-amount'>" + hodlT("{amount} BTC claimed", { amount: hodlSats(claim.amount) }) + "</span><br>" + destinationHtml : "<br>" + destinationHtml) + "<br>" + (signatures.length + parsedTapSignatures ? "<span class='psbt-sig-present'>" + hodlT("{count} signature(s) present", { count: signatures.length + parsedTapSignatures }) + "</span>" : finalized ? "<span class='psbt-sig-finalized'>" + hodlT("Finalized input data present") + "</span>" : "<span class='psbt-sig-unsigned'>" + hodlT("Not signed yet") + "</span>") + "<br><span class='psbt-sig-policy'>" + (declaredSighashError ? hodlT("Declared sighash policy unreadable: {error}", { error: declaredSighashError }) : hodlT("Signature policy: {policy}", { policy: declaredLabel })) + "</span></p>");
+    // Only this per-input section is capped at PSBT_RENDER_LIMIT. Everything
+    // else in the loop — UTXO claim resolution and the fee total, conflict
+    // and sighash-policy warnings, inscription findings, nonce and signature
+    // analysis — still runs for EVERY input, so a finding past the cap (and
+    // every summary count) still appears.
+    if (index < PSBT_RENDER_LIMIT) html.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: index }) + "</strong> \xB7 " + hodlHexRev(previous.txid) + " : " + previous.vout + (claim ? "<br><span class='psbt-amount'>" + hodlT("{amount} BTC claimed", { amount: hodlSats(claim.amount) }) + "</span><br>" + destinationHtml : "<br>" + destinationHtml) + "<br>" + (signatures.length + parsedTapSignatures ? "<span class='psbt-sig-present'>" + hodlT("{count} signature(s) present", { count: signatures.length + parsedTapSignatures }) + "</span>" : finalized ? "<span class='psbt-sig-finalized'>" + hodlT("Finalized input data present") + "</span>" : "<span class='psbt-sig-unsigned'>" + hodlT("Not signed yet") + "</span>") + "<br><span class='psbt-sig-policy'>" + (declaredSighashError ? hodlT("Declared sighash policy unreadable: {error}", { error: declaredSighashError }) : hodlT("Signature policy: {policy}", { policy: declaredLabel })) + "</span></p>");
     if (claimConflict) {
       let conflictReason = witnessUtxo.amount !== nonWitnessUtxo.amount
         ? hodlT("input {n} declares {witness} BTC in its witness UTXO but {nonWitness} BTC in its non-witness UTXO (checked against the embedded previous transaction). Neither amount is trusted and the fee is left unknown.", { n: index, witness: hodlSats(witnessUtxo.amount), nonWitness: hodlSats(nonWitnessUtxo.amount) })
@@ -12921,6 +12932,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       rows.push({ input: index, message, className, pubkey: hodlHex.encode(signature.pubkey) });
     });
   });
+  if (psbt.inputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more inputs (not rendered).", { n: psbt.inputs.length - PSBT_RENDER_LIMIT }) + "</p>");
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx fees") + "</p><p class='muted label-description'>" + hodlT("Remainder of total inputs after total outputs are accounted for") + "</p>");
   if (conflictedInputs.length) html.push("<p class='psbt-bad'><strong>" + hodlT("Fee unknown") + "</strong> — " + hodlT("input(s) {inputs} carry conflicting witness and non-witness UTXO amounts.", { inputs: conflictedInputs.join(", ") }) + "</p>");
@@ -13015,6 +13027,10 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
 function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt = new Date().toISOString(), view = "all", options) {
   // The inspector follows the header network picker (mainnet/testnet); there
   // is no per-tool network control. A repaint passes the run's network.
+  // Per-element rendering is capped like the PSBT editor's views (the
+  // PSBT_RENDER_LIMIT imported from psbt-viz.js, above hodlRenderPsbt). The
+  // ownership warning, inscription hints and nonce analysis below still
+  // cover every input and output.
   let network = options?.network ?? hodlInspectorNetwork(),
     html = [],
     map = hodlSessionOwnership(network),
@@ -13024,15 +13040,17 @@ function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt =
   html.push("<p class='psbt-warn'><strong>" + hodlT("Raw Bitcoin transaction.") + "</strong> " + hodlT("Not a PSBT. Input amounts and fee are unknown without previous outputs. RFC 6979 cannot be checked here. This is the last look before broadcast.") + "</p>");
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx outputs") + " <span class='label-value'>(" + tx.outputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction sends bitcoin") + "</p>");
-  tx.outputs.forEach((output, index) => {
+  tx.outputs.slice(0, PSBT_RENDER_LIMIT).forEach((output, index) => {
     html.push(hodlRenderOutputHtml(output, index, network, map, null));
   });
+  if (tx.outputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more outputs (not rendered).", { n: tx.outputs.length - PSBT_RENDER_LIMIT }) + "</p>");
   html.push(hodlOwnershipWarning(tx.outputs, network, map));
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
-  tx.inputs.forEach((input, index) => {
+  tx.inputs.slice(0, PSBT_RENDER_LIMIT).forEach((input, index) => {
     html.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: index }) + "</strong> \xB7 " + hodlHexRev(input.txid) + " : " + input.vout + "<br>" + hodlT("sequence {sequence}", { sequence: "0x" + input.sequence.toString(16) }) + (input.sequence < 0xfffffffe ? " \xB7 " + hodlT("RBF-capable") : "") + "</p>");
   });
+  if (tx.inputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more inputs (not rendered).", { n: tx.inputs.length - PSBT_RENDER_LIMIT }) + "</p>");
   inscriptionHints(tx).forEach((hint) => {
     html.push("<p class='psbt-warn'><strong>" + hodlT("Inscription envelope") + "</strong> " + hodlT("in input {n} ({bytes} bytes of script/witness). This transaction reveals OP_FALSE OP_IF \"ord\" data.", { n: hint.input, bytes: hint.scriptBytes }) + "</p>");
   });

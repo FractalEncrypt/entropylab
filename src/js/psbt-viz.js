@@ -26,6 +26,14 @@ import { publicValueHtml } from "./public-data.js";
 const escapeHtml = (text) =>
   String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+// Display cap for every PSBT view's per-element rendering (the editor's
+// tables and map sections import this). A crafted PSBT passes the 5 MB /
+// 100k-element load gates with tens of thousands of inputs, and building one
+// box, table row and map section per element hangs the tab (red-team F7).
+// Totals, fees, warnings and every analysis still cover ALL elements — only
+// rendering stops at the cap, with the elided count noted under the list.
+export const PSBT_RENDER_LIMIT = 500;
+
 // One renderer for the whole app: rust-bitcoin's Address::from_script via
 // the entropylab-wasm crate, exactly what the inspector shows — exotic
 // witness programs (off-curve v1 keys, v1 ≠ 32 bytes, v2–v16) get their
@@ -246,8 +254,10 @@ const outputBox = (doc, index, network, copyIcon) => {
 // SVG layer ships empty: psbt-editor.js measures the laid-out boxes and
 // draws the connector paths into it (no layout in this pure module).
 export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
-  const inputs = doc.tx.inputs.map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
-  const outputs = doc.tx.outputs.map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
+  const inputs = doc.tx.inputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
+  const outputs = doc.tx.outputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
+  const moreInputs = Math.max(0, doc.tx.inputs.length - PSBT_RENDER_LIMIT);
+  const moreOutputs = Math.max(0, doc.tx.outputs.length - PSBT_RENDER_LIMIT);
   // Column totals ride in the hint lines; the inputs side can only total
   // when every input carries a claim (doc.totalIn is null otherwise).
   const inputsHint = doc.totalIn === null
@@ -260,6 +270,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Inputs <span class="label-value">(${doc.tx.inputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${inputsHint}</p>
       ${inputs || `<div class="psbted-viz-box muted">No inputs.</div>`}
+      ${moreInputs ? `<p class="muted">…and ${moreInputs} more inputs (not rendered).</p>` : ""}
     </div>
     <div class="psbted-viz-mid">
       <div class="psbted-viz-arrow" aria-hidden="true"></div>
@@ -275,6 +286,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Outputs <span class="label-value">(${doc.tx.outputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${doc.totalOut === null ? "outputs total unknown — amounts overflow u64" : `${groupSats(doc.totalOut)} sats in total`} · editable in the boxes</p>
       ${outputs || `<div class="psbted-viz-box muted">No outputs.</div>`}
+      ${moreOutputs ? `<p class="muted">…and ${moreOutputs} more outputs (not rendered).</p>` : ""}
     </div>
   </div>
 </div>`;

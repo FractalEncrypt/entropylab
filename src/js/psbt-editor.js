@@ -20,7 +20,7 @@ import { copyText, showCopiedIcon } from "./clipboard.js";
 import { privateCopyButtonHtml } from "./private-data.js";
 import { publicValueHtml } from "./public-data.js";
 import { expandableHtml, EXPAND_LIMIT, initExpandable } from "./expandable.js";
-import { psbtOutputNotesHtml, psbtVizHtml } from "./psbt-viz.js";
+import { psbtOutputNotesHtml, psbtVizHtml, PSBT_RENDER_LIMIT } from "./psbt-viz.js";
 import { parseOpReturn } from "./opreturn.js";
 import { buildOutputScript } from "./script-builder.js";
 import { hodlUrEncodePsbt } from "./psbt-ur.js";
@@ -760,7 +760,12 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
     // The last remaining input carries no delete control: a zero-input
     // unsigned transaction cannot round-trip through BIP-174 serialization,
     // so rust-bitcoin would reject the rebuild.
+    // Rendering is capped at PSBT_RENDER_LIMIT entries per list (a crafted
+    // PSBT passes the load gates with more elements than the DOM survives);
+    // the document, totals, fee and every analysis still cover all elements,
+    // and each truncated list notes its elided count after the last row.
     const inputRows = tx.inputs
+      .slice(0, PSBT_RENDER_LIMIT)
       .map(
         (input, index) => `<tr role="row">
           <td role="cell">${cellLabel("Input")}${index}</td>
@@ -772,6 +777,7 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
       )
       .join("");
     const outputRows = tx.outputs
+      .slice(0, PSBT_RENDER_LIMIT)
       .map((output, index) => {
         const addr = addressFor(output.scriptPubKey, network());
         const opret = addr ? null : opReturnSummary(output.scriptPubKey, output.value);
@@ -785,6 +791,8 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
         </tr>`;
       })
       .join("");
+    const moreInputsNote = tx.inputs.length > PSBT_RENDER_LIMIT ? `<p class="muted">…and ${tx.inputs.length - PSBT_RENDER_LIMIT} more inputs (not rendered).</p>` : "";
+    const moreOutputsNote = tx.outputs.length > PSBT_RENDER_LIMIT ? `<p class="muted">…and ${tx.outputs.length - PSBT_RENDER_LIMIT} more outputs (not rendered).</p>` : "";
 
     // One map section per PSBT part; a diagram box jumps to its own section.
     const mapSection = (kind, index) => {
@@ -804,13 +812,15 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
         </div>
         <p class="label psbted-section-label">Inputs</p>
         <table class="psbted-pairs psbted-txins psbted-stack" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader" class="psbted-idx">#</th><th role="columnheader">${TXIN_COLUMNS.txid}</th><th role="columnheader" class="psbted-col-vout">${TXIN_COLUMNS.vout}</th><th role="columnheader" class="psbted-col-seq">${TXIN_COLUMNS.seq}</th><th role="columnheader" class="psbted-col-del"></th></tr></thead><tbody role="rowgroup">${inputRows}</tbody></table>
+        ${moreInputsNote}
         <div class="psbted-add-el"><button type="button" class="btn secondary" data-tx-add="input">Add Input</button></div>
         <p class="label psbted-section-label">Outputs</p>
         <table class="psbted-pairs psbted-txouts psbted-stack" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader" class="psbted-idx">#</th><th role="columnheader" class="psbted-col-val">${TXOUT_COLUMNS.value}</th><th role="columnheader">${TXOUT_COLUMNS.script}</th><th role="columnheader" class="psbted-col-del"></th></tr></thead><tbody role="rowgroup">${outputRows}</tbody></table>
+        ${moreOutputsNote}
         <div class="psbted-add-el"><button type="button" class="btn secondary" data-tx-add="output">Add Output</button></div>
       </section>`;
-    const inputSections = doc.inputs.map((_, index) => mapSection("input", index)).join("");
-    const outputSections = doc.outputs.map((_, index) => mapSection("output", index)).join("");
+    const inputSections = doc.inputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => mapSection("input", index)).join("");
+    const outputSections = doc.outputs.slice(0, PSBT_RENDER_LIMIT).map((_, index) => mapSection("output", index)).join("");
 
     out.innerHTML = `
       <p class="edge-note ${stale ? "is-private" : "is-muted"}" id="psbted-status" aria-live="polite">${stale ? "The fields do not build right now — see the error above; the result below is the last valid build." : "Every edit rebuilds the PSBT immediately; the fields show rust-bitcoin's decode of the current build."}</p>
@@ -823,7 +833,9 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
 
       <section class="psbted-map"><h3 class="psbted-section-label">Global key-value map</h3>${pairRows("global", doc.globals, 0)}</section>
       ${inputSections}
+      ${moreInputsNote}
       ${outputSections}
+      ${moreOutputsNote}
 
       ${psbtProblemsHtml(doc, insane)}
       ${psbtSanitizeHtml(doc)}
@@ -967,12 +979,12 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
     };
     const boxFor = (kind, index) => viz.querySelector(`[data-viz="${kind}:${index}"]`)?.closest(".psbted-viz-box");
     const txIn = edge(txRect, "left");
-    doc.tx.inputs.forEach((_, index) => {
+    doc.tx.inputs.slice(0, PSBT_RENDER_LIMIT).forEach((_, index) => {
       const rect = boxFor("input", index)?.getBoundingClientRect();
       if (rect) link(edge(rect, "right"), txIn, "psbted-viz-line-in");
     });
     const txOut = edge(txRect, "right");
-    doc.tx.outputs.forEach((_, index) => {
+    doc.tx.outputs.slice(0, PSBT_RENDER_LIMIT).forEach((_, index) => {
       const rect = boxFor("output", index)?.getBoundingClientRect();
       if (rect) link(txOut, edge(rect, "left"), "psbted-viz-line-out");
     });
