@@ -161,6 +161,12 @@ export class PassphraseVault {
 // the mask; otherwise the handlers stand aside and the field is ordinary.
 // Every change to the vault is announced as an `input` event on the field,
 // so the page's own listeners run as they did for typing.
+// The four composition input types of Input Events Level 2. Safari fires
+// deleteByComposition and insertFromComposition with isComposing false, so a
+// check on isComposing or on "insertCompositionText" alone misses them.
+const COMPOSITION_INPUT_TYPES = new Set(["insertCompositionText", "deleteCompositionText", "insertFromComposition", "deleteByComposition"]);
+const isCompositionInputType = (type) => COMPOSITION_INPUT_TYPES.has(type ?? "");
+
 export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   let pending = null, composing = null, echoing = false;
   const caret = () => [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
@@ -204,11 +210,11 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // A cancelable edit in the middle of a composition (the field holds raw
     // composing text, so its caret is not a vault index): drop the
     // composition first, then apply the edit to the restored selection.
-    if (composing && !event.isComposing && event.inputType !== "insertCompositionText" && event.cancelable) abandonComposition();
+    if (composing && !event.isComposing && !isCompositionInputType(event.inputType) && event.cancelable) abandonComposition();
     const [start, end] = caret();
     pending = { start, end };
     const type = event.inputType || "";
-    if (event.isComposing || type === "insertCompositionText" || !event.cancelable) return;
+    if (event.isComposing || isCompositionInputType(type) || !event.cancelable) return;
     event.preventDefault();
     let from = start, to = end, text = "";
     if (type.startsWith("insert")) {
@@ -289,7 +295,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // field before the page's listeners on its ancestors, so they see the mask.
   field.addEventListener("input", (event) => {
     if (!active() || echoing) return;
-    const compositionInput = Boolean(event?.isComposing) || /^(insert|delete)Composition/.test(event?.inputType ?? "");
+    const compositionInput = Boolean(event?.isComposing) || isCompositionInputType(event?.inputType);
     // Composition text is only ever taken at compositionend. After an outside
     // edit abandoned a composition the IME can keep composing: that text is
     // never stored (it would otherwise reach the "set by script" path below

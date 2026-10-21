@@ -533,6 +533,31 @@ test("a composition begun while inactive leaves no stale caret once the field is
   masked(field, vault);
 });
 
+// DeepSeek V4.1 red-team of 34fa546: Input Events Level 2 has four
+// composition input types; Safari fires deleteByComposition and
+// insertFromComposition with isComposing false. Only two were recognised, so
+// after an abandonment such an input fell through to the "set by script"
+// path and stored the field's mask bullets as the passphrase.
+for (const inputType of ["deleteByComposition", "insertFromComposition", "deleteCompositionText"]) {
+  test(`${inputType} after an abandonment never reaches the vault`, () => {
+    const { field, vault, api } = bound();
+    field.type("ab");
+    field.select(1);
+    field.dispatchEvent({ type: "compositionstart" });
+    field.value = "•と•";
+    field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+    api.insert("c");
+    assert.equal(vault.text(), "acb");
+    field.dispatchEvent({ type: "beforeinput", inputType, data: null, cancelable: true, isComposing: false });
+    assert.equal(vault.text(), "acb", "a composition-type beforeinput is not applied as an edit");
+    field.value = "•とう••";
+    field.dispatchEvent({ type: "input", inputType, isComposing: false });
+    assert.equal(vault.text(), "acb", "composition input is never stored");
+    assert.ok(!vault.text().includes(VAULT_MASK), "a mask bullet must never enter the vault");
+    masked(field, vault);
+  });
+}
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives
