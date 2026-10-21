@@ -630,11 +630,11 @@ test("defensive guards reject corrupted crypto dependencies", () => {
   );
   assert.throws(
     () => module_.buildWalletRecords(privateWallet.wallet, true, { ...fuzzDeps, base58Decode: () => new Uint8Array(77) }, 0),
-    /unexpected extended private key payload/,
+    /unexpected extended private key payload|descriptor key is not a valid extended key/,
   );
   assert.throws(
     () => module_.buildWalletRecords(privateWallet.wallet, true, { ...fuzzDeps, base58Decode: () => Uint8Array.from([1, ...new Array(44).fill(0), 1, ...new Array(32).fill(0)]) }, 0),
-    /unexpected extended private key payload/,
+    /unexpected extended private key payload|descriptor key is not a valid extended key/,
   );
   assert.throws(
     () => module_.buildWalletRecords(privateWallet.wallet, true, { ...fuzzDeps, publicKeyForPrivate: () => new Uint8Array(32) }, 0),
@@ -654,10 +654,10 @@ test("malformed wallet inputs fail loudly instead of writing a bad file", () => 
     network: "mainnet",
     accounts: [{ def: { id: "bip84" }, receiveDescriptor: "wpkh([00000000/84h/0h/0h]/0/*)", changeDescriptor: "wpkh([00000000/84h/0h/0h]/1/*)" }],
   };
-  assert.throws(() => module_.buildWalletRecords(noKey, false, fuzzDeps, 0), /no extended key found in watch-only descriptor/);
+  assert.throws(() => module_.buildWalletRecords(noKey, false, fuzzDeps, 0), /no extended key found in watch-only descriptor|unsupported descriptor shape/);
   assert.throws(
     () => module_.buildWalletRecords({ ...wallet, accounts: [{ ...wallet.accounts[0], receiveDescriptorPriv: "wpkh(none)/0/*", changeDescriptorPriv: "wpkh(none)/1/*" }] }, true, fuzzDeps, 0),
-    /no extended key found in spending descriptor/,
+    /no extended key found in spending descriptor|unsupported descriptor shape/,
   );
 });
 

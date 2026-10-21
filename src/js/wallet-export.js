@@ -347,6 +347,72 @@ var hodlWalletExport = (() => {
   // The BIP 388 builder rewrites only "/0/*" and "/1/*".
   const bip388Supported = (wallet) => tailsSupported(wallet, [0, 1]);
 
+  // Defense-in-depth: the descriptor shapes this writer can place in a
+  // wallet.dat are exactly one known script wrapper around extended keys it
+  // can read. The app only ever hands over descriptors it derived itself,
+  // but a bare extended key, a nested wrapper, or a multisig co-signer that
+  // does not parse must fail closed here instead of becoming a wallet.dat
+  // Bitcoin Core refuses to load — or one that watches a different policy
+  // than the app showed. Errors name wrappers only, never key material.
+  const KEY_ORIGIN_PATTERN = String.raw`(?:\[[0-9a-fA-F]{8}(?:/\d+[h'H]?)*\])?`;
+  const KEY_BODY_PATTERN = "([xyztuvYZUV](?:pub|prv)[1-9A-HJ-NP-Za-km-z]{90,})";
+  const KEY_PATH_PATTERN = String.raw`(?:/\d+[h'H]?)*(?:/\*)?`;
+  const KEY_EXPRESSION_PATTERN = KEY_ORIGIN_PATTERN + KEY_BODY_PATTERN + KEY_PATH_PATTERN;
+  const SINGLE_SIG_SHAPES = [
+    `^pkh\\(${KEY_EXPRESSION_PATTERN}\\)$`,
+    `^sh\\(wpkh\\(${KEY_EXPRESSION_PATTERN}\\)\\)$`,
+    `^wpkh\\(${KEY_EXPRESSION_PATTERN}\\)$`,
+    `^tr\\(${KEY_EXPRESSION_PATTERN}\\)$`,
+  ].map((source) => new RegExp(source));
+  const MULTISIG_SHAPES = [
+    String.raw`^sh\((?:sorted)?multi\(\d+,(.*)\)\)$`,
+    String.raw`^wsh\((?:sorted)?multi\(\d+,(.*)\)\)$`,
+    String.raw`^sh\(wsh\((?:sorted)?multi\(\d+,(.*)\)\)\)$`,
+    String.raw`^tr\([0-9a-fA-F]{64},(?:sorted)?multi_a\(\d+,(.*)\)\)$`,
+  ].map((source) => new RegExp(source));
+  const KEY_LIST_ITEM_PATTERN = new RegExp(`^${KEY_EXPRESSION_PATTERN}$`);
+  const UNSUPPORTED_DESCRIPTOR_SHAPE = "wallet.dat export: unsupported descriptor shape (supported: pkh(KEY), sh(wpkh(KEY)), wpkh(KEY), tr(KEY), sh/wsh/sh(wsh()) of multi/sortedmulti, tr(NUMS,sortedmulti_a))";
+  const INVALID_EXTENDED_KEY = "wallet.dat export: descriptor key is not a valid extended key";
+
+  // Throws unless the descriptor is exactly one of the supported shapes with
+  // a self-consistent checksum (when one is present) and Base58Check-valid
+  // extended keys; the path after each key is placed by descriptorKeyTail.
+  const assertDescriptorShape = (descriptor, label, deps) => {
+    const hash = descriptor.lastIndexOf("#");
+    const body = hash >= 0 ? descriptor.slice(0, hash) : descriptor;
+    if (hash >= 0 && deps.checksum(body) !== descriptor.slice(hash + 1)) {
+      throw new Error(`wallet.dat export: invalid descriptor checksum in ${label} descriptor`);
+    }
+    const keys = [];
+    let matched = SINGLE_SIG_SHAPES.some((shape) => {
+      const key = body.match(shape);
+      if (key) keys.push(key[1]);
+      return Boolean(key);
+    });
+    if (!matched) {
+      matched = MULTISIG_SHAPES.some((shape) => {
+        const list = body.match(shape);
+        if (!list) return false;
+        for (const item of list[1].split(",")) {
+          const key = item.match(KEY_LIST_ITEM_PATTERN);
+          if (!key) throw new Error(INVALID_EXTENDED_KEY);
+          keys.push(key[1]);
+        }
+        return true;
+      });
+    }
+    if (!matched) throw new Error(UNSUPPORTED_DESCRIPTOR_SHAPE);
+    for (const key of keys) {
+      let raw = null;
+      try {
+        raw = deps.base58Decode(key);
+      } catch {
+        raw = null;
+      }
+      if (!raw || raw.length !== 78) throw new Error(INVALID_EXTENDED_KEY);
+    }
+  };
+
   // Builds the exact key/value rows of the `main` table.
   // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate }
   const buildWalletRecords = (wallet, includePrivate, deps, creationTime) => {
@@ -354,6 +420,13 @@ var hodlWalletExport = (() => {
     if (!network) throw new Error(`wallet.dat export: unknown network ${wallet?.network}`);
     const units = walletDescriptorUnits(wallet, includePrivate);
     if (!units.length) throw new Error("wallet.dat export: no descriptors to export");
+
+    // Fail closed before any record is written: every descriptor, public and
+    // private, must be exactly one of the shapes this writer can place.
+    for (const unit of units) {
+      assertDescriptorShape(unit.descriptor, "watch-only", deps);
+      if (unit.privateDescriptor) assertDescriptorShape(unit.privateDescriptor, "spending", deps);
+    }
 
     const records = [];
     const push = (key, value) => records.push([key, value]);

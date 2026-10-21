@@ -1258,3 +1258,100 @@ test("bitcoind loads a generated msig Taproot watch-only wallet.dat", { skip: !B
     assert.equal(change, expectedChange);
   });
 });
+
+// --- Defense-in-depth: descriptor shapes the writer cannot place ----------
+//
+// The exporter only receives wallets the app derived itself, but it must not
+// trust that: a bare extended key, a nested script wrapper, or a multisig
+// co-signer that does not parse used to become a wallet.dat Bitcoin Core
+// refuses to load — or watches a different policy than the one shown. The
+// writer refuses every such shape before any record is written, and the
+// error names wrappers only, never key material.
+test("unplaceable descriptor shapes fail closed before any record is written", () => {
+  const { buildWalletRecords } = loadModule();
+  const xpub = msigNode(0).publicExtendedKey;
+  const xprv = msigNode(0).privateExtendedKey;
+  const withChecksum = (body) => `${body}#${descriptorChecksum(body)}`;
+  const hdWallet = (receiveDescriptor, receiveDescriptorPriv = null) => ({
+    kind: "hd",
+    network: "mainnet",
+    accounts: [{
+      def: { id: "bip84" },
+      receiveDescriptor,
+      changeDescriptor: null,
+      receiveDescriptorPriv,
+      changeDescriptorPriv: null,
+    }],
+  });
+  const msigWallet = (receiveDescriptor) => ({
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    m: 1,
+    n: 2,
+    receiveDescriptor,
+  });
+  const cases = [
+    ["bare extended key with no script wrapper", hdWallet(withChecksum(`${xpub}/0/*`)), false],
+    ["nested script wrapper", hdWallet(withChecksum(`wpkh(tr(${xpub}/0/*))`)), false],
+    ["multisig co-signer that does not parse", msigWallet(withChecksum(`wsh(sortedmulti(1,xprv1,${xpub}/0/*))`)), false],
+    ["invalid descriptor checksum", hdWallet(`wpkh(${xpub}/0/*)#deadbeef`), false],
+    ["nested script wrapper on the private descriptor", hdWallet(withChecksum(`wpkh(${xpub}/0/*)`), withChecksum(`wpkh(tr(${xprv}/0/*))`)), true],
+  ];
+  for (const [shape, wallet, includePrivate] of cases) {
+    let error = null;
+    try {
+      buildWalletRecords(wallet, includePrivate, deps, 0);
+    } catch (caught) {
+      error = caught;
+    }
+    assert.ok(error instanceof Error, `${shape}: must throw instead of building a wallet.dat`);
+    assert.match(error.message, /unsupported descriptor shape|invalid descriptor checksum|not a valid extended key/, `${shape}: the error names the refused shape`);
+    assert.ok(!error.message.includes(xpub) && !error.message.includes(xprv), `${shape}: the error must not contain key material`);
+    assert.doesNotMatch(error.message, /[1-9A-HJ-NP-Za-km-z]{50,}/, `${shape}: the error must not carry base58 key text`);
+  }
+});
+
+test("the shape guard leaves valid single-sig and multisig exports byte-identical", () => {
+  const { buildWalletRecords } = loadModule();
+  // Single-sig: still exactly the rows Bitcoin Core v28.3.0 wrote for the
+  // same descriptors — watch-only and private variants alike.
+  for (const [wallet, includePrivate, expected] of [
+    [WATCH_ONLY_WALLET, false, REF_WATCH_ONLY_RECORDS],
+    [PRIVATE_WALLET, true, REF_PRIVATE_RECORDS],
+  ]) {
+    const mine = moduleRecords(wallet, includePrivate, REF_CREATION_TIME);
+    const reference = asMap(expected);
+    assert.equal(mine.size, reference.size);
+    for (const [key, value] of reference) {
+      assert.ok(mine.has(key), `missing record ${key.slice(0, 60)}`);
+      assert.equal(mine.get(key), value, `record value mismatch at ${key.slice(0, 60)}`);
+    }
+  }
+  // Multisig: the pinned expectations are unchanged — two stored descriptors
+  // that keep every co-signer key, six cache parents matching the independent
+  // CKD of each co-signer's branch key, and no private-key records.
+  const records = buildWalletRecords(MSIG_WALLET, false, msigDeps, 0);
+  const names = records.map(([key]) => new TextDecoder().decode(key.slice(1, 1 + key[0])));
+  assert.equal(names.filter((name) => name === "walletdescriptor").length, 2);
+  assert.equal(names.filter((name) => name === "walletdescriptorcache").length, 6);
+  assert.equal(names.filter((name) => name === "walletdescriptorkey").length, 0);
+  const storedValues = records
+    .filter(([key]) => key[0] === 16 && new TextDecoder().decode(key.slice(1, 17)) === "walletdescriptor")
+    .map(([, value]) => Buffer.from(value).toString("latin1"));
+  assert.equal(storedValues.length, 2);
+  for (const value of storedValues) {
+    for (const account of [0, 1, 2]) {
+      assert.ok(value.includes(msigNode(account).publicExtendedKey), "the stored descriptor keeps every co-signer key");
+    }
+  }
+  const cachePrefix = "15" + "77616c6c657464657363726970746f726361636865";
+  const caches = records.map(([key, value]) => [bytesToHex(key), bytesToHex(value)]).filter(([key]) => key.startsWith(cachePrefix));
+  const expectedCaches = [];
+  for (const branch of [0, 1]) {
+    for (const account of [0, 1, 2]) {
+      expectedCaches.push("4a" + bytesToHex(deriveBranchBody(msigNode(account).publicExtendedKey, branch)));
+    }
+  }
+  assert.deepEqual(caches.map(([, value]) => value).sort(), [...expectedCaches].sort());
+});
