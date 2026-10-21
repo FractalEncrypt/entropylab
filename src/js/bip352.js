@@ -320,6 +320,59 @@ export function extractInputPubKey(vin) {
   return null;
 }
 
+// A vin carries spend data when its scriptSig holds bytes or its witness
+// holds items; a sender pastes its inputs before signing, so both are empty.
+// The shapes are the ones extractInputPubKey accepts (raw bytes or hex
+// string, witness array or serialized hex).
+export const vinHasSpendData = (vin) => {
+  const scriptSig = vin.scriptSig instanceof Uint8Array ? vin.scriptSig : hexToBytes(vin.scriptSig || "");
+  const witness = Array.isArray(vin.witness) ? vin.witness : parseWitnessHex(vin.txinwitness || "");
+  return scriptSig.length > 0 || witness.length > 0;
+};
+
+// The eligible key of an input that has no spend data, resolved from its
+// private key: a sender has no signatures at output-building time, so the
+// key cannot be read out of a scriptSig or witness the way
+// extractInputPubKey does. The scalar must produce the prevout script — the
+// same key the later signed spend will reveal — or the input is refused;
+// any other prevout type stays ineligible (null), as with spend data.
+const unsignedInputKey = (vin, index) => {
+  const prevout = vinPrevoutScript(vin);
+  const scalar = scalarFromBytes(typeof vin.private_key === "string" ? hexToBytes(vin.private_key) : vin.private_key);
+  const pub = publicKeyForScalar(scalar);
+  const mismatch = new Error(`Input ${index} private key does not match its eligible input public key.`);
+  // A key hash that matches the scalar's uncompressed key is consistent but
+  // ineligible under BIP-352, exactly as its signed form is skipped.
+  const keyHashInput = (keyhash) => {
+    if (equalBytes(hash160(pub), keyhash)) return { point: Point.fromBytes(pub), isTaproot: false };
+    if (equalBytes(hash160(Point.fromBytes(pub).toBytes(false)), keyhash)) return null;
+    throw mismatch;
+  };
+  if (isP2pkh(prevout)) return keyHashInput(prevout.slice(3, 23));
+  if (isP2wpkh(prevout)) return keyHashInput(prevout.slice(2, 22));
+  if (isP2sh(prevout)) {
+    // The scalar's P2SH-P2WPKH script: a914 || hash160(0014 || hash160(pub)) || 87.
+    const redeem = new Uint8Array(22);
+    redeem[1] = 0x14;
+    redeem.set(hash160(pub), 2);
+    const script = new Uint8Array(23);
+    script[0] = 0xa9;
+    script[1] = 0x14;
+    script.set(hash160(redeem), 2);
+    script[22] = 0x87;
+    if (!equalBytes(script, prevout)) throw mismatch;
+    return { point: Point.fromBytes(pub), isTaproot: false };
+  }
+  if (isP2tr(prevout)) {
+    // The private key of a taproot input is already the BIP-341-tweaked key
+    // of the output key, so the eligible point is the prevout program
+    // itself, exactly as extractInputPubKey returns for a key-path spend.
+    if (!equalBytes(pointToXOnly(Point.fromBytes(pub)), prevout.slice(2, 34))) throw mismatch;
+    return { point: pointFromXOnly(prevout.slice(2, 34)), isTaproot: true };
+  }
+  return null;
+};
+
 export function inputHash(outpoints, sumPoint) {
   if (!outpoints.length) throw new Error("Silent payment input hash needs at least one outpoint.");
   const serialized = outpoints.map((outpoint) => serializeOutpoint(outpoint.txid, outpoint.vout));
@@ -492,6 +545,9 @@ const normalizeVin = (vin) => ({
   vout: vin.vout,
   scriptSig: vin.scriptSig || "",
   txinwitness: vin.txinwitness || "",
+  // The witness-array form extractInputPubKey accepts; anything else is
+  // left out, as before, and txinwitness is used.
+  witness: Array.isArray(vin.witness) && vin.witness.every((item) => item instanceof Uint8Array) ? vin.witness : undefined,
   prevout: vinPrevoutScript(vin),
   private_key: vin.private_key,
 });
@@ -520,7 +576,12 @@ export function eligibleInputKeys(vins) {
   const privkeys = [];
   for (const [index, raw] of vins.entries()) {
     const vin = normalizeVin(raw);
-    const extracted = extractInputPubKey(vin);
+    // A sender has no signatures yet: an input that carries its private key
+    // but has no spend data is resolved from that key and its prevout script
+    // type instead of the scriptSig or witness it does not have.
+    const extracted = vin.private_key && !vinHasSpendData(vin)
+      ? unsignedInputKey(vin, index)
+      : extractInputPubKey(vin);
     if (!extracted) continue;
     pubkeys.push(extracted);
     if (vin.private_key) {
