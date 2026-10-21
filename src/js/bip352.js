@@ -250,7 +250,8 @@ const isWitnessProgram = (script) => script.length >= 4 && script.length <= 42
 export function extractInputPubKey(vin) {
   const prevout = vinPrevoutScript(vin);
   const scriptSig = vin.scriptSig instanceof Uint8Array ? vin.scriptSig : hexToBytes(vin.scriptSig || "");
-  const witness = Array.isArray(vin.witness) ? vin.witness : parseWitnessHex(vin.txinwitness || "");
+  // A non-empty witness array wins; an empty one does not hide txinwitness.
+  const witness = Array.isArray(vin.witness) && vin.witness.length ? vin.witness : parseWitnessHex(vin.txinwitness || "");
   if (isP2pkh(prevout)) {
     const spkHash = prevout.slice(3, 23);
     for (let i = scriptSig.length; i >= 33; i--) {
@@ -556,7 +557,9 @@ const normalizeVin = (vin) => ({
   txinwitness: vin.txinwitness || "",
   // The witness-array form extractInputPubKey accepts; anything else is
   // left out, as before, and txinwitness is used.
-  witness: Array.isArray(vin.witness) && vin.witness.length && vin.witness.every((item) => item instanceof Uint8Array) ? vin.witness : undefined,
+  // Witness items may be bytes or hex strings (JSON); any other item throws
+  // in hexToBytes, so a witness that cannot be read is never ignored.
+  witness: Array.isArray(vin.witness) && vin.witness.length ? vin.witness.map((item) => (item instanceof Uint8Array ? item : hexToBytes(item))) : undefined,
   prevout: vinPrevoutScript(vin),
   private_key: vin.private_key,
 });

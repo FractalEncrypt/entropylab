@@ -519,3 +519,16 @@ test("unsigned P2SH: an uncompressed-key P2SH-P2WPKH match is skipped, other P2S
   const keyhashVin = { txid: "88".repeat(32), vout: 1, scriptSig: "", witness: [], txinwitness: "02" + "47" + "00".repeat(71) + "21" + "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873", prevout: "001479091972186c449eb1ded22b78e40d009bdf0089" };
   assert.equal(vinHasSpendData(keyhashVin), true);
 });
+
+test("a witness array of hex strings is read, and an empty array does not hide txinwitness", () => {
+  const key = "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873";
+  const prevout = "001479091972186c449eb1ded22b78e40d009bdf0089";
+  const sig = "00".repeat(71);
+  // Hex-string items are spend data and are checked, not dropped.
+  assert.equal(eligibleInputKeys([{ txid: "99".repeat(32), vout: 0, scriptSig: "", witness: [sig, key], prevout }]).pubkeys.length, 1);
+  assert.throws(() => eligibleInputKeys([{ txid: "99".repeat(32), vout: 0, scriptSig: "", witness: [sig, "02" + key.slice(2)], prevout, private_key: "00".repeat(31) + "01" }]), /witness key does not hash/);
+  // An empty witness array next to hex witness data uses the hex data.
+  const vin = { txid: "99".repeat(32), vout: 1, scriptSig: "", witness: [], txinwitness: "02" + "47" + sig + "21" + key, prevout };
+  assert.equal(bytesToHex(extractInputPubKey(vin).point.toBytes(true)), key);
+  assert.equal(eligibleInputKeys([vin]).pubkeys.length, 1);
+});
