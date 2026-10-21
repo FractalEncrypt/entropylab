@@ -24,6 +24,7 @@ import {
   scanSilentPaymentOutputs,
   taprootOutputPrivateKey,
   spendPrivForOutput,
+  vinHasSpendData,
   vinPrevoutScript,
   bytesToHex,
 } from "../src/js/bip352.js";
@@ -61,13 +62,13 @@ const makeResolver = (tweak = taprootOutputPrivateKey) => new Function(
   "indexHdKey", "matchOwnership", "extractInputPubKey", "vinPrevoutScript",
   "isP2pkh", "isP2sh", "isP2tr", "isP2wpkh",
   "p2pkhScript", "p2shP2wpkhScript", "p2trKeyScript", "p2wpkhScript",
-  "taprootOutputPrivateKey",
+  "taprootOutputPrivateKey", "vinHasSpendData",
   `${loadSlice("hodlFingerprintHex")}; ${loadSlice("hodlSpWipeVinKeys")}; ${loadSlice("hodlSpDeriveVinKeys")}; return hodlSpDeriveVinKeys;`,
 )(
   indexHdKey, matchOwnership, extractInputPubKey, vinPrevoutScript,
   isP2pkh, isP2sh, isP2tr, isP2wpkh,
   p2pkhScript, p2shP2wpkhScript, p2trKeyScript, p2wpkhScript,
-  tweak,
+  tweak, vinHasSpendData,
 );
 const hodlSpDeriveVinKeys = makeResolver();
 const hodlSpWipeVinKeys = new Function(`${loadSlice("hodlSpWipeVinKeys")}; return hodlSpWipeVinKeys;`)();
@@ -420,4 +421,40 @@ test("SP paste parsers refuse oversized input before the expensive step", async 
     /at most/i,
     "the output count is capped",
   );
+});
+
+test("an unsigned session-owned input resolves and sends like its signed form", () => {
+  // A sender has no signatures yet: the session-owned P2TR input with an
+  // empty scriptSig and witness resolves by ownership and the lie check, and
+  // produces the same outputs as the signed shape already tested.
+  setup();
+  const [unsigned] = hodlSpDeriveVinKeys([vinOf(OWNED_SCRIPT, { txinwitness: "" })]);
+  const [signed] = hodlSpDeriveVinKeys([vinOf(OWNED_SCRIPT)]);
+  try {
+    assert.ok(unsigned.private_key instanceof Uint8Array);
+    assert.deepEqual(unsigned.private_key, signed.private_key);
+    const keys = deriveSilentPaymentKeys(SEED, { coinType: 1, account: 0 });
+    const recipient = encodeSilentPaymentAddress(keys.scanPoint, keys.spendPoint, "tsp");
+    const byUnsigned = createSilentPaymentOutputs([unsigned], [{ address: recipient, count: 1 }], { hrp: "tsp" });
+    const bySigned = createSilentPaymentOutputs([signed], [{ address: recipient, count: 1 }], { hrp: "tsp" });
+    assert.equal(byUnsigned.outputs.length, 1);
+    assert.deepEqual(byUnsigned.outputs, bySigned.outputs);
+  } finally {
+    hodlSpWipeVinKeys([unsigned, signed]);
+  }
+});
+
+test("an unsigned input outside the session is refused", () => {
+  setup();
+  const foreign = HDKey.fromMasterSeed(new Uint8Array(64).fill(9)).derive("m/86'/1'/0'/0/0");
+  const foreignScript = bytesToHex(p2trKeyScript(foreign.publicKey.slice(1)));
+  assert.throws(() => hodlSpDeriveVinKeys([vinOf(foreignScript, { txinwitness: "" })]), /not found under this session/);
+});
+
+test("an unsigned P2WSH input is passed through without a key", () => {
+  setup();
+  const p2wsh = vinOf("0020" + "ab".repeat(32), { txinwitness: "" });
+  const [passed] = hodlSpDeriveVinKeys([p2wsh]);
+  assert.equal(passed, p2wsh);
+  assert.equal(passed.private_key, undefined);
 });

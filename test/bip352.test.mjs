@@ -23,6 +23,7 @@ import {
   p2trAddressFromXonly,
   scanSilentPaymentOutputs,
   spendPrivForOutput,
+  taprootOutputPrivateKey,
   taggedHash,
   inputHash,
   parseWitnessHex,
@@ -31,6 +32,7 @@ import {
   Point,
   hexToBytes,
   bytesToHex,
+  vinHasSpendData,
 } from "../src/js/bip352.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -420,4 +422,113 @@ test("a large legacy P2SH redeem pushed with OP_PUSHDATA1/2/4 is read little-end
   // A 37-byte redeem pushed with OP_PUSHDATA1 is read the same way.
   const small = hexToBytes("5121" + key + "51ae");
   assert.equal(extractInputPubKey({ txid: "66".repeat(32), vout: 1, scriptSig: "00" + sig + "4c25" + bytesToHex(small), txinwitness: "", prevout: "a914" + bytesToHex(hash160(small)) + "87" }), null);
+});
+
+test("an unsigned input carrying its private key sends exactly like its signed form", () => {
+  // A sender builds the outputs before signing, so its inputs have no
+  // scriptSig or witness: eligibility and the key come from the prevout
+  // script type and the scalar, and must agree with the later signed spend.
+  const scalar = hexToBytes("11".repeat(32));
+  const pub = secp256k1.getPublicKey(scalar, true);
+  const keyHash = bytesToHex(hash160(pub));
+  const tweaked = taprootOutputPrivateKey(scalar);
+  const recipient = vectors[0].receiving[0].expected.addresses[0];
+  const sigPush = "47" + "30" + "44" + "00".repeat(69);
+  const keyPush = "21" + bytesToHex(pub);
+  const sigWitness = "02" + "47" + "00".repeat(71) + keyPush;
+  const cases = [
+    ["P2PKH", "76a914" + keyHash + "88ac", sigPush + keyPush, "", scalar],
+    ["P2WPKH", "0014" + keyHash, "", sigWitness, scalar],
+    ["P2SH-P2WPKH", "a914" + bytesToHex(hash160(hexToBytes("0014" + keyHash))) + "87", "16" + "0014" + keyHash, sigWitness, scalar],
+    ["P2TR", "5120" + bytesToHex(secp256k1.getPublicKey(tweaked, true).slice(1)), "", "01" + "40" + "5a".repeat(64), tweaked],
+  ];
+  for (const [name, prevout, scriptSig, txinwitness, key] of cases) {
+    const base = { txid: "66".repeat(32), vout: 0, prevout };
+    const recipients = [{ address: recipient, count: 1 }];
+    const unsigned = createSilentPaymentOutputs([{ ...base, scriptSig: "", txinwitness: "", private_key: key }], recipients, { hrp: "sp" });
+    const signed = createSilentPaymentOutputs([{ ...base, scriptSig, txinwitness, private_key: key }], recipients, { hrp: "sp" });
+    assert.equal(unsigned.outputs.length, 1, name);
+    assert.deepEqual(unsigned, signed, name);
+  }
+});
+
+test("an unsigned input whose private key does not produce its prevout is refused", () => {
+  const scalar = hexToBytes("11".repeat(32));
+  const wrong = hexToBytes("22".repeat(32));
+  const pub = secp256k1.getPublicKey(scalar, true);
+  const keyHash = bytesToHex(hash160(pub));
+  const tweaked = taprootOutputPrivateKey(scalar);
+  const recipient = vectors[0].receiving[0].expected.addresses[0];
+  const prevouts = [
+    "76a914" + keyHash + "88ac",
+    "0014" + keyHash,
+    "a914" + bytesToHex(hash160(hexToBytes("0014" + keyHash))) + "87",
+    "5120" + bytesToHex(secp256k1.getPublicKey(tweaked, true).slice(1)),
+  ];
+  for (const prevout of prevouts) {
+    const vin = { txid: "77".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout, private_key: wrong };
+    assert.throws(() => createSilentPaymentOutputs([vin], [{ address: recipient, count: 1 }], { hrp: "sp" }), /does not match its eligible input public key/);
+  }
+});
+
+test("an unsigned P2WSH input is skipped, and an unsigned input without its key is still refused", () => {
+  const scalar = hexToBytes("11".repeat(32));
+  const pub = secp256k1.getPublicKey(scalar, true);
+  const recipient = vectors[0].receiving[0].expected.addresses[0];
+  // P2WSH is not an eligible type: even carrying a key, the input is skipped.
+  const p2wsh = { txid: "88".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout: "0020" + "ab".repeat(32), private_key: scalar };
+  const skipped = createSilentPaymentOutputs([p2wsh], [{ address: recipient, count: 1 }], { hrp: "sp" });
+  assert.deepEqual(skipped.outputs, []);
+  assert.deepEqual(skipped.inputPubKeys, []);
+  // Without a private key an unsigned P2WPKH input keeps the #1018 refusal:
+  // there is no witness key to check against the prevout's key hash.
+  const p2wpkh = { txid: "99".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout: "0014" + bytesToHex(hash160(pub)) };
+  assert.throws(() => eligibleInputKeys([p2wpkh]), /witness key does not hash/);
+  assert.throws(() => createSilentPaymentOutputs([p2wpkh], [{ address: recipient, count: 1 }], { hrp: "sp" }), /witness key does not hash/);
+});
+
+test("unsigned uncompressed-key inputs stay ineligible, and a witness array counts as spend data", () => {
+  const scalar = hexToBytes("0000000000000000000000000000000000000000000000000000000000000001");
+  const uncompressed = hexToBytes("0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8");
+  const compressed = hexToBytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+  const unsigned = (prevout) => ({ txid: "77".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout, private_key: bytesToHex(scalar) });
+  // Paying the uncompressed key: consistent, ineligible (skipped), like the signed form.
+  assert.deepEqual(eligibleInputKeys([unsigned("76a914" + bytesToHex(hash160(uncompressed)) + "88ac")]).pubkeys, []);
+  assert.deepEqual(eligibleInputKeys([unsigned("0014" + bytesToHex(hash160(uncompressed)))]).pubkeys, []);
+  // A key hash of neither form is still refused.
+  assert.throws(() => eligibleInputKeys([unsigned("76a914" + "00".repeat(20) + "88ac")]), /does not match its eligible input public key/);
+  // A vin given in the witness-array form is spend data: a mismatched
+  // witness key is refused rather than replaced by the private key's.
+  const p2wpkh = { ...unsigned("0014" + bytesToHex(hash160(compressed))), witness: [hexToBytes("47" + "00".repeat(71)), hexToBytes("03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873")] };
+  assert.throws(() => eligibleInputKeys([p2wpkh]), /witness key does not hash/);
+  assert.equal(eligibleInputKeys([{ ...p2wpkh, witness: [hexToBytes("47" + "00".repeat(71)), compressed] }]).pubkeys.length, 1);
+});
+
+test("unsigned P2SH: an uncompressed-key P2SH-P2WPKH match is skipped, other P2SH is refused until its scriptSig is pasted", () => {
+  const scalar = "0000000000000000000000000000000000000000000000000000000000000001";
+  const uncompressed = hexToBytes("0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8");
+  const wrapped = (key) => { const redeem = hexToBytes("0014" + bytesToHex(hash160(key))); return "a914" + bytesToHex(hash160(redeem)) + "87"; };
+  const unsigned = (prevout, extra = {}) => ({ txid: "88".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout, private_key: scalar, ...extra });
+  assert.deepEqual(eligibleInputKeys([unsigned(wrapped(uncompressed))]).pubkeys, []);
+  // P2SH-P2WSH: refused while unsigned; with its redeem push pasted it is skipped.
+  const p2wshRedeem = hexToBytes("0020a16b5755f7f6f96dbd65f5f0d6ab9418b89af4b1f14a1bb8a09062c35f0dcb54");
+  const p2wshPrevout = "a914" + bytesToHex(hash160(p2wshRedeem)) + "87";
+  assert.throws(() => eligibleInputKeys([unsigned(p2wshPrevout)]), /does not match its eligible input public key/);
+  assert.deepEqual(eligibleInputKeys([unsigned(p2wshPrevout, { scriptSig: "22" + bytesToHex(p2wshRedeem) })]).pubkeys, []);
+  // An empty witness array next to hex witness data is spend data, not unsigned.
+  const keyhashVin = { txid: "88".repeat(32), vout: 1, scriptSig: "", witness: [], txinwitness: "02" + "47" + "00".repeat(71) + "21" + "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873", prevout: "001479091972186c449eb1ded22b78e40d009bdf0089" };
+  assert.equal(vinHasSpendData(keyhashVin), true);
+});
+
+test("a witness array of hex strings is read, and an empty array does not hide txinwitness", () => {
+  const key = "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873";
+  const prevout = "001479091972186c449eb1ded22b78e40d009bdf0089";
+  const sig = "00".repeat(71);
+  // Hex-string items are spend data and are checked, not dropped.
+  assert.equal(eligibleInputKeys([{ txid: "99".repeat(32), vout: 0, scriptSig: "", witness: [sig, key], prevout }]).pubkeys.length, 1);
+  assert.throws(() => eligibleInputKeys([{ txid: "99".repeat(32), vout: 0, scriptSig: "", witness: [sig, "02" + key.slice(2)], prevout, private_key: "00".repeat(31) + "01" }]), /witness key does not hash/);
+  // An empty witness array next to hex witness data uses the hex data.
+  const vin = { txid: "99".repeat(32), vout: 1, scriptSig: "", witness: [], txinwitness: "02" + "47" + sig + "21" + key, prevout };
+  assert.equal(bytesToHex(extractInputPubKey(vin).point.toBytes(true)), key);
+  assert.equal(eligibleInputKeys([vin]).pubkeys.length, 1);
 });

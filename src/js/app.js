@@ -21,6 +21,7 @@ import {
   scanSilentPaymentOutputs,
   spendPrivForOutput,
   taprootOutputPrivateKey,
+  vinHasSpendData,
   vinPrevoutScript,
   bytesToHex as hodlSpBytesToHex,
 } from "./bip352.js";
@@ -12056,8 +12057,16 @@ function hodlSpDeriveVinKeys(vins) {
       }
       // Only inputs of the eligible script types take part; anything else is
       // skipped by the sender and needs no key.
-      const extracted = extractInputPubKey(vin);
-      if (!extracted) return vin;
+      if (vinHasSpendData(vin)) {
+        const extracted = extractInputPubKey(vin);
+        if (!extracted) return vin;
+      } else {
+        // A sender has no signatures yet: an input with no spend data (empty
+        // scriptSig and witness) is eligible on its prevout script type
+        // alone, and the lie check below verifies the derived key against it.
+        const prevoutScript = vinPrevoutScript(vin);
+        if (!isP2pkh(prevoutScript) && !isP2wpkh(prevoutScript) && !isP2sh(prevoutScript) && !isP2tr(prevoutScript)) return vin;
+      }
       if (vin.fingerprint !== undefined && String(vin.fingerprint).toLowerCase().replace(/^0x/, "") !== fingerprint) {
         throw new Error(`Input ${i}: origin fingerprint ${vin.fingerprint} is not this session's ${fingerprint}.`);
       }
