@@ -465,6 +465,26 @@ test("an on-screen key during a composition over a selection replaces that selec
   masked(field, vault);
 });
 
+test("an IME that keeps composing after an outside edit abandoned its composition never reaches the vault", () => {
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.value = "•と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  api.insert("c");
+  assert.equal(vault.text(), "acb");
+  // The IME goes on composing in the now-masked field, then ends.
+  field.value = "•とう••";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  assert.equal(vault.text(), "acb", "composing text after the abandonment is never stored");
+  masked(field, vault);
+  field.value = "•とう••";
+  field.dispatchEvent({ type: "compositionend", data: "とう" });
+  assert.equal(vault.text(), "acb");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives

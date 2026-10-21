@@ -241,7 +241,13 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     composing = { start, end, before: vault.length, value: field.value };
   });
   field.addEventListener("compositionend", (event) => {
-    if (!active() || !composing) return;
+    if (!active()) return;
+    // A composition already abandoned (an outside edit ended it) commits
+    // nothing; the field only has to show the mask again.
+    if (!composing) {
+      if (field.value !== vault.mask()) render(Math.min(field.selectionStart ?? vault.length, vault.length));
+      return;
+    }
     const { start, end, before, value: prior } = composing;
     composing = null;
     pending = null;
@@ -282,8 +288,17 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // field before the page's listeners on its ancestors, so they see the mask.
   field.addEventListener("input", (event) => {
     if (!active() || echoing) return;
+    const compositionInput = Boolean(event?.isComposing) || /^(insert|delete)Composition/.test(event?.inputType ?? "");
+    // Composition text is only ever taken at compositionend. After an outside
+    // edit abandoned a composition the IME can keep composing: that text is
+    // never stored (it would otherwise reach the "set by script" path below
+    // with mask bullets in it); the field is kept masked instead.
+    if (compositionInput && !composing) {
+      render(Math.min(field.selectionStart ?? vault.length, vault.length));
+      return;
+    }
     if (composing) {
-      if (event?.isComposing || /^(insert|delete)Composition/.test(event?.inputType ?? "")) return;
+      if (compositionInput) return;
       // Any other edit in the middle of a composition (an autofill, a
       // password manager) cannot be placed: the field mixes mask bullets and
       // raw composing text. Abandon both and show the vault as it is, a
