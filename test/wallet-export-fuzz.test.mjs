@@ -557,14 +557,14 @@ const corpus = runCases("WALLET_EXPORT_FUZZ", { defaultSeed: FUZZ_SEED, defaultI
     }
   }
   return { wallet: { kind: "hd", network, accounts }, includePrivate, creationTime: pick(CREATION_TIMES), label };
+}, ({ wallet, includePrivate, creationTime, label }) => {
+  verifyWalletRecords(label, wallet, includePrivate, creationTime);
 });
 
 // --- tests --------------------------------------------------------------------
 
 test(CORPUS_TEST_NAME, () => {
-  for (const { wallet, includePrivate, creationTime, label } of corpus) {
-    verifyWalletRecords(label, wallet, includePrivate, creationTime);
-  }
+  assert.equal(corpus.length, WALLET_EXPORT_ENV.only === null ? WALLET_EXPORT_ENV.iterations : 1, "every corpus wallet was generated and verified");
 });
 
 test("every fuzzed wallet.dat is a well-formed SQLite database for its network", () => {

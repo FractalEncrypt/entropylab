@@ -1,5 +1,9 @@
+import assert from "node:assert/strict";
+
 // Shared fuzz harness: deterministic PRNG, env-driven seed/iteration/only
 // selection, replayable failures, and a ddmin-style shrinker.
+const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export const mulberry32 = (seed) => {
   let a = seed >>> 0;
   return () => {
@@ -37,11 +41,61 @@ const replayCommand = (prefix, seed, iterations, defaultIterations, i, testName)
   const env = [`${prefix}_SEED=${seed}`];
   if (iterations !== defaultIterations) env.push(`${prefix}_ITERATIONS=${iterations}`);
   env.push(`${prefix}_ONLY=${i}`);
-  const pattern = testName ? ` --test-name-pattern ${shellQuote(testName)}` : "";
+  // --test-name-pattern is a regular expression: escape the name so a test
+  // called "rust-bitcoin (WASM) and …" matches itself, anchored to the whole name.
+  const pattern = testName ? ` --test-name-pattern ${shellQuote(`^${escapeRegExp(testName)}$`)}` : "";
   return `${env.join(" ")} node --test${pattern} ${shellQuote(file)}`;
 };
 
-export const runCases = (prefix, opts, caseAt) => {
+// JSON with BigInt and cycles made safe: reporting a failing case must never
+// throw and mask the original assertion.
+export const safeStringify = (value) => {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (key, val) => {
+    if (typeof val === "bigint") return `${val}n`;
+    if (val && typeof val === "object") {
+      if (seen.has(val)) return "[Circular]";
+      seen.add(val);
+    }
+    return val;
+  });
+};
+
+const reportFailure = (error, prefix, seed, iterations, opts, i, caseObj, check) => {
+  if (!error || typeof error !== "object" || typeof error.message !== "string") return;
+  try {
+    if (caseObj !== undefined) {
+      const originalText = safeStringify(caseObj);
+      let shrunkText = null;
+      if (typeof check === "function") {
+        try {
+          const shrunk = shrink(caseObj, (candidate) => {
+            try {
+              check(candidate);
+              return false;
+            } catch (error) {
+              return error instanceof assert.AssertionError;
+            }
+          });
+          const text = safeStringify(shrunk);
+          if (text !== originalText) shrunkText = text;
+        } catch {
+          // shrinking is best-effort; never mask the original failure
+        }
+      }
+      error.message += `\nOriginal case: ${originalText}${shrunkText !== null ? `\nShrunk case: ${shrunkText}` : ""}`;
+    }
+  } catch {
+    // reporting is best-effort; never mask the original failure
+  }
+  try {
+    error.message += `\nReplay: ${replayCommand(prefix, seed, iterations, opts.defaultIterations, i, opts.testName)}`;
+  } catch {
+    // ignore
+  }
+};
+
+export const runCases = (prefix, opts, caseAt, check) => {
   const { seed, iterations, only } = fuzzEnv(prefix, opts);
   if (only !== null && only >= iterations) {
     throw new Error(`${prefix}_ONLY=${only} is out of range for ${iterations} iterations`);
@@ -50,31 +104,22 @@ export const runCases = (prefix, opts, caseAt) => {
   const results = [];
   const last = only === null ? iterations - 1 : only;
   for (let i = 0; i <= last; i++) {
+    let caseObj;
     try {
-      const result = caseAt(i, rand);
-      if (only === null || i === only) results.push(result);
+      caseObj = caseAt(i, rand);
     } catch (error) {
-      if (error && typeof error === "object" && typeof error.message === "string") {
-        let shrunk = null;
-        if (error.case !== undefined && typeof error.check === "function") {
-          try {
-            shrunk = shrink(error.case, (candidate) => {
-              try {
-                return error.check(candidate);
-              } catch {
-                return true;
-              }
-            });
-          } catch {
-            // shrinking is best-effort; never mask the original failure
-          }
-        }
-        const original = error.case !== undefined ? `\nOriginal case: ${JSON.stringify(error.case)}` : "";
-        const reduced = shrunk !== null ? `\nShrunk case: ${JSON.stringify(shrunk)}` : "";
-        error.message += `${original}${reduced}\nReplay: ${replayCommand(prefix, seed, iterations, opts.defaultIterations, i, opts.testName)}`;
-      }
+      reportFailure(error, prefix, seed, iterations, opts, i, undefined, null);
       throw error;
     }
+    if (typeof check === "function") {
+      try {
+        check(caseObj);
+      } catch (error) {
+        reportFailure(error, prefix, seed, iterations, opts, i, caseObj, check);
+        throw error;
+      }
+    }
+    if (only === null || i === only) results.push(caseObj);
   }
   return results;
 };

@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzEnv, mulberry32, runCases, shrink } from "./fuzz-kit.mjs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fuzzEnv, mulberry32, runCases, safeStringify, shrink } from "./fuzz-kit.mjs";
 
 const withEnv = (prefix, vars, fn) => {
   const saved = {};
@@ -67,7 +71,11 @@ test("_ONLY=n replays exactly case n and the printed replay command reproduces t
     assert.ok(replayLine.includes(`${prefix}_SEED=999`), "the replay command must pin the seed");
     assert.ok(replayLine.includes(`${prefix}_ITERATIONS=10`), "the replay command must pin the non-default iteration count");
     assert.ok(replayLine.includes(`${prefix}_ONLY=${n}`), "the replay command must pin the failing case");
-    assert.ok(replayLine.includes(`--test-name-pattern '${testName}'`), "the replay command must name the failing test");
+    // The pattern is a regular expression: the name is escaped and anchored, so
+    // a name with "(", "." or "+" still selects exactly this test.
+    const escapedName = testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.ok(replayLine.includes(`--test-name-pattern '^${escapedName}$'`), "the replay command must name the failing test");
+    assert.ok(new RegExp(`^${escapedName}$`).test(testName), "the printed pattern must match the test's own name");
 
     // Parse the env assignments from the replay command and run them.
     const envPart = replayLine.slice("Replay: ".length).split(" node --test")[0];
@@ -106,17 +114,6 @@ test("runCases shrinks a failing case and keeps the original in the message", ()
   const prefix = "FUZZ_KIT_SHRINK_RUN";
   const testName = "shrink run test";
   const originalCase = { a: [1, 2, 3, 4], b: "hello world", c: 42 };
-  const caseAt = () => {
-    const error = new Error("synthetic shrink failure");
-    error.case = originalCase;
-    error.check = (candidate) => {
-      if (Array.isArray(candidate.a) && candidate.a.includes(3) && typeof candidate.b === "string" && candidate.b.includes("hello") && candidate.c === 42) {
-        throw new Error("still fails");
-      }
-      return false;
-    };
-    throw error;
-  };
   withEnv(prefix, {
     [`${prefix}_SEED`]: "1",
     [`${prefix}_ITERATIONS`]: "1",
@@ -124,7 +121,11 @@ test("runCases shrinks a failing case and keeps the original in the message", ()
   }, () => {
     let error;
     try {
-      runCases(prefix, { defaultSeed: 1, defaultIterations: 1, testName }, caseAt);
+      runCases(prefix, { defaultSeed: 1, defaultIterations: 1, testName }, () => originalCase, (candidate) => {
+        if (Array.isArray(candidate.a) && candidate.a.includes(3) && typeof candidate.b === "string" && candidate.b.includes("hello") && candidate.c === 42) {
+          assert.fail("still fails");
+        }
+      });
     } catch (caught) {
       error = caught;
     }
@@ -138,6 +139,60 @@ test("runCases shrinks a failing case and keeps the original in the message", ()
     assert.equal(shrunk.b, "hello");
     assert.equal(shrunk.c, 42);
   });
+});
+
+test("safeStringify handles BigInt and cycles", () => {
+  const obj = { a: 1n, b: {} };
+  obj.b.self = obj.b;
+  assert.equal(safeStringify(obj), '{"a":"1n","b":{"self":"[Circular]"}}');
+});
+
+test("a failing fuzz test replays in a child process", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fuzz-replay-"));
+  const file = "replay-child.test.mjs";
+  const fuzzKitUrl = new URL("./fuzz-kit.mjs", import.meta.url).href;
+  const testName = "replay child";
+  const source = `
+import { test } from "node:test";
+import { runCases } from ${JSON.stringify(fuzzKitUrl)};
+
+test(${JSON.stringify(testName)}, () => {
+  runCases("REPLAY_CHILD", { defaultSeed: 1, defaultIterations: 3, testName: ${JSON.stringify(testName)} }, (i, rand) => {
+    const value = rand();
+    return { i, value };
+  }, ({ i, value }) => {
+    if (i === 3) throw new Error(\`child failure at \${i} with value \${value}\`);
+  });
+});
+`;
+  writeFileSync(join(dir, file), source);
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("REPLAY_CHILD_")) delete env[key];
+  delete env.NODE_TEST_CONTEXT;
+  env.REPLAY_CHILD_ITERATIONS = "5";
+  const run = (args, runEnv) => spawnSync(process.execPath, args, { cwd: dir, encoding: "utf8", env: runEnv });
+  try {
+    const first = run(["--test", file], env);
+    const output = first.stdout + first.stderr;
+    assert.notEqual(first.status, 0, `the first run must fail:\n${output}`);
+    assert.match(output, /child failure at 3/, "the first run must report the failing case");
+    const replayLine = output.split("\n").find((line) => line.includes("Replay: "));
+    assert.ok(replayLine, "the failure must carry a replay line");
+    const replay = replayLine.slice(replayLine.indexOf("Replay: ") + "Replay: ".length);
+    const envPart = replay.split(" node --test")[0];
+    const assignments = [...envPart.matchAll(/([A-Z0-9_]+)=(\d+)/g)];
+    assert.ok(assignments.length >= 3, "the replay line must set seed, iterations, and only");
+    const patternMatch = replay.match(/--test-name-pattern '([^']*)'/);
+    assert.ok(patternMatch, "the replay line must carry a test name pattern");
+    const replayEnv = { ...env };
+    for (const [, key, value] of assignments) replayEnv[key] = value;
+    const second = run(["--test", "--test-name-pattern", patternMatch[1], file], replayEnv);
+    const secondOutput = second.stdout + second.stderr;
+    assert.notEqual(second.status, 0, `the replay must fail:\n${secondOutput}`);
+    assert.match(secondOutput, /child failure at 3/, "the replay must reproduce the same failing case");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("shrink strictly reduces size while preserving the failing assertion", () => {

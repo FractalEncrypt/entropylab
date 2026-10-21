@@ -765,37 +765,53 @@ const OPS = [
 ];
 const OP_BAG = OPS.flatMap(([weight, fn]) => Array.from({ length: weight }, () => fn));
 
+const runWalk = (i, fixture) => {
+  note(`fixture:${fixture.name}`);
+  // The editor anchors the signing pairs to the loaded transaction; the
+  // first edit that moves the transaction drops them.
+  const state = { doc: structuredClone(fixture.doc), poisoned: null, anchor: JSON.stringify(fixture.doc.tx) };
+  const opCount = 3 + rint(10);
+  for (let j = 0; j < opCount; j++) {
+    const label = `iteration ${i} (${fixture.name}) op ${j}`;
+    // A field edit that left the document unbuildable is usually followed
+    // by the repair keystroke — or by the user trying a structural edit
+    // anyway, which must bounce off. Both are forced here so the walk
+    // exercises them instead of wandering off.
+    if (state.poisoned && chance(0.6)) {
+      repairOp(state, label);
+      continue;
+    }
+    if (state.poisoned && chance(0.43)) {
+      pick([(s, l) => addElementOp(s, l, pick(["input", "output"])), (s, l) => deleteElementOp(s, l, pick(["input", "output"])), addPairOp, deletePairOp])(state, label);
+      continue;
+    }
+    pick(OP_BAG)(state, label);
+  }
+  // Every walk ends on a building document: repair any poisoned field and
+  // rebuild once more.
+  if (state.poisoned) repairOp(state, `iteration ${i} (${fixture.name}) final repair`);
+  mustBuild(structuredClone(state.doc), `iteration ${i} (${fixture.name}) final rebuild`);
+  note("walk-complete");
+};
+
 test(TEST_NAME, () => {
   const results = runCases("PSBT_EDITOR_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS, testName: TEST_NAME }, (i, caseRand) => {
-    rand = caseRand; // route the module-level helpers through the runCases PRNG
     const fixture = FIXTURES[i % FIXTURES.length];
-    note(`fixture:${fixture.name}`);
-    // The editor anchors the signing pairs to the loaded transaction; the
-    // first edit that moves the transaction drops them.
-    const state = { doc: structuredClone(fixture.doc), poisoned: null, anchor: JSON.stringify(fixture.doc.tx) };
-    const opCount = 3 + rint(10);
-    for (let j = 0; j < opCount; j++) {
-      const label = `iteration ${i} (${fixture.name}) op ${j}`;
-      // A field edit that left the document unbuildable is usually followed
-      // by the repair keystroke — or by the user trying a structural edit
-      // anyway, which must bounce off. Both are forced here so the walk
-      // exercises them instead of wandering off.
-      if (state.poisoned && chance(0.6)) {
-        repairOp(state, label);
-        continue;
-      }
-      if (state.poisoned && chance(0.43)) {
-        pick([(s, l) => addElementOp(s, l, pick(["input", "output"])), (s, l) => deleteElementOp(s, l, pick(["input", "output"])), addPairOp, deletePairOp])(state, label);
-        continue;
-      }
-      pick(OP_BAG)(state, label);
+    const values = [];
+    const recordingRand = () => { const v = caseRand(); values.push(v); return v; };
+    rand = recordingRand;
+    try {
+      runWalk(i, fixture);
+    } catch (error) {
+      if (!(error instanceof assert.AssertionError)) throw error;
     }
-    // Every walk ends on a building document: repair any poisoned field and
-    // rebuild once more.
-    if (state.poisoned) repairOp(state, `iteration ${i} (${fixture.name}) final repair`);
-    mustBuild(structuredClone(state.doc), `iteration ${i} (${fixture.name}) final rebuild`);
-    note("walk-complete");
-    return true;
+    return { i, fixture: fixture.name, values };
+  }, ({ i, fixture: fixtureName, values }) => {
+    const fixture = FIXTURES.find((f) => f.name === fixtureName);
+    if (!fixture) throw new Error(`unknown fixture ${fixtureName}`);
+    const queue = [...values];
+    rand = () => (queue.length ? queue.shift() : 0);
+    runWalk(i, fixture);
   });
   assert.equal(results.length, EDITOR_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
 });

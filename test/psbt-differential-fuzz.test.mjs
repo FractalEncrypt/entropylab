@@ -51,7 +51,7 @@ const FUZZ_SEED = 0x5eed0174;
 const DEFAULT_ITERATIONS = 100;
 const PSBT_ENV = fuzzEnv("PSBT_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = PSBT_ENV.iterations;
-const TEST_NAME = `psbtInspectDoc and @scure/btc-signer agree on mutated PSBTs (seed 0x${PSBT_ENV.seed.toString(16)}, ${PSBT_ENV.only === null ? ITERATIONS : 1} iterations)`;
+const TEST_NAME = "psbtInspectDoc and @scure/btc-signer agree on mutated PSBTs";
 
 // --- fixtures and their unsigned-transaction layout --------------------------
 
@@ -222,7 +222,10 @@ test(TEST_NAME, () => {
     const pick = (items) => items[rint(items.length)];
     const fixture = pick(fixtures);
     const { bytes, change } = mutate(fixture, rand);
-    const where = `iteration ${i}, fixture ${fixture.name}, ${change}`;
+    return { i, fixture: fixture.name, bytes: hex(bytes), change };
+  }, ({ i, fixture: fixtureName, bytes: bytesHex, change }) => {
+    const bytes = fromHex(bytesHex);
+    const where = `iteration ${i}, fixture ${fixtureName}, ${change}`;
     const left = entropyLab(bytes), right = scure(bytes);
     if (left.error || right.error) {
       assert.ok(left.error && right.error,
@@ -235,7 +238,6 @@ test(TEST_NAME, () => {
         assert.equal(output.script, right.outputs[index].script, `${where}: output ${index} script differs\n  psbtInspectDoc:    ${output.script}\n  @scure/btc-signer: ${right.outputs[index].script}`);
       });
     }
-    return true;
   });
   assert.equal(results.length, PSBT_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
 });

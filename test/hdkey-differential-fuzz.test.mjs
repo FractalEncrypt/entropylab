@@ -24,7 +24,7 @@ const FUZZ_SEED = 0x5eed0032;
 const DEFAULT_ITERATIONS = 200;
 const HDKEY_ENV = fuzzEnv("HDKEY_FUZZ", { defaultSeed: FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const ITERATIONS = HDKEY_ENV.iterations;
-const MASTER_TEST_NAME = `src/js/hdkey.js and @scure/bip32 derive identical nodes (seed 0x${HDKEY_ENV.seed.toString(16)}, ${HDKEY_ENV.only === null ? ITERATIONS : 1} iterations)`;
+const MASTER_TEST_NAME = "src/js/hdkey.js and @scure/bip32 derive identical nodes";
 
 // Mainnet BIP32 version bytes, passed explicitly to both implementations.
 const VERSIONS = { private: 0x0488ade4, public: 0x0488b21e };
@@ -77,8 +77,11 @@ test(MASTER_TEST_NAME, () => {
     const randomIndex = () => (rint(8) === 0 ? pick([0, 1, HARDENED_OFFSET - 1]) : rint(HARDENED_OFFSET));
     const seed = randomBytes(pick([16, 32, 64]));
     const steps = Array.from({ length: 1 + rint(8) }, () => ({ index: randomIndex(), hardened: rint(2) === 1 }));
+    return { i, seed: hex(seed), steps };
+  }, ({ i, seed: seedHex, steps }) => {
+    const seed = Uint8Array.from(Buffer.from(seedHex, "hex"));
     const path = "m/" + steps.map(({ index, hardened }) => `${index}${hardened ? "'" : ""}`).join("/");
-    const where = `iteration ${i}, seed ${hex(seed)}, path ${path}`;
+    const where = `iteration ${i}, seed ${seedHex}, path ${path}`;
 
     const [left, right] = both(`${where}, master`, () => HDKey.fromMasterSeed(seed, VERSIONS), () => ScureHDKey.fromMasterSeed(seed, VERSIONS));
 
@@ -98,7 +101,6 @@ test(MASTER_TEST_NAME, () => {
       () => HDKey.fromExtendedKey(leftChild.privateExtendedKey, VERSIONS),
       () => ScureHDKey.fromExtendedKey(rightChild.privateExtendedKey, VERSIONS));
     assertSameNode(leftRestored, rightChild, `${where}, fromExtendedKey(xprv) against the derived child`);
-    return true;
   });
   assert.equal(results.length, HDKEY_ENV.only === null ? ITERATIONS : 1, "every iteration ran to the end");
 });
@@ -112,7 +114,7 @@ test(MASTER_TEST_NAME, () => {
 const PUBLIC_FUZZ_SEED = 0x5eed0033;
 const PUBLIC_ENV = fuzzEnv("HDKEY_PUB_FUZZ", { defaultSeed: PUBLIC_FUZZ_SEED, defaultIterations: DEFAULT_ITERATIONS });
 const PUBLIC_ITERATIONS = PUBLIC_ENV.iterations;
-const PUBLIC_TEST_NAME = `public derivation matches private derivation and refuses hardened steps (seed 0x${PUBLIC_ENV.seed.toString(16)}, ${PUBLIC_ENV.only === null ? PUBLIC_ITERATIONS : 1} iterations)`;
+const PUBLIC_TEST_NAME = "public derivation matches private derivation and refuses hardened steps";
 test(PUBLIC_TEST_NAME, () => {
   const refused = (fn) => {
     try {
@@ -128,7 +130,10 @@ test(PUBLIC_TEST_NAME, () => {
     const index = () => (n(8) === 0 ? [0, 1, HARDENED_OFFSET - 1][n(3)] : n(HARDENED_OFFSET));
     const seed = Uint8Array.from({ length: 32 }, () => n(256));
     const steps = Array.from({ length: 1 + n(10) }, () => index() + (n(2) ? HARDENED_OFFSET : 0));
-    const where = `iteration ${i}, seed ${hex(seed)}, children ${steps.join("/")}`;
+    return { i, seed: hex(seed), steps };
+  }, ({ i, seed: seedHex, steps }) => {
+    const seed = Uint8Array.from(Buffer.from(seedHex, "hex"));
+    const where = `iteration ${i}, seed ${seedHex}, children ${steps.join("/")}`;
     let privateNode = HDKey.fromMasterSeed(seed, VERSIONS), scurePrivate = ScureHDKey.fromMasterSeed(seed, VERSIONS);
     steps.forEach((child, depth) => {
       // Public-only views of the current node, rebuilt from its xpub.
@@ -151,7 +156,6 @@ test(PUBLIC_TEST_NAME, () => {
       privateNode = nextPrivate;
       scurePrivate = nextScure;
     });
-    return true;
   });
   assert.equal(results.length, PUBLIC_ENV.only === null ? PUBLIC_ITERATIONS : 1, "every iteration ran to the end");
   // Both branches must actually have been exercised.
