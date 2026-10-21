@@ -264,7 +264,7 @@ test("F13b a weak sighash the original PSBT declared is not flagged", () => {
   assert.equal(report.verdict, "pass");
 });
 
-test("F13c declaration-only weak values are warnings", () => {
+test("F13c declaration-only weak values are critical", () => {
   for (const value of ["02000000", "03000000", "81000000"]) {
     const before = baseDoc();
     const after = baseDoc({ inputs: [[
@@ -272,8 +272,8 @@ test("F13c declaration-only weak values are warnings", () => {
       pair("03", value, "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_NONE", sighashType: parseInt(value.slice(0, 2), 16) }),
     ]] });
     const report = auditSigner(before, after);
-    assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGHASH_DECLARATION_ADDED", "warning"]]);
-    assert.equal(report.verdict, "pass");
+    assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGHASH_DECLARATION_ADDED", "critical"]]);
+    assert.equal(report.verdict, "fail");
   }
 });
 
@@ -579,7 +579,7 @@ test("F23 fail closed on an undecodable input", () => {
   const report = auditSigner(before, after);
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
     ["DOC_UNDECODABLE", "critical"],
-    ["SIGHASH_DECLARATION_ADDED", "warning"],
+    ["SIGHASH_DECLARATION_ADDED", "critical"],
   ]);
   assert.equal(report.findings[0].evidence.side, "after");
   assert.equal(report.findings[0].evidence.reason, "duplicate_keys");
@@ -785,4 +785,160 @@ test("F33 finalization requires verification for every added final field", () =>
   assert.equal(report.verdict, "fail");
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["FINALIZATION_INVALID", "critical"]]);
   assert.equal(report.findings[0].evidence.reason, "no_signatures");
+});
+
+test("F34 a verification entry without valid === true is unverified", () => {
+  const { before, after } = f10Docs();
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P1_HEX }] };
+  const report = auditSigner(before, after, { verification });
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["SIGNATURE_ADDED", "info"],
+    ["SIGNATURE_UNVERIFIED", "critical"],
+  ]);
+  assert.equal(report.verdict, "fail");
+});
+
+test("F35 one verification entry covers only one tapscript signature", () => {
+  const xonly = P1_HEX.slice(2);
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: "5120" + "22".repeat(32) }),
+    pair("17", xonly, "PSBT_IN_TAP_INTERNAL_KEY", { xonly }),
+  ]] });
+  const after = structuredClone(before);
+  after.inputs[0].push(pair("14" + xonly + "aa".repeat(32), "11".repeat(64), "PSBT_IN_TAP_SCRIPT_SIG", { xonly, leafHash: "aa".repeat(32) }));
+  after.inputs[0].push(pair("14" + xonly + "bb".repeat(32), "22".repeat(64), "PSBT_IN_TAP_SCRIPT_SIG", { xonly, leafHash: "bb".repeat(32) }));
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_TAP_SCRIPT_SIG", pubkey: xonly, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "fail");
+  assert.equal(report.findings.filter((f) => f.code === "SIGNATURE_UNVERIFIED").length, 1);
+});
+
+test("F36 a signature from an unknown signer fails closed", () => {
+  const before = baseDoc({ inputs: [[pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 })]] });
+  const after = withSig(before, P1_HEX, "01");
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P1_HEX, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGNER_UNKNOWN", "critical"]]);
+  assert.equal(report.verdict, "fail");
+});
+
+test("F37 a null document fails closed instead of throwing", () => {
+  const report = auditSigner(null, baseDoc());
+  assert.equal(report.verdict, "fail");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(report.findings[0].evidence.side, "before");
+  assert.equal(report.findings[0].evidence.reason, "malformed_document");
+});
+
+test("F38 an added output derivation must match the wallet", () => {
+  const before = changeDoc();
+  const after = structuredClone(before);
+  after.outputs[1].push(pair("06" + P2_HEX, "87654321" + DERIV_VALUE.slice(8), "PSBT_OUT_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "87654321", path: "m/84'/0'/0'/0/2" }));
+  const wallet = { fingerprints: ["12345678"], scriptPubKeys: [before.tx.outputs[1].scriptPubKey] };
+  const report = auditSigner(before, after, { wallet });
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["METADATA_ADDED", "warning"],
+    ["CHANGE_VERIFIED", "info"],
+  ]);
+  assert.equal(report.verdict, "pass");
+});
+
+test("F39 metadata summary reflects FIELD_REMOVED", () => {
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("04", "51", "PSBT_IN_REDEEM_SCRIPT"),
+  ]] });
+  const after = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+  ]] });
+  const report = auditSigner(before, after);
+  assert.equal(report.findings[0].code, "FIELD_REMOVED");
+  assert.equal(report.checks.metadata, "mutated");
+});
+
+test("F40 metadata summary reflects a warning-tier METADATA_CHANGED", () => {
+  const before = baseDoc({ globals: [...baseDoc().globals, pair("fc01", "aa", "PSBT_GLOBAL_PROPRIETARY")] });
+  const after = baseDoc({ globals: [...baseDoc().globals, pair("fc01", "bb", "PSBT_GLOBAL_PROPRIETARY")] });
+  const report = auditSigner(before, after);
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["METADATA_CHANGED", "warning"]]);
+  assert.equal(report.checks.metadata, "mutated");
+});
+
+test("F41 signatures summary reflects FINALIZATION_INVALID", () => {
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
+  ]] });
+  const after = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("08", "aa", "PSBT_IN_FINAL_SCRIPTWITNESS"),
+  ]] });
+  const report = auditSigner(before, after, { verification: { complete: false, signatures: [] } });
+  assert.equal(report.findings[0].code, "FINALIZATION_INVALID");
+  assert.notEqual(report.checks.signatures, "none_added");
+});
+
+test("F42 sighashPolicy summary reflects SIGHASH_DECLARATION_CHANGED", () => {
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
+  ]] });
+  const after = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
+    pair("03", "02000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_NONE", sighashType: 2 }),
+  ]] });
+  const report = auditSigner(before, after);
+  assert.equal(report.findings[0].code, "SIGHASH_DECLARATION_CHANGED");
+  assert.notEqual(report.checks.sighashPolicy, "none");
+});
+
+test("F43 change verification accepts a scriptPubKey match when fingerprints are also given", () => {
+  const before = baseDoc();
+  const after = baseDoc({ tx: { ...before.tx, outputs: [{ value: 100000, scriptPubKey: SCRIPT1 }] }, outputs: [[]] });
+  const wallet = { fingerprints: ["12345678"], scriptPubKeys: [SCRIPT1] };
+  const report = auditSigner(before, after, { wallet });
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["CHANGE_VERIFIED", "info"]]);
+  assert.equal(report.checks.changeOutputs, "verified");
+});
+
+test("F44 taproot SIGHASH_DEFAULT matches a declared SIGHASH_ALL", () => {
+  const xonly = P1_HEX.slice(2);
+  const before = baseDoc({ inputs: [[
+    pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: "5120" + "22".repeat(32) }),
+    pair("17", xonly, "PSBT_IN_TAP_INTERNAL_KEY", { xonly }),
+    pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
+  ]] });
+  const after = structuredClone(before);
+  after.inputs[0].push(pair("13", "11".repeat(64), "PSBT_IN_TAP_KEY_SIG", { signature: "11".repeat(64), sighash: "SIGHASH_DEFAULT" }));
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_TAP_KEY_SIG", pubkey: null, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "pass");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGNATURE_ADDED", "info"]]);
+});
+
+test("F45 reorder does not hide a UTXO change on a present input", () => {
+  const base = baseDoc();
+  const inputs = [
+    { txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 },
+    { txid: "22".repeat(32), vout: 1, scriptSig: "", sequence: 4294967295 },
+  ];
+  const before = baseDoc({
+    tx: { ...base.tx, inputs: [inputs[0], inputs[1]] },
+    inputs: [
+      [pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 })],
+      [pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 })],
+    ],
+  });
+  const after = baseDoc({
+    tx: { ...base.tx, inputs: [inputs[1], inputs[0]] },
+    inputs: [
+      [pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 })],
+      [pair("01", "ee", "PSBT_IN_WITNESS_UTXO", { value: "149000", scriptPubKey: SCRIPT1 })],
+    ],
+  });
+  const report = auditSigner(before, after);
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
+    ["TX_REORDERED", "critical"],
+    ["UTXO_DECLARATION_CHANGED", "critical"],
+  ]);
 });

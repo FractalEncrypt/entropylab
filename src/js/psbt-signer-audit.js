@@ -204,17 +204,19 @@ const computeChangeFindings = (afterDoc, wallet) => {
   const scripts = Array.isArray(wallet.scriptPubKeys) ? wallet.scriptPubKeys.map(lower) : [];
   const scriptSet = new Set(scripts);
   const outputs = afterDoc.tx?.outputs ?? [];
-  if (fingerprints.length > 0) {
-    for (let index = 0; index < outputs.length; index++) {
-      const pairs = afterDoc.outputs?.[index] ?? [];
-      const derivation = pairs.find((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
+  for (let index = 0; index < outputs.length; index++) {
+    const pairs = afterDoc.outputs?.[index] ?? [];
+    const derivation = fingerprints.length > 0
+      ? pairs.find((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
         && pair.decoded && !pair.decodeError
-        && fingerprints.includes(lower(pair.decoded.fingerprint)));
-      if (!derivation) continue;
-      const scriptPubKey = lower(outputs[index].scriptPubKey);
-      const fingerprint = lower(derivation.decoded.fingerprint);
+        && fingerprints.includes(lower(pair.decoded.fingerprint)))
+      : null;
+    const scriptPubKey = lower(outputs[index].scriptPubKey);
+    const scriptMatches = scripts.length > 0 && scriptSet.has(scriptPubKey);
+    const fingerprint = derivation ? lower(derivation.decoded.fingerprint) : null;
+    if (derivation) {
       if (scripts.length > 0) {
-        if (scriptSet.has(scriptPubKey)) {
+        if (scriptMatches) {
           findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint }));
           verified.add(index);
         } else {
@@ -223,14 +225,9 @@ const computeChangeFindings = (afterDoc, wallet) => {
       } else {
         findings.push(finding("CHANGE_UNVERIFIED", "warning", "output", index, null, { index, scriptPubKey, fingerprint }));
       }
-    }
-  } else if (scripts.length > 0) {
-    for (let index = 0; index < outputs.length; index++) {
-      const scriptPubKey = lower(outputs[index].scriptPubKey);
-      if (scriptSet.has(scriptPubKey)) {
-        findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint: null }));
-        verified.add(index);
-      }
+    } else if (scriptMatches) {
+      findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint: null }));
+      verified.add(index);
     }
   }
   return { findings, verified };
@@ -290,10 +287,6 @@ const samePubkey = (a, b) => {
 };
 
 export function auditSigner(beforeDoc, afterDoc, options = {}) {
-  if (!isObject(beforeDoc) || !isObject(afterDoc)) {
-    throw new TypeError("Both PSBT inspection documents are required.");
-  }
-
   const findings = [];
 
   for (const [side, doc] of [["before", beforeDoc], ["after", afterDoc]]) {
@@ -333,10 +326,30 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   if (reorderedOutputs) {
     findings.push(finding("TX_REORDERED", "critical", "transaction", null, null, { dimension: "outputs", order: reorderedOutputs.order }));
   }
-  const suppressed = (change) => (
-    (reorderedInputs && (change.scope === "input" || change.scope === "input-map"))
-    || (reorderedOutputs && (change.scope === "output" || change.scope === "output-map"))
-  );
+  const isReorderArtifact = (change, order) => {
+    if (change.scope !== "input-map" && change.scope !== "output-map") return true;
+    const afterIndex = change.index;
+    const beforeIndex = order[afterIndex];
+    if (beforeIndex === undefined) return false;
+    const beforePairs = mapPairs(beforeDoc, change.scope, beforeIndex);
+    const afterPairs = mapPairs(afterDoc, change.scope, afterIndex);
+    if (change.kind === "added") {
+      return beforePairs.some((pair) => pair.key === change.key && pair.value === change.after);
+    }
+    if (change.kind === "removed") {
+      return afterPairs.some((pair) => pair.key === change.key && pair.value === change.before);
+    }
+    return beforePairs.some((pair) => pair.key === change.key && pair.value === change.after);
+  };
+  const suppressed = (change) => {
+    if (reorderedInputs && (change.scope === "input" || change.scope === "input-map")) {
+      return change.scope === "input" || isReorderArtifact(change, reorderedInputs.order);
+    }
+    if (reorderedOutputs && (change.scope === "output" || change.scope === "output-map")) {
+      return change.scope === "output" || isReorderArtifact(change, reorderedOutputs.order);
+    }
+    return false;
+  };
   const activeChanges = diff.changes.filter((change) => !suppressed(change));
 
   const changeResult = computeChangeFindings(afterDoc, options.wallet);
@@ -428,7 +441,16 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       }
     }
     if (change.scope === "output-map") {
-      if (change.name === "PSBT_OUT_BIP32_DERIVATION" || change.name === "PSBT_OUT_TAP_BIP32_DERIVATION" || change.name === "PSBT_OUT_TAP_INTERNAL_KEY") {
+      if (change.name === "PSBT_OUT_BIP32_DERIVATION" || change.name === "PSBT_OUT_TAP_BIP32_DERIVATION") {
+        if (!verifiedChangeOutputs.has(change.index)) return false;
+        const fingerprint = lower(afterPair?.decoded?.fingerprint);
+        const fingerprints = (options.wallet?.fingerprints ?? []).map(lower);
+        const scripts = (options.wallet?.scriptPubKeys ?? []).map(lower);
+        const scriptPubKey = lower(afterDoc.tx?.outputs?.[change.index]?.scriptPubKey);
+        if (fingerprints.length > 0) return fingerprints.includes(fingerprint);
+        return scripts.length > 0 && scripts.includes(scriptPubKey);
+      }
+      if (change.name === "PSBT_OUT_TAP_INTERNAL_KEY") {
         return verifiedChangeOutputs.has(change.index);
       }
     }
@@ -486,7 +508,9 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
         } else if (fullCommitment(value, tap)) {
           findings.push(finding("SIGHASH_DECLARATION_ADDED", "info", "input-map", index, null, { index, value }));
         } else if (weakSighash(value)) {
-          findings.push(finding("SIGHASH_DECLARATION_ADDED", "warning", "input-map", index, null, { index, value }));
+          const originalDeclared = declaredSighash(beforeDoc, index);
+          const severity = originalDeclared === value ? "warning" : "critical";
+          findings.push(finding("SIGHASH_DECLARATION_ADDED", severity, "input-map", index, null, { index, value }));
         }
       } else if (kind === "changed") {
         findings.push(finding("SIGHASH_DECLARATION_CHANGED", "critical", "input-map", index, null, {
@@ -650,7 +674,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     event.identityFinding = added;
   }
   for (const [index, pubkeys] of unknownPubkeysByInput) {
-    findings.push(finding("SIGNER_UNKNOWN", "warning", "input-map", index, null, { index, pubkeys }));
+    findings.push(finding("SIGNER_UNKNOWN", "critical", "input-map", index, null, { index, pubkeys }));
   }
 
   // Phase E — sighash evaluation of new signatures.
@@ -694,7 +718,8 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       emitDeclaredUndefined(event.index, afterPolicy.value);
     }
 
-    if (expected !== null && appended !== expected) {
+    const equivalent = (a, b) => a === b || (tap && ((a === 0x00 && b === 0x01) || (a === 0x01 && b === 0x00)));
+    if (expected !== null && !equivalent(appended, expected)) {
       findings.push(finding("SIGHASH_MISMATCH", "critical", "input-map", event.index, null, {
         index: event.index,
         name: event.name,
@@ -703,7 +728,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
         declared: expected,
         source: "original",
       }));
-    } else if (afterPolicy.value !== null && appended !== afterPolicy.value) {
+    } else if (afterPolicy.value !== null && !equivalent(appended, afterPolicy.value)) {
       findings.push(finding("SIGHASH_MISMATCH", "critical", "input-map", event.index, null, {
         index: event.index,
         name: event.name,
@@ -727,6 +752,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   }
 
   // Phase F — signature verification (fail closed).
+  const verificationEntries = (options.verification?.signatures ?? []).map((entry) => ({ entry, used: false }));
   for (const event of newSigEvents) {
     if (event.malformed) continue;
     const pubkey = pubkeyForEvent(event);
@@ -740,24 +766,27 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       }));
       continue;
     }
-    const entry = (verification.signatures ?? []).find((candidate) => (
-      candidate.index === event.index
-      && candidate.name === event.name
-      && samePubkey(candidate.pubkey, pubkey)
-    ));
-    if (!entry || entry.valid === null) {
-      findings.push(finding("SIGNATURE_UNVERIFIED", "critical", "input-map", event.index, null, {
-        index: event.index,
-        name: event.name,
-        pubkey,
-        reason: verification.complete === false ? "budget_exhausted" : "not_checked",
-      }));
-    } else if (entry.valid === false) {
-      findings.push(finding("SIGNATURE_INVALID", "critical", "input-map", event.index, null, {
-        index: event.index,
-        name: event.name,
-        pubkey,
-      }));
+    const match = verificationEntries.find((candidate) => !candidate.used
+      && candidate.entry.index === event.index
+      && candidate.entry.name === event.name
+      && samePubkey(candidate.entry.pubkey, pubkey));
+    if (match) match.used = true;
+    const entry = match?.entry;
+    if (!entry || entry.valid !== true) {
+      if (entry && entry.valid === false) {
+        findings.push(finding("SIGNATURE_INVALID", "critical", "input-map", event.index, null, {
+          index: event.index,
+          name: event.name,
+          pubkey,
+        }));
+      } else {
+        findings.push(finding("SIGNATURE_UNVERIFIED", "critical", "input-map", event.index, null, {
+          index: event.index,
+          name: event.name,
+          pubkey,
+          reason: verification.complete === false ? "budget_exhausted" : "not_checked",
+        }));
+      }
     }
   }
 
@@ -803,12 +832,17 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   if (has("SIGNATURE_CHANGED") || has("SIGNATURE_REMOVED")) signatures = "removed_or_changed";
   else if (has("SIGNATURE_INVALID")) signatures = "invalid";
   else if (has("SIGNATURE_UNVERIFIED") || has("SIGNATURE_MALFORMED")) signatures = "unverified";
+  else if (has("FINALIZATION_INVALID")) {
+    const invalidFinal = findings.some((f) => f.code === "FINALIZATION_INVALID" && f.evidence?.reason === "signature_invalid");
+    signatures = invalidFinal ? "invalid" : "unverified";
+  }
   else if (newSigEvents.length > 0 || has("FINALIZED")) signatures = "valid";
 
   let sighashPolicy = "none";
   if (has("SIGHASH_UNDEFINED")) sighashPolicy = "undefined";
   else if (has("SIGHASH_MISMATCH")) sighashPolicy = "mismatch";
   else if (has("SIGHASH_WEAK")) sighashPolicy = "weak";
+  else if (has("SIGHASH_DECLARATION_CHANGED")) sighashPolicy = "mismatch";
   else if (weakAsRequested.value) sighashPolicy = "weak_as_requested";
   else if (newSigEvents.length > 0) sighashPolicy = "full_commitment";
 
@@ -818,7 +852,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   else if (has("SIGNATURE_ADDED")) signerKeys = "match";
 
   let metadata = "unchanged";
-  if (findings.some((f) => f.severity === "critical" && (f.code === "METADATA_CHANGED" || f.code === "METADATA_REMOVED" || f.code === "FINGERPRINT_MISMATCH"))) {
+  if (findings.some((f) => f.code === "METADATA_CHANGED" || f.code === "METADATA_REMOVED" || f.code === "FINGERPRINT_MISMATCH" || f.code === "FIELD_REMOVED")) {
     metadata = "mutated";
   } else if (has("METADATA_ADDED") || has("METADATA_ENRICHMENT")) {
     metadata = "additions";
