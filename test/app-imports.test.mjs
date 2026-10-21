@@ -3,12 +3,20 @@
 // The unit suites load slices of app.js with the names they need injected, so
 // a call to a helper that was never imported passes every test and only throws
 // ReferenceError in the real page. That is how the normalizeVinWitness send
-// flow shipped broken: bip352.js exported it, app.js called it, and no suite
-// noticed the missing import. This guard is the static analogue of
-// ci-completeness.test.mjs: it diffs the bare calls app.js makes against the
-// names it imports and declares, fails on any call to a name any local
-// module exports but app.js never brought in, and fails on dead imports so
-// the import block cannot rot.
+// flow nearly shipped broken (#1028, caught in review before merge):
+// bip352.js exported it, app.js called it, and every suite passed. This guard
+// is the static analogue of ci-completeness.test.mjs: it diffs the bare calls
+// app.js makes against the names it imports and declares, fails on any call
+// to a name any local module exports but app.js never brought in, and fails
+// on dead imports so the import block cannot rot.
+//
+// Limits (a text scan, not a JavaScript parser; the repo adds no parser
+// dependency): declarations are not scoped, so a nested local, parameter or
+// catch binding with the same name as an export hides a missing top-level
+// import; only call forms are checked (name(, name?.(, name`), not bare
+// references such as a function passed as a callback; and a call followed
+// directly by a block can read as a method definition. Each gap lets a
+// missing import through (a false negative); none reports a correct import.
 // Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
