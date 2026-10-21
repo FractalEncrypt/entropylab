@@ -32,6 +32,7 @@ import {
   Point,
   hexToBytes,
   bytesToHex,
+  vinHasSpendData,
 } from "../src/js/bip352.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -501,4 +502,20 @@ test("unsigned uncompressed-key inputs stay ineligible, and a witness array coun
   const p2wpkh = { ...unsigned("0014" + bytesToHex(hash160(compressed))), witness: [hexToBytes("47" + "00".repeat(71)), hexToBytes("03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873")] };
   assert.throws(() => eligibleInputKeys([p2wpkh]), /witness key does not hash/);
   assert.equal(eligibleInputKeys([{ ...p2wpkh, witness: [hexToBytes("47" + "00".repeat(71)), compressed] }]).pubkeys.length, 1);
+});
+
+test("unsigned P2SH: an uncompressed-key P2SH-P2WPKH match is skipped, other P2SH is refused until its scriptSig is pasted", () => {
+  const scalar = "0000000000000000000000000000000000000000000000000000000000000001";
+  const uncompressed = hexToBytes("0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8");
+  const wrapped = (key) => { const redeem = hexToBytes("0014" + bytesToHex(hash160(key))); return "a914" + bytesToHex(hash160(redeem)) + "87"; };
+  const unsigned = (prevout, extra = {}) => ({ txid: "88".repeat(32), vout: 0, scriptSig: "", txinwitness: "", prevout, private_key: scalar, ...extra });
+  assert.deepEqual(eligibleInputKeys([unsigned(wrapped(uncompressed))]).pubkeys, []);
+  // P2SH-P2WSH: refused while unsigned; with its redeem push pasted it is skipped.
+  const p2wshRedeem = hexToBytes("0020a16b5755f7f6f96dbd65f5f0d6ab9418b89af4b1f14a1bb8a09062c35f0dcb54");
+  const p2wshPrevout = "a914" + bytesToHex(hash160(p2wshRedeem)) + "87";
+  assert.throws(() => eligibleInputKeys([unsigned(p2wshPrevout)]), /does not match its eligible input public key/);
+  assert.deepEqual(eligibleInputKeys([unsigned(p2wshPrevout, { scriptSig: "22" + bytesToHex(p2wshRedeem) })]).pubkeys, []);
+  // An empty witness array next to hex witness data is spend data, not unsigned.
+  const keyhashVin = { txid: "88".repeat(32), vout: 1, scriptSig: "", witness: [], txinwitness: "02" + "47" + "00".repeat(71) + "21" + "03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873", prevout: "001479091972186c449eb1ded22b78e40d009bdf0089" };
+  assert.equal(vinHasSpendData(keyhashVin), true);
 });

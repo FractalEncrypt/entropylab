@@ -326,8 +326,9 @@ export function extractInputPubKey(vin) {
 // string, witness array or serialized hex).
 export const vinHasSpendData = (vin) => {
   const scriptSig = vin.scriptSig instanceof Uint8Array ? vin.scriptSig : hexToBytes(vin.scriptSig || "");
-  const witness = Array.isArray(vin.witness) ? vin.witness : parseWitnessHex(vin.txinwitness || "");
-  return scriptSig.length > 0 || witness.length > 0;
+  // Either witness field counts: a vin carrying an empty array and hex
+  // witness data is not treated as unsigned.
+  return scriptSig.length > 0 || (Array.isArray(vin.witness) && vin.witness.length > 0) || parseWitnessHex(vin.txinwitness || "").length > 0;
 };
 
 // The eligible key of an input that has no spend data, resolved from its
@@ -351,17 +352,25 @@ const unsignedInputKey = (vin, index) => {
   if (isP2pkh(prevout)) return keyHashInput(prevout.slice(3, 23));
   if (isP2wpkh(prevout)) return keyHashInput(prevout.slice(2, 22));
   if (isP2sh(prevout)) {
-    // The scalar's P2SH-P2WPKH script: a914 || hash160(0014 || hash160(pub)) || 87.
-    const redeem = new Uint8Array(22);
-    redeem[1] = 0x14;
-    redeem.set(hash160(pub), 2);
-    const script = new Uint8Array(23);
-    script[0] = 0xa9;
-    script[1] = 0x14;
-    script.set(hash160(redeem), 2);
-    script[22] = 0x87;
-    if (!equalBytes(script, prevout)) throw mismatch;
-    return { point: Point.fromBytes(pub), isTaproot: false };
+    // The scalar's P2SH-P2WPKH script: a914 || hash160(0014 || hash160(key)) || 87.
+    // Matching only the uncompressed key is consistent but ineligible, like the
+    // signed form. Any other P2SH (multisig, P2SH-P2WSH) cannot be told from a
+    // wrong key without its redeem script, so it is refused: paste the
+    // scriptSig (the redeem push needs no signature) and it is skipped.
+    const p2shP2wpkh = (key) => {
+      const redeem = new Uint8Array(22);
+      redeem[1] = 0x14;
+      redeem.set(hash160(key), 2);
+      const script = new Uint8Array(23);
+      script[0] = 0xa9;
+      script[1] = 0x14;
+      script.set(hash160(redeem), 2);
+      script[22] = 0x87;
+      return script;
+    };
+    if (equalBytes(p2shP2wpkh(pub), prevout)) return { point: Point.fromBytes(pub), isTaproot: false };
+    if (equalBytes(p2shP2wpkh(Point.fromBytes(pub).toBytes(false)), prevout)) return null;
+    throw mismatch;
   }
   if (isP2tr(prevout)) {
     // The private key of a taproot input is already the BIP-341-tweaked key
@@ -547,7 +556,7 @@ const normalizeVin = (vin) => ({
   txinwitness: vin.txinwitness || "",
   // The witness-array form extractInputPubKey accepts; anything else is
   // left out, as before, and txinwitness is used.
-  witness: Array.isArray(vin.witness) && vin.witness.every((item) => item instanceof Uint8Array) ? vin.witness : undefined,
+  witness: Array.isArray(vin.witness) && vin.witness.length && vin.witness.every((item) => item instanceof Uint8Array) ? vin.witness : undefined,
   prevout: vinPrevoutScript(vin),
   private_key: vin.private_key,
 });
