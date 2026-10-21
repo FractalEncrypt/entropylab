@@ -4,21 +4,21 @@ EntropyLab handles seeds, keys and transactions, so every change is tested well 
 
 ## 1. The test suite
 
-- **About 2,500 tests** run on every pull request (`npm run test:ci`, the CI job "complete dependency-free suite": 2,500 at rock `63752da5`, 2026-10-21). A guard test fails CI if any test file on disk is missing from that list, so no suite is silently skipped.
+- **About 2,500 tests** run on every pull request (`npm run test:ci`, the CI job "complete dependency-free suite": 2,500 at rock `63752da5`, 2026-10-21). A guard test (`test/ci-completeness.test.mjs`) fails CI if any test file on disk is missing from that list, so no suite is silently skipped; the two browser suites are the only exceptions and run in their own job (section 4).
 - **Published vectors, not our own outputs.** Expected values come from the specifications and from independent implementations: BIP 39 (TREZOR vectors), BIP 32, BIP 143, BIP 174 PSBT vectors, the official BIP 352 send-and-receive vectors (`test/fixtures/bip352-send-and-receive.json`), and Bitcoin Core's `tx_valid.json` and sighash vectors (`test/fixtures/core/`).
 - **The page checks itself on load.** Before any input is wired, the page runs published vectors against its own WASM modules and refuses to start if one fails (see the README).
 - **Rejected input is tested as carefully as accepted input.** Security-sensitive parsing and validation changes must include cases the code must refuse, not only cases it must accept (pull request checklist).
 
 ## 2. Differential fuzzing
 
-Five fuzzers generate thousands of random cases and compare EntropyLab's answer with an independent implementation, case by case:
+Five fuzzers generate thousands of random cases. Four compare EntropyLab's answer with an independent implementation, case by case; the PSBT-editor fuzzer checks random edit walks against the PSBT layer's own invariants:
 
 | Fuzzer | Compared against |
 |---|---|
 | `test/hdkey-differential-fuzz.test.mjs` | `@scure/bip32` (BIP 32 derivation, public and private) |
 | `test/psbt-differential-fuzz.test.mjs` | `@scure/btc-signer` (PSBT parsing) |
 | `test/sighash-differential-fuzz.test.mjs` | `@scure/btc-signer`: EntropyLab's rust-bitcoin WASM module must produce the same legacy, BIP 143 and BIP 341 digests |
-| `test/psbt-editor-fuzz.test.mjs` | random edit walks through the PSBT editor, checked by the PSBT layer |
+| `test/psbt-editor-fuzz.test.mjs` | not an independent oracle: random edit walks through the PSBT editor, checked against the PSBT layer's invariants (every build re-parses; rejections are explicit) |
 | `test/wallet-export-fuzz.test.mjs` | an independent check of every generated wallet.dat, including Bitcoin Core's load checks |
 
 Default runs are deterministic (fixed seeds), so a CI failure always reproduces. CI also runs separate fuzz jobs: LifeHash against the C++ reference and against the official implementation, and multisig outputs against `@scure/btc-signer`.
@@ -40,7 +40,7 @@ Mutation testing changes the code on purpose (flips a comparison, deletes a line
 ## 5. Builds you can check
 
 - **Reproducible:** `entropylab.html` rebuilds byte for byte, and CI checks it from two different source paths. See [Reproductions.md](Reproductions.md) and the README's "Verifying the download".
-- **Attested and timestamped:** releases carry a Sigstore build attestation, signed checksums and an OpenTimestamps proof.
+- **Attested and timestamped:** every merge to `rock` publishes a `SHA256SUMS.txt` manifest (it detects corruption; it is not a signature), a Sigstore build attestation for provenance (`gh attestation verify`), and an OpenTimestamps proof. The v1.0.0 release was also signed by its maintainers over its checksum manifest.
 - **Pinned toolchain:** CI actions are pinned to commit SHAs, and a test fails if one is not.
 
 ## 6. Review and red-teaming
