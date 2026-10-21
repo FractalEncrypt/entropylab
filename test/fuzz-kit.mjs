@@ -13,28 +13,30 @@ export const mulberry32 = (seed) => {
 const envInt = (name, fallback) => {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
+  if (raw.trim() === "") throw new Error(`${name} must be a non-negative integer, got ${raw}`);
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer, got ${raw}`);
   return value;
 };
 
 export const fuzzEnv = (prefix, { defaultSeed, defaultIterations }) => {
-  const seedRaw = process.env[`${prefix}_SEED`];
-  const seed = seedRaw === undefined || seedRaw === "" ? defaultSeed : Number(seedRaw);
-  if (!Number.isSafeInteger(seed) || seed < 0) throw new Error(`${prefix}_SEED must be a non-negative integer, got ${seedRaw}`);
+  const seed = envInt(`${prefix}_SEED`, defaultSeed);
   const iterations = envInt(`${prefix}_ITERATIONS`, defaultIterations);
-  const onlyRaw = process.env[`${prefix}_ONLY`];
-  const only = onlyRaw === undefined || onlyRaw === "" ? null : envInt(`${prefix}_ONLY`, null);
+  const only = envInt(`${prefix}_ONLY`, null);
   return { seed, iterations, only };
 };
 
+const shellQuote = (value) => `'${value.replace(/'/g, "'\\''")}'`;
 const replayCommand = (prefix, seed, i) => {
   const file = process.argv[1] ?? "test/unknown.test.mjs";
-  return `${prefix}_SEED=${seed} ${prefix}_ONLY=${i} node --test ${file}`;
+  return `${prefix}_SEED=${seed} ${prefix}_ONLY=${i} node --test ${shellQuote(file)}`;
 };
 
 export const runCases = (prefix, opts, caseAt) => {
   const { seed, iterations, only } = fuzzEnv(prefix, opts);
+  if (only !== null && only >= iterations) {
+    throw new Error(`${prefix}_ONLY=${only} is out of range for ${iterations} iterations`);
+  }
   const rand = mulberry32(seed);
   const results = [];
   const last = only === null ? iterations - 1 : only;
@@ -77,8 +79,7 @@ const collectReductions = (node, path, root, out) => {
     for (const variant of variants) {
       if (variant === node) continue;
       const candidate = clone(root);
-      setAt(candidate, path, variant);
-      out.push(candidate);
+      out.push(setAt(candidate, path, variant));
     }
     return;
   }
@@ -96,8 +97,7 @@ const collectReductions = (node, path, root, out) => {
   for (const empty of [0, "", null]) {
     if (node === empty) continue;
     const candidate = clone(root);
-    setAt(candidate, path, empty);
-    out.push(candidate);
+    out.push(setAt(candidate, path, empty));
   }
 };
 

@@ -120,3 +120,84 @@ test("fuzzEnv defaults and overrides", () => {
     assert.deepEqual(fuzzEnv(prefix, { defaultSeed: 7, defaultIterations: 9 }), { seed: 16, iterations: 3, only: 1 });
   });
 });
+
+test("fuzzEnv refuses malformed seed, iteration and only values", () => {
+  const prefix = "FUZZ_KIT_BAD_ENV";
+  const malformed = ["-1", "1.5", "abc", "  ", String(Number.MAX_SAFE_INTEGER + 1)];
+  for (const key of ["SEED", "ITERATIONS", "ONLY"]) {
+    for (const value of malformed) {
+      withEnv(prefix, {
+        [`${prefix}_SEED`]: undefined,
+        [`${prefix}_ITERATIONS`]: undefined,
+        [`${prefix}_ONLY`]: undefined,
+        [`${prefix}_${key}`]: value,
+      }, () => {
+        assert.throws(
+          () => fuzzEnv(prefix, { defaultSeed: 1, defaultIterations: 1 }),
+          new RegExp(`${prefix}_${key} must be a non-negative integer`),
+        );
+      });
+    }
+  }
+});
+
+test("runCases refuses an out-of-range _ONLY", () => {
+  const prefix = "FUZZ_KIT_ONLY_RANGE";
+  withEnv(prefix, {
+    [`${prefix}_SEED`]: "1",
+    [`${prefix}_ITERATIONS`]: "3",
+    [`${prefix}_ONLY`]: "3",
+  }, () => {
+    assert.throws(
+      () => runCases(prefix, { defaultSeed: 1, defaultIterations: 3 }, () => {
+        throw new Error("case should not run");
+      }),
+      new RegExp(`${prefix}_ONLY=3 is out of range`),
+    );
+  });
+  withEnv(prefix, {
+    [`${prefix}_SEED`]: "1",
+    [`${prefix}_ITERATIONS`]: "0",
+    [`${prefix}_ONLY`]: "0",
+  }, () => {
+    assert.throws(
+      () => runCases(prefix, { defaultSeed: 1, defaultIterations: 0 }, () => {
+        throw new Error("case should not run");
+      }),
+      new RegExp(`${prefix}_ONLY=0 is out of range`),
+    );
+  });
+});
+
+test("replay command quotes the test path", () => {
+  const prefix = "FUZZ_KIT_REPLAY";
+  const originalArgv1 = process.argv[1];
+  process.argv[1] = "/tmp/a b/test.mjs";
+  try {
+    withEnv(prefix, {
+      [`${prefix}_SEED`]: "1",
+      [`${prefix}_ITERATIONS`]: "1",
+      [`${prefix}_ONLY`]: undefined,
+    }, () => {
+      let error;
+      try {
+        runCases(prefix, { defaultSeed: 1, defaultIterations: 1 }, () => {
+          throw new Error("boom");
+        });
+      } catch (caught) {
+        error = caught;
+      }
+      assert.ok(error);
+      assert.ok(error.message.includes("node --test '/tmp/a b/test.mjs'"));
+    });
+  } finally {
+    process.argv[1] = originalArgv1;
+  }
+});
+
+test("shrink reduces root-level scalar cases", () => {
+  assert.equal(shrink("aaaaaaaa", (s) => typeof s === "string" && s.startsWith("aa")), "aa");
+  assert.equal(shrink(42, (n) => typeof n === "number" && n >= 0), 0);
+  assert.equal(shrink(true, (v) => v === true || v === 0), 0);
+  assert.equal(shrink(null, (v) => v === null || v === 0), 0);
+});
