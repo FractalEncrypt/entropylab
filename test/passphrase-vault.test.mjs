@@ -213,6 +213,131 @@ test("a bullet committed at a collapsed caret is the user's own character and is
   masked(field, vault);
 });
 
+// PR #1027 review (all five reviewers): compositionend could not tell a
+// committed composition of bullets from a cancelled one — over a selection
+// both leave the field showing the mask — so a deliberate bullet committed
+// over a selection was discarded and the vault silently kept the old
+// passphrase. The CompositionEvent's data settles it: on a cancel the
+// browser restores the masked field and the data is empty or the IME's own
+// composing text, never the restored bullets, so data === text (non-empty)
+// proves a commit.
+test("bullets committed over a selection are the user's own text", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "••", cancelable: false, isComposing: true });
+  field.value = "•••"; // two committed bullets replaced the selected one
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "compositionend", data: "••" });
+  assert.equal(vault.text(), "••b");
+  masked(field, vault);
+});
+
+test("a bullet replacing a selected character one for one cannot be told from a cancel and is not taken", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "•", cancelable: false, isComposing: true });
+  field.value = "••"; // identical to the field at compositionstart
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // A cancel of a composing "•" ends the same way, so nothing is guessed in.
+  field.dispatchEvent({ type: "compositionend", data: "•" });
+  assert.equal(vault.text(), "ab");
+  masked(field, vault);
+});
+
+test("a composition cancelled with empty data commits nothing", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.value = "と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // Esc: the browser restores the mask and reports empty data.
+  field.value = VAULT_MASK.repeat(2);
+  field.dispatchEvent({ type: "compositionend", data: "" });
+  assert.equal(vault.text(), "ab");
+  assert.ok(!vault.text().includes(VAULT_MASK), "a mask bullet must never enter the vault");
+  masked(field, vault);
+});
+
+test("a cancel whose data is the IME's own text still commits nothing", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(0, 1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.value = "と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // Esc: the field shows the restored mask; the event still carries the
+  // IME's composing text, which is not what the field holds.
+  field.value = VAULT_MASK.repeat(2);
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "ab");
+  masked(field, vault);
+});
+
+test("an Android-style commit applies the field's text when the event's data differs", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "one", cancelable: false, isComposing: true });
+  field.value = "•one•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // Autocorrect rewrote the word: the event's data is not what the field holds.
+  field.dispatchEvent({ type: "compositionend", data: "on" });
+  assert.equal(vault.text(), "aoneb");
+  masked(field, vault);
+});
+
+// Nemotron 3 Ultra on PR #1027: a composition started in vault mode survived
+// a switch to word mode and back, and its late compositionend was applied to
+// the re-masked field — mask bullets went into the vault. The switch ends
+// any composition.
+test("a compositionend from before a mode switch is ignored", () => {
+  let active = true;
+  const { field, vault, api } = bound(() => active);
+  field.type("words");
+  field.select(2);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.value = "••と•••";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  active = false;
+  api.unmask();
+  assert.equal(field.value, "words");
+  // Setting .value moved the caret to the end of the field.
+  field.select(field.value.length);
+  field.type(" more");
+  active = true;
+  api.mask();
+  assert.equal(vault.text(), "words more");
+  // The browser fires the compositionend the switch interrupted.
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "words more");
+  masked(field, vault);
+});
+
+test("a compositionend that arrives after a blur still commits, and the field is masked again", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.value = "•と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "blur" });
+  // Some browsers fire the compositionend only after the blur. Ignoring it
+  // would leave "と" showing unmasked in the field and missing from the vault.
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "aとb");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives

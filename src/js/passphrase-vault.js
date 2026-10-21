@@ -219,13 +219,28 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     const [start, end] = caret();
     composing = { start, end, before: vault.length, value: field.value };
   });
-  field.addEventListener("compositionend", () => {
+  field.addEventListener("compositionend", (event) => {
     if (!active() || !composing) return;
     const { start, end, before, value: prior } = composing;
     composing = null;
     pending = null;
     const value = field.value, added = value.length - (before - (end - start));
     const text = value.slice(start, start + Math.max(0, added));
+    // A field unchanged since compositionstart committed nothing. (A bullet
+    // that replaces a selected character one for one leaves the field
+    // identical too; that cannot be told from a cancel, so it is not taken:
+    // a mask character never enters the vault on a guess.)
+    if (value === prior || (typeof event.data === "string" && event.data === "")) {
+      render(start);
+      return;
+    }
+    // On a cancel the event's data is empty or the IME's own composing text,
+    // never the restored bullets, so a changed field whose text equals the
+    // data is a commit, even a commit of bullets over a selection.
+    if (typeof event.data === "string" && event.data.length > 0 && event.data === text) {
+      apply(start, end, text, "insertCompositionText");
+      return;
+    }
     // A cancelled composition (Esc, a blur) restores what the field held at
     // compositionstart — the mask — so the text read back is the mask's own
     // bullets where the vault holds the passphrase. Nothing was committed:
@@ -233,10 +248,12 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // committed at a collapsed caret covers no vault text, so it is the
     // user's own character and is kept.
     const maskOverSelection = end > start && text.length > 0 && text === VAULT_MASK.repeat(text.length);
-    if (value === prior || maskOverSelection) {
+    if (maskOverSelection) {
       render(start);
       return;
     }
+    // Android and other IMEs whose event.data differs from the field's text
+    // (e.g. after autocorrect): what the field holds is the commit.
     apply(start, end, text, "insertCompositionText");
   });
 
@@ -293,12 +310,17 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
       field.value = "";
     },
     // Leaving the vault (a mode that edits the field's text itself) and
-    // coming back to it.
+    // coming back to it. Either switch ends any composition: a late
+    // compositionend from before it must be ignored.
     unmask: () => {
+      composing = null;
+      pending = null;
       field.value = vault.text();
       vault.clear();
     },
     mask: () => {
+      composing = null;
+      pending = null;
       vault.setText(field.value);
       render(vault.length);
     },
