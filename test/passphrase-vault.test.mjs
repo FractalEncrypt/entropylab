@@ -511,6 +511,28 @@ test("composing text after an abandonment leaves no stale caret for the next bro
   masked(field, vault);
 });
 
+// DeepSeek V4.1 red-team of this fix: the same stale caret, reached by a
+// composition that began while the field was inactive (word mode), so
+// compositionstart was ignored and no composition is open once it is masked.
+test("a composition begun while inactive leaves no stale caret once the field is masked", () => {
+  let active = false;
+  const { field, vault, api } = bound(() => active);
+  field.value = "ab";
+  field.dispatchEvent({ type: "compositionstart" });
+  active = true;
+  api.mask();
+  field.value = "••と";
+  field.setSelectionRange(3, 3);
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "と", cancelable: false, isComposing: true });
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "ab");
+  field.value = "secret";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(vault.text(), "secret");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives
