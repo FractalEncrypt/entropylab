@@ -492,19 +492,26 @@ export const psbtDiffHtml = (diff, before, after, network, { copyIcon = () => ""
     summary.push(`<p class="psbted-note-warn">Fee (from PSBT-claimed input amounts): ${escapeHtml(formatSats(feeBefore))} → ${escapeHtml(formatSats(feeAfter))}.</p>`);
 
   const sections = [];
+  // Rendered rows and sections are capped at PSBT_RENDER_LIMIT each: a
+  // crafted pair of PSBTs differs in more elements than the DOM survives
+  // (red-team F7). The verdict and the summary lines above still cover every
+  // change; each truncated list notes how many changes were elided.
+  const moreChanges = (count) => `<p class="muted">…and ${count} more changes (not rendered).</p>`;
   const txRows = txDiffRows(diff.changes, before, after, network, copyIcon);
-  if (txRows.length) sections.push(`<section class="psbted-map"><h3>Transaction</h3>${diffTable(txRows)}</section>`);
+  if (txRows.length) sections.push(`<section class="psbted-map"><h3>Transaction</h3>${diffTable(txRows.slice(0, PSBT_RENDER_LIMIT))}${txRows.length > PSBT_RENDER_LIMIT ? moreChanges(txRows.length - PSBT_RENDER_LIMIT) : ""}</section>`);
   const mapSections = (scope, title) => {
     const indexes = [...new Set(diff.changes.filter((change) => change.scope === scope).map((change) => change.index))].sort((a, b) => a - b);
-    for (const index of indexes) {
+    const shown = new Set(indexes.slice(0, PSBT_RENDER_LIMIT));
+    for (const index of shown) {
       const rows = mapDiffRows(diff.changes, scope, index, before, after, network, copyIcon);
-      if (rows.length) sections.push(`<section class="psbted-map"><h3>${title} ${index} key-value map</h3>${diffTable(rows)}</section>`);
+      if (rows.length) sections.push(`<section class="psbted-map"><h3>${title} ${index} key-value map</h3>${diffTable(rows.slice(0, PSBT_RENDER_LIMIT))}${rows.length > PSBT_RENDER_LIMIT ? moreChanges(rows.length - PSBT_RENDER_LIMIT) : ""}</section>`);
     }
+    if (indexes.length > PSBT_RENDER_LIMIT) sections.push(moreChanges(diff.changes.filter((change) => change.scope === scope && !shown.has(change.index)).length));
   };
   mapSections("input-map", "Input");
   mapSections("output-map", "Output");
   const globalRows = mapDiffRows(diff.changes, "global", null, before, after, network, copyIcon);
-  if (globalRows.length) sections.push(`<section class="psbted-map"><h3>Global key-value map</h3>${diffTable(globalRows)}</section>`);
+  if (globalRows.length) sections.push(`<section class="psbted-map"><h3>Global key-value map</h3>${diffTable(globalRows.slice(0, PSBT_RENDER_LIMIT))}${globalRows.length > PSBT_RENDER_LIMIT ? moreChanges(globalRows.length - PSBT_RENDER_LIMIT) : ""}</section>`);
 
   return `<p class="muted">before = the PSBT in the editor · after = the pasted PSBT. Only differences are listed.</p>${summary.join("")}${sections.join("")}`;
 };
@@ -688,7 +695,12 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
   const TXOUT_COLUMNS = { value: "Value (sats)", script: "scriptPubKey" };
 
   const pairRows = (kind, map, mapIndex) => {
+    // Rows are capped at PSBT_RENDER_LIMIT per table: a crafted PSBT passes
+    // the load gates with more pairs in one map than the DOM survives
+    // (red-team F7). The document keeps every pair; the elided count is
+    // noted under the table.
     const rows = map
+      .slice(0, PSBT_RENDER_LIMIT)
       .map((pair, pairIndex) => {
         const locked = kind === "global" && pair.key === "00";
         const note = describePair(pair, network());
@@ -712,11 +724,12 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
     const options = PAIR_TYPES[kind]
       .map(([type, name, hint]) => `<option value="${type}" title="keydata: ${escapeHtml(hint)}">${name}</option>`)
       .join("");
+    const morePairs = map.length > PSBT_RENDER_LIMIT ? `<p class="muted">…and ${map.length - PSBT_RENDER_LIMIT} more pairs (not rendered).</p>` : "";
     return `<table class="psbted-pairs psbted-kv psbted-stack" role="table">
       <thead role="rowgroup"><tr role="row"><th role="columnheader" class="psbted-col-field">${KV_COLUMNS.field}</th><th role="columnheader">${KV_COLUMNS.key}</th><th role="columnheader">${KV_COLUMNS.value}</th><th role="columnheader">${KV_COLUMNS.decoded}</th><th role="columnheader" class="psbted-col-del"></th></tr></thead>
       <tbody role="rowgroup">${rows || `<tr role="row"><td role="cell" colspan="5" class="muted">No pairs in this map.</td></tr>`}</tbody>
     </table>
-    <div class="psbted-add">
+    ${morePairs}<div class="psbted-add">
       <select data-add-type="${kind}:${mapIndex}" aria-label="New pair type">${options}<option value="" title="keydata field takes the full key: one type byte, then keydata">Custom type…</option></select>
       <input data-add-key="${kind}:${mapIndex}" placeholder="keydata (hex)" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="New pair keydata (hex)">
       <input data-add-val="${kind}:${mapIndex}" placeholder="value (hex)" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="New pair value (hex)">

@@ -34,6 +34,21 @@ const escapeHtml = (text) =>
 // rendering stops at the cap, with the elided count noted under the list.
 export const PSBT_RENDER_LIMIT = 500;
 
+// The one capped-list renderer every PSBT view shares: the first
+// PSBT_RENDER_LIMIT items rendered by renderOne, then — when more exist — a
+// single muted line noting how many were elided (n as a plain integer).
+// Analysis, totals and verdicts are computed by the callers over ALL items
+// before this runs; only rendering stops at the cap. app.js passes `line`
+// so the elision text goes through hodlT like its existing input/output
+// lines; the plain modules use the default line built from `noun`.
+export const cappedHtml = (items, renderOne, noun, line) => {
+  const shown = items.slice(0, PSBT_RENDER_LIMIT).map(renderOne).join("");
+  const more = items.length - PSBT_RENDER_LIMIT;
+  if (more <= 0) return shown;
+  const text = line ? line(more) : `…and ${more} more ${noun} (not rendered).`;
+  return shown + `<p class="muted">${text}</p>`;
+};
+
 // One renderer for the whole app: rust-bitcoin's Address::from_script via
 // the entropylab-wasm crate, exactly what the inspector shows — exotic
 // witness programs (off-curve v1 keys, v1 ≠ 32 bytes, v2–v16) get their
@@ -97,14 +112,20 @@ export const witnessProgramNote = (scriptHex) => {
 // The editor summary's notes for those outputs, one per output, each on its
 // own line after the transaction's validity line.
 const NOTE_STYLE = { warn: ["psbted-note-warn", "⚠ "], bad: ["psbted-note-bad", "✕ "], info: ["muted", ""] };
-export const psbtOutputNotesHtml = (doc) => (doc?.tx?.outputs ?? [])
-  .map((output, index) => {
-    const found = witnessProgramNote(output.scriptPubKey);
-    if (!found) return "";
-    const [className, mark] = NOTE_STYLE[found.tone];
-    return `<br><span class="${className}">${mark}${escapeHtml(found.note(index))}</span>`;
-  })
-  .join("");
+export const psbtOutputNotesHtml = (doc) => {
+  // Every output is classified (the analysis covers all of them); only the
+  // rendered notes are capped — a crafted PSBT can carry an undefined
+  // witness program on tens of thousands of outputs (red-team F7).
+  const notes = (doc?.tx?.outputs ?? [])
+    .map((output, index) => {
+      const found = witnessProgramNote(output.scriptPubKey);
+      if (!found) return null;
+      const [className, mark] = NOTE_STYLE[found.tone];
+      return `<br><span class="${className}">${mark}${escapeHtml(found.note(index))}</span>`;
+    })
+    .filter((note) => note !== null);
+  return cappedHtml(notes, (note) => note, "notes");
+};
 
 // Well-known script templates, tagged like a block explorer would, then the
 // undefined witness programs above. Anything else returns null and the box

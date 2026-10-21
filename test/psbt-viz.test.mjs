@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { psbtInspectDoc } from "../src/js/psbt-wasm.js";
 import { psbtVizHtml } from "../src/js/psbt-viz.js";
 import * as vizModule from "../src/js/psbt-viz.js";
+import { comparePsbtDocs } from "../src/js/psbt-diff.js";
+import { psbtDiffHtml } from "../src/js/psbt-editor.js";
 import { addressFromScript } from "../src/js/addresses.js";
 import { MiniDocument } from "./mini-dom.mjs";
 
@@ -588,7 +590,11 @@ const extractAppFunction = (name) => {
 const hodlRenderPsbtForTest = () => {
   const captured = {};
   const stubs = {
-    PSBT_RENDER_LIMIT: 500,
+    PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
+    // The real helper once it exists; the passthrough keeps the harness
+    // runnable on the pre-fix source, so the count assertions below fail on
+    // the claimed reason (uncapped rendering), not on a missing export.
+    cappedHtml: vizModule.cappedHtml ?? ((items, renderOne) => items.map(renderOne).join("")),
     hodlInspectorNetwork: () => "mainnet",
     inspectPsbtInscriptions: () => ({ inputs: [], envelopes: [] }),
     hodlPsbtReferenceVerdict: () => ({ state: "complete", problems: [], unlisted: 0 }),
@@ -609,7 +615,19 @@ const hodlRenderPsbtForTest = () => {
       return declared ? declared.sighash : null;
     },
     hodlSighashLabel: (sighash) => ({ 1: "SIGHASH_ALL", 2: "SIGHASH_NONE", 3: "SIGHASH_SINGLE" }[sighash] ?? `SIGHASH_${sighash}`),
-    hodlPartialSigs: () => [],
+    hodlPartialSigs: (entries) => entries.filter((entry) => entry.type === 0x02).map((entry) => ({ der: entry.der, pubkey: entry.pubkey, sighash: 1, raw: entry.der })),
+    hodlSigParts: () => null,
+    hodlDerRLoose: () => new Uint8Array(32).fill(7),
+    hodlInputScriptCode: () => null,
+    hodlSighashProblems: () => [],
+    hodlPrivForPub: () => null,
+    hodlPrivFromPath: () => null,
+    hodlHex: { encode: (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("") },
+    hodlCompressedPubkey: (pubkey) => pubkey,
+    hodlPsbtMasterFingerprint: () => null,
+    hodlPsbtHd: null,
+    hodlParseAntiExfil: () => null,
+    hodlPsbtRecordNonceInspection: () => {},
     hodlTapSigsParsed: () => [],
     hodlFinalized: () => false,
     hodlAddr: () => "bc1qstub",
@@ -676,8 +694,237 @@ test("the inspector under the render cap renders every section and no elision li
   assert.ok(html.includes("0.00004000 BTC"), "fee 3 × 2,000 − 2 × 1,000 = 4,000 sats");
 });
 
-test("app.js shares the one PSBT_RENDER_LIMIT with the PSBT views (no local duplicate)", () => {
+test("app.js shares the one PSBT_RENDER_LIMIT and cappedHtml with the PSBT views (no local duplicate)", () => {
   const source = readFileSync(join(repoRoot, "src/js/app.js"), "utf8");
-  assert.match(source, /import \{ PSBT_RENDER_LIMIT \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
+  assert.match(source, /import \{ PSBT_RENDER_LIMIT, cappedHtml \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
   assert.doesNotMatch(source, /const PSBT_RENDER_LIMIT =/, "no duplicated local constant");
+});
+
+// --- F7 round 3: the per-element findings that bypassed the render cap -----
+// Round 2 capped the per-element sections, but the per-element findings in
+// the same loops — one warning paragraph per input, one nonce row and one
+// r-value line per signature, one editor note per output, one compare row or
+// section per change, one editor table row per pair — still rendered
+// unboundedly, so a crafted PSBT that passes the 5 MB / 100k-element load
+// gates still hung the tab. Each path below now renders at most
+// PSBT_RENDER_LIMIT elements plus one elision line, while every analysis,
+// count and verdict still covers all elements. The elided counts are
+// arithmetic the test owns: 1,200 − 500 = 700 and 700 − 500 = 200.
+
+test("cappedHtml renders every item under the cap, and caps with one elision line over it", () => {
+  const { cappedHtml, PSBT_RENDER_LIMIT } = vizModule;
+  assert.equal(typeof cappedHtml, "function");
+  const renderOne = (item) => `<i>${item}</i>`;
+  assert.equal(cappedHtml([0, 1, 2], renderOne, "rows"), "<i>0</i><i>1</i><i>2</i>", "under the cap every item renders and no elision line is added");
+  const items = Array.from({ length: PSBT_RENDER_LIMIT + 700 }, (_, index) => index);
+  const capped = cappedHtml(items, renderOne, "rows");
+  assert.equal((capped.match(/<i>/g) || []).length, PSBT_RENDER_LIMIT, "rendered items capped");
+  assert.ok(capped.includes(`<i>${PSBT_RENDER_LIMIT - 1}</i>`), "the last item under the cap renders");
+  assert.ok(!capped.includes(`<i>${PSBT_RENDER_LIMIT}</i>`), "the first item past the cap does not render");
+  assert.ok(capped.includes("700 more rows"), "the elided count appears");
+  // app.js passes the elision line through hodlT; the helper takes it as a callback.
+  assert.ok(cappedHtml(items, renderOne, "rows", (n) => `translated ${n}`).includes("translated 700"), "the caller-supplied line is used");
+});
+
+test("per-input policy warnings are capped at 500 with the elided count, and the analysis still covers every input (F7)", () => {
+  const { render, captured } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(1200, 1);
+  // Every input declares SIGHASH_SINGLE: one policy warning per input.
+  doc.inputs.forEach((map) => map.push({ type: 0x03, sighash: 3 }));
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.equal((html.match(/<p class='psbt-bad'>/g) || []).length, 500, "warning paragraphs capped at 500");
+  assert.ok(html.includes("700 more warnings"), "the elided count appears");
+  assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the policy check still covers all 1,200 inputs");
+  assert.ok(html.includes("0.02399000 BTC"), "fee covers every input: 1,200 × 2,000 − 1,000 sats");
+});
+
+test("nonce analysis rows and r-value lines are capped at 500 with the elided counts (F7)", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(1200, 1);
+  const pubkey = new Uint8Array(33).fill(2);
+  doc.inputs.forEach((map) => map.push({ type: 0x02, pubkey, der: new Uint8Array(72).fill(0x30) }));
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "nonce", { network: "mainnet", transcript: "", record: false });
+  assert.equal((html.match(/<strong>Input \d+<\/strong>/g) || []).length, 500, "nonce rows capped at 500");
+  assert.equal((html.match(/\(input \d+\)/g) || []).length, 500, "r-value lines capped at 500");
+  assert.equal((html.match(/700 more rows/g) || []).length, 2, "the r-value list and the nonce rows each note the elided count");
+});
+
+test("the editor summary's per-output notes are capped at 500 with the elided count (F7)", () => {
+  const doc = syntheticDoc();
+  doc.tx.outputs = Array.from({ length: 700 }, () => ({ value: "1", scriptPubKey: program(2, 32), asm: "" }));
+  const html = vizModule.psbtOutputNotesHtml(doc);
+  assert.equal((html.match(/Output #\d+/g) || []).length, 500, "notes capped at 500");
+  assert.ok(html.includes("200 more notes"), "the elided count appears");
+});
+
+// hodlRenderRawTx is extracted like hodlRenderPsbt above; the stubs are the
+// raw-transaction inspector's own contracts (one extracted signature and one
+// inscription hint per flagged input).
+const hodlRenderRawTxForTest = () => {
+  const stubs = {
+    PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
+    cappedHtml: vizModule.cappedHtml ?? ((items, renderOne) => items.map(renderOne).join("")),
+    hodlInspectorNetwork: () => "mainnet",
+    hodlT: (text, vars) => String(text).replace(/\{(\w+)\}/g, (match, key) => (vars && key in vars ? vars[key] : match)),
+    hodlEscapeHtml: (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    hodlSessionOwnership: () => new Map(),
+    hodlRenderOutputHtml: (output, index) => `<p class='psbt-kv'><strong>Output ${index}</strong></p>`,
+    hodlOwnershipWarning: () => "",
+    hodlHexRev: (txid) => txid,
+    extractEcdsaSignatures: (tx) => tx.inputs.flatMap((input, index) => (input.signature ? [{ input: index, der: input.signature, pubkey: input.pubkey }] : [])),
+    inscriptionHints: (tx) => tx.inputs.flatMap((input, index) => (input.envelope ? [{ input: index, scriptBytes: input.envelope }] : [])),
+    hodlSigParts: () => null,
+    hodlDerRLoose: () => new Uint8Array(32).fill(7),
+    hodlHex: { encode: (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("") },
+    hodlCompressedPubkey: (pubkey) => pubkey,
+    hodlCompareNonces: () => ({ reused: [], possible: [], crossKey: [] }),
+    hodlPsbtRecordNonceInspection: () => {},
+  };
+  const names = Object.keys(stubs);
+  const render = new Function(...names, `${extractAppFunction("hodlRenderRawTx")}; return hodlRenderRawTx;`)(...names.map((name) => stubs[name]));
+  return { render };
+};
+
+const rawTxDoc = (inputCount, { signed = false, envelopes = false } = {}) => ({
+  version: 2,
+  locktime: 0,
+  segwit: false,
+  inputs: Array.from({ length: inputCount }, (_, vout) => ({
+    txid: "11".repeat(32),
+    vout,
+    sequence: 0xffffffff,
+    ...(signed ? { signature: new Uint8Array(72).fill(0x30), pubkey: new Uint8Array(33).fill(2) } : {}),
+    ...(envelopes ? { envelope: 12 } : {}),
+  })),
+  outputs: [{ amount: 1000n, script: new Uint8Array([0x00, 0x14, ...new Array(20).fill(0x22)]) }],
+});
+
+test("the raw-transaction inspector caps inscription hints and r-value lines at 500 with the elided counts (F7)", () => {
+  const { render } = hodlRenderRawTxForTest();
+  const html = render(rawTxDoc(1200, { signed: true, envelopes: true }), new Uint8Array(), "2024-01-01T00:00:00Z", "all", { network: "mainnet", record: false });
+  assert.equal((html.match(/<strong>Input \d+<\/strong>/g) || []).length, 500, "input sections capped at 500");
+  assert.equal((html.match(/Inscription envelope/g) || []).length, 500, "inscription hints capped at 500");
+  assert.ok(html.includes("700 more warnings"), "the hints' elided count appears");
+  assert.equal((html.match(/\(input \d+\)/g) || []).length, 500, "r-value lines capped at 500");
+  assert.ok(html.includes("700 more rows"), "the r-values' elided count appears");
+});
+
+test("a small raw transaction renders every hint and r-value line with no elision line", () => {
+  const { render } = hodlRenderRawTxForTest();
+  const html = render(rawTxDoc(2, { signed: true, envelopes: true }), new Uint8Array(), "2024-01-01T00:00:00Z", "all", { network: "mainnet", record: false });
+  assert.equal((html.match(/Inscription envelope/g) || []).length, 2, "every hint rendered");
+  assert.equal((html.match(/\(input \d+\)/g) || []).length, 2, "every r-value line rendered");
+  assert.ok(!html.includes("(not rendered)"), "no elision line under the cap");
+});
+
+test("the compare view caps transaction-diff rows and notes the elided count, with the analysis covering every change (F7)", () => {
+  const doc = (txid) => ({
+    tx: {
+      version: 2,
+      locktime: 0,
+      inputs: Array.from({ length: 1200 }, (_, vout) => ({ txid, vout, scriptSig: "", sequence: 0xffffffff })),
+      outputs: [],
+    },
+    globals: [],
+    inputs: Array.from({ length: 1200 }, () => []),
+    outputs: [],
+    fee: { known: false },
+  });
+  const before = doc("11".repeat(32)), after = doc("22".repeat(32));
+  const diff = comparePsbtDocs(before, after);
+  assert.equal(diff.changes.length, 1200, "every input's changed txid is analysed");
+  const html = psbtDiffHtml(diff, before, after, "mainnet");
+  assert.equal((html.match(/<tr><td/g) || []).length, 500, "diff rows capped at 500");
+  assert.ok(html.includes("700 more changes"), "the elided count appears");
+});
+
+test("the compare view caps per-map sections and notes the elided count (F7)", () => {
+  const doc = (value) => ({
+    tx: {
+      version: 2,
+      locktime: 0,
+      inputs: Array.from({ length: 1200 }, (_, vout) => ({ txid: "11".repeat(32), vout, scriptSig: "", sequence: 0xffffffff })),
+      outputs: [],
+    },
+    globals: [],
+    inputs: Array.from({ length: 1200 }, () => [{ key: "fc00", value, name: "PSBT_IN_PROPRIETARY", decoded: null }]),
+    outputs: [],
+    fee: { known: false },
+  });
+  const before = doc("aa"), after = doc("bb");
+  const diff = comparePsbtDocs(before, after);
+  assert.equal(diff.changes.length, 1200, "every input map's changed pair is analysed");
+  const html = psbtDiffHtml(diff, before, after, "mainnet");
+  assert.equal((html.match(/key-value map<\/h3>/g) || []).length, 500, "map sections capped at 500");
+  assert.ok(html.includes("700 more changes"), "the elided count appears");
+});
+
+// pairRows is a closure inside initPsbtEditor, so it is extracted from
+// psbt-editor.js source and evaluated with stubs — the same harness pattern
+// as hodlRenderPsbt above. The extractor tracks template literals (including
+// nested ${ … } expressions) so braces inside them are not counted.
+const extractEditorConst = (name) => {
+  const source = readFileSync(join(repoRoot, "src/js/psbt-editor.js"), "utf8");
+  const start = source.indexOf(`const ${name} = `);
+  assert.ok(start >= 0, `${name} not found in psbt-editor.js`);
+  let depth = 0, state = "code", quote = "";
+  const templateDepths = [];
+  for (let i = start; i < source.length; i++) {
+    const char = source[i], next = source[i + 1];
+    if (state === "line") { if (char === "\n") state = "code"; continue; }
+    if (state === "block") { if (char === "*" && next === "/") { state = "code"; i++; } continue; }
+    if (state === "string") {
+      if (char === "\\") { i++; continue; }
+      if (char === quote) { state = "code"; continue; }
+      if (quote === "`" && char === "$" && next === "{") { templateDepths.push(depth); depth++; state = "code"; i++; }
+      continue;
+    }
+    if (char === "/" && next === "/") { state = "line"; i++; continue; }
+    if (char === "/" && next === "*") { state = "block"; i++; continue; }
+    if (char === "'" || char === '"' || char === "`") { state = "string"; quote = char; continue; }
+    if (char === "{") { depth++; continue; }
+    if (char === "}") {
+      depth--;
+      if (templateDepths.length && depth === templateDepths[templateDepths.length - 1]) {
+        templateDepths.pop();
+        state = "string";
+        quote = "`";
+      } else if (depth === 0) {
+        let end = i + 1;
+        while (source[end] === " " || source[end] === "\n") end++;
+        if (source[end] === ";") end++;
+        return source.slice(start, end);
+      }
+    }
+  }
+  throw new Error(`unbalanced braces in ${name}`);
+};
+
+const pairRowsForTest = () => {
+  const stubs = {
+    PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
+    EXPAND_LIMIT: 80,
+    PAIR_TYPES: { global: [["fc", "PSBT_GLOBAL_PROPRIETARY", "prefix len + prefix + subtype + keydata"]], input: [], output: [] },
+    KV_COLUMNS: { field: "Field", key: "Key (hex)", value: "Value (hex)", decoded: "Decoded" },
+    escapeHtml: (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+    cellLabel: () => "",
+    describePair: () => ({ text: "", tone: "" }),
+    pairNoteHtml: () => "",
+    expandableHtml: (text) => String(text),
+    network: () => "mainnet",
+    copyIcon: () => "",
+  };
+  const names = Object.keys(stubs);
+  return new Function(...names, `${extractEditorConst("pairRows")}; return pairRows;`)(...names.map((name) => stubs[name]));
+};
+
+test("the editor's pair tables cap rendered rows per map and note the elided count (F7)", () => {
+  const pairRows = pairRowsForTest();
+  const map = Array.from({ length: 1200 }, (_, index) => ({ key: "fc00", value: index.toString(16), name: "PSBT_GLOBAL_PROPRIETARY", decoded: null }));
+  const html = pairRows("global", map, 0);
+  assert.equal((html.match(/<tr role="row">\s*<td /g) || []).length, 500, "pair rows capped at 500");
+  assert.ok(html.includes("700 more pairs"), "the elided count appears");
+  const small = pairRows("global", map.slice(0, 2), 0);
+  assert.equal((small.match(/<tr role="row">\s*<td /g) || []).length, 2, "every pair renders under the cap");
+  assert.ok(!small.includes("(not rendered)"), "no elision line under the cap");
 });
