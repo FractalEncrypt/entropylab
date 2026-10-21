@@ -148,9 +148,15 @@ var hodlWalletExport = (() => {
   // DescriptorID that disagrees with the one Core recomputes at load
   // (DBErrors::CORRUPT). The fingerprint is hex, so a hardened marker inside
   // the origin is always a path step; the guard accepts h, H and ' alike,
-  // and Core's compat form renders every one of them as '.
+  // and Core's compat form renders every one of them as '. The same
+  // re-rendering prints the fingerprint and a hex Taproot internal key with
+  // HexStr — lowercase — so both are lowercased here and nowhere else:
+  // base58 is case-sensitive, and an xpub can contain hex-looking runs.
   const toCompatForm = (body) =>
-    body.replace(/\[[0-9a-fA-F]{8}(?:\/\d+[h'H]?)*\]/g, (origin) => origin.replace(/\d+[h'H](?=[/\]])/g, (step) => `${step.slice(0, -1)}'`));
+    body
+      .replace(/\[[0-9a-fA-F]{8}(?:\/\d+[h'H]?)*\]/g, (origin) =>
+        origin.slice(0, 9).toLowerCase() + origin.slice(9).replace(/\d+[h'H](?=[/\]])/g, (step) => `${step.slice(0, -1)}'`))
+      .replace(/tr\([0-9a-fA-F]{64},/g, (nums) => `tr(${nums.slice(3, 67).toLowerCase()},`);
 
   const stripChecksum = (descriptor) => {
     const hash = descriptor.lastIndexOf("#");
@@ -379,6 +385,7 @@ var hodlWalletExport = (() => {
   const UNSUPPORTED_DESCRIPTOR_SHAPE = "wallet.dat export: unsupported descriptor shape (supported: pkh(KEY), sh(wpkh(KEY)), wpkh(KEY), tr(KEY), sh/wsh/sh(wsh()) of multi/sortedmulti, tr(NUMS,sortedmulti_a))";
   const INVALID_EXTENDED_KEY = "wallet.dat export: descriptor key is not a valid extended key";
   const INVALID_MULTISIG_THRESHOLD = "wallet.dat export: multisig threshold must be between 1 and the number of keys, and the key count within the script type's limit";
+  const INVALID_PATH_STEP = "wallet.dat export: descriptor path step must be 0 or [1-9][0-9]* (no leading zeros)";
 
   // Throws unless the descriptor is exactly one of the supported shapes with
   // a self-consistent checksum (when one is present) and Base58Check-valid
@@ -389,6 +396,12 @@ var hodlWalletExport = (() => {
     if (hash >= 0 && deps.checksum(body) !== descriptor.slice(hash + 1)) {
       throw new Error(`wallet.dat export: invalid descriptor checksum in ${label} descriptor`);
     }
+    // A path step with a leading zero ("/084h", "/00/*") parses in Core
+    // (ParseUInt32) but its compat form prints the parsed uint32 without the
+    // zeros, so the stored DescriptorID would disagree with the one Core
+    // recomputes at load. The app never writes such a step; refuse it. A
+    // step is 0 or [1-9][0-9]*, and "/" never appears outside a path.
+    if (/\/0\d/.test(body)) throw new Error(INVALID_PATH_STEP);
     const keys = [];
     let matched = SINGLE_SIG_SHAPES.some((shape) => {
       const key = body.match(shape);

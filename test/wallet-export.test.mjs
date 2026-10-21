@@ -1448,3 +1448,110 @@ test("multisig thresholds and key counts outside Core's limits fail closed", () 
   assert.ok(buildWalletRecords(msigWallet("p2wsh", wshBody(20)), false, deps, 0).length > 0);
   assert.ok(buildWalletRecords(msigWallet("p2sh", shBody(15)), false, deps, 0).length > 0);
 });
+
+// PR1034-4: Core's compat form re-renders the key origin from parsed bytes,
+// so the fingerprint prints with HexStr — lowercase — exactly as the h/H/'
+// markers re-render as '. toCompatForm rewrote only the markers, so an
+// uppercase-hex fingerprint hashed a DescriptorID Core recomputes from the
+// lowercase spelling, and loadwallet failed with "descriptor ID calculated
+// by the wallet differs from the one in DB" (DBErrors::CORRUPT).
+test("descriptor ids equal Core's compat-form hash for uppercase-hex fingerprints", () => {
+  const xpub = msigNode(0).publicExtendedKey;
+  const walletFor = (origin) => {
+    const body = `wpkh(${origin}${xpub}/0/*)`;
+    return {
+      kind: "hd",
+      network: "mainnet",
+      accounts: [{ def: { id: "bip84" }, receiveDescriptor: `${body}#${descriptorChecksum(body)}`, changeDescriptor: null }],
+    };
+  };
+  for (const [origin, compatOrigin] of [
+    ["[ABCDEF01/84h/0h/0h]", "[abcdef01/84'/0'/0']"],
+    ["[AbCdEf01/84h/0h/0h]", "[abcdef01/84'/0'/0']"],
+    ["[abcdef01/84h/0h/0h]", "[abcdef01/84'/0'/0']"],
+  ]) {
+    const records = moduleRecords(walletFor(origin), false, REF_CREATION_TIME);
+    const ids = descriptorIds(records);
+    assert.equal(ids.length, 1, `one descriptor record for origin ${origin}`);
+    // Core's normalisation rule, applied independently of the module: the
+    // fingerprint re-renders lowercase, every hardened step as ', key
+    // material untouched — so every spelling of the fingerprint hashes the
+    // same DescriptorID.
+    const compat = `wpkh(${compatOrigin}${xpub}/0/*)`;
+    const expectedId = bytesToHex(sha256(new TextEncoder().encode(`${compat}#${descriptorChecksum(compat)}`)));
+    assert.equal(ids[0], expectedId, `DescriptorID for origin ${origin} must be Core's compat-form hash`);
+  }
+});
+
+// PR1034-4: the same HexStr re-rendering lowercases a hex Taproot internal
+// key: tr(<64 hex>,sortedmulti_a(...)) written with uppercase hex hashed a
+// DescriptorID Core recomputes from the lowercase spelling.
+test("descriptor ids equal Core's compat-form hash for an uppercase-hex Taproot internal key", () => {
+  const { buildWalletRecords } = loadModule();
+  const withChecksum = (body) => `${body}#${descriptorChecksum(body)}`;
+  const bodyFor = (nums) => `tr(${nums},sortedmulti_a(2,${msigTrKey(0)}/0/*,${msigTrKey(1)}/0/*,${msigTrKey(2)}/0/*))`;
+  const walletFor = (nums) => ({
+    kind: "msig",
+    network: "mainnet",
+    script: "p2tr",
+    m: 2,
+    n: 3,
+    receiveDescriptor: withChecksum(bodyFor(nums)),
+  });
+  const idOf = (nums) => {
+    const records = buildWalletRecords(walletFor(nums), false, deps, 0);
+    const ids = records
+      .filter(([key]) => key[0] === 16 && new TextDecoder().decode(key.slice(1, 17)) === "walletdescriptor")
+      .map(([key]) => bytesToHex(key.slice(17)));
+    assert.equal(ids.length, 1, "one descriptor record");
+    return ids[0];
+  };
+  // Core's normalisation rule, applied independently of the module: the
+  // x-only internal key re-renders lowercase, every hardened step as '.
+  const compatKey = (account) => `[${msigFingerprint}/86'/0'/${account}']${msigTrNode(account).publicExtendedKey}`;
+  const compat = `tr(${NUMS},sortedmulti_a(2,${compatKey(0)}/0/*,${compatKey(1)}/0/*,${compatKey(2)}/0/*))`;
+  const expectedId = bytesToHex(sha256(new TextEncoder().encode(`${compat}#${descriptorChecksum(compat)}`)));
+  assert.equal(idOf(NUMS.toUpperCase()), expectedId, "an uppercase-hex internal key must hash Core's compat form");
+  assert.equal(idOf(NUMS), expectedId, "the lowercase spelling hashes the same DescriptorID");
+});
+
+// PR1034-4: Core's parser accepts a path step with leading zeros
+// (ParseUInt32("084") = 84) but its compat form prints the parsed uint32
+// without them, so the stored DescriptorID would disagree with the one Core
+// recomputes at load. The app never writes such a step; the guard refuses it
+// — a step is 0 or [1-9][0-9]* — naming no key material.
+test("path steps with leading zeros fail closed", () => {
+  const { buildWalletRecords } = loadModule();
+  const xpub = msigNode(0).publicExtendedKey;
+  const withChecksum = (body) => `${body}#${descriptorChecksum(body)}`;
+  const hdWallet = (receiveDescriptor) => ({
+    kind: "hd",
+    network: "mainnet",
+    accounts: [{ def: { id: "bip84" }, receiveDescriptor, changeDescriptor: null }],
+  });
+  const msigWallet = (receiveDescriptor) => ({
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    m: 1,
+    n: 1,
+    receiveDescriptor,
+  });
+  for (const [shape, wallet] of [
+    ["origin step", hdWallet(withChecksum(`wpkh([00000000/084h/0h/0h]${xpub}/0/*)`))],
+    ["key path step", hdWallet(withChecksum(`wpkh([00000000/84h/0h/0h]${xpub}/00/*)`))],
+    ["multisig co-signer path step", msigWallet(withChecksum(`wsh(sortedmulti(1,${msigKey(0)}/00/*))`))],
+  ]) {
+    let error = null;
+    try {
+      buildWalletRecords(wallet, false, deps, 0);
+    } catch (caught) {
+      error = caught;
+    }
+    assert.ok(error instanceof Error, `${shape}: must throw instead of building a wallet.dat`);
+    assert.match(error.message, /leading zero/, `${shape}: the error names the refused step shape`);
+    assert.ok(!error.message.includes(xpub), `${shape}: the error must not contain key material`);
+  }
+  // Canonical steps — including a bare 0 — still export.
+  assert.ok(buildWalletRecords(hdWallet(withChecksum(`wpkh([00000000/84h/0h/0h]${xpub}/0/*)`)), false, deps, 0).length > 0);
+});

@@ -158,19 +158,32 @@ const fuzzDeps = {
 
 // --- independent verification ------------------------------------------------
 
-// Compat form, reimplemented as a character scan (the module uses a single
-// regex): inside each [fingerprint/path] origin, rewrite every hardened step
-// marker h to '. Anything else in the body is copied verbatim.
+// Compat form, reimplemented as a character scan (the module uses regexes):
+// inside each [fingerprint/path] origin, lowercase the fingerprint and
+// rewrite every hardened step marker h to '; a hex Taproot internal key
+// (tr(<64 hex>,) is lowercased too. Core's compat form re-renders every
+// parsed element, and HexStr prints lowercase — the reference must apply
+// that rule on its own, or the corpus would verify the module against
+// itself. Anything else in the body is copied verbatim.
 const referenceCompatForm = (body) => {
   let out = "";
   let cursor = 0;
   while (cursor < body.length) {
     const open = body.indexOf("[", cursor);
+    const trAt = body.indexOf("tr(", cursor);
+    if (trAt >= 0 && (open < 0 || trAt < open)) {
+      const nums = body.slice(trAt + 3, trAt + 67);
+      if (nums.length === 64 && /^[0-9a-fA-F]{64}$/.test(nums) && body[trAt + 67] === ",") {
+        out += body.slice(cursor, trAt + 3) + nums.toLowerCase();
+        cursor = trAt + 67;
+        continue;
+      }
+    }
     if (open < 0) return out + body.slice(cursor);
     const close = body.indexOf("]", open);
     if (close < 0) return out + body.slice(cursor);
     const [fingerprint, ...steps] = body.slice(open + 1, close).split("/");
-    out += body.slice(cursor, open) + "[" + fingerprint;
+    out += body.slice(cursor, open) + "[" + fingerprint.toLowerCase();
     for (const step of steps) out += "/" + (step.endsWith("h") ? step.slice(0, -1) + "'" : step);
     out += "]";
     cursor = close + 1;
@@ -567,6 +580,23 @@ const CREATION_TIMES = [0, 1, 1700000000, 0xffffffff];
 }
 
 // --- tests --------------------------------------------------------------------
+
+test("the reference compat form re-renders like Core, independently of the module", () => {
+  // Core's Descriptor::ToString(true) re-renders every parsed element: the
+  // origin fingerprint and a hex Taproot internal key print via HexStr
+  // (lowercase), and every hardened step prints with '. Base58 key text is
+  // re-encoded untouched, so its case must survive verbatim.
+  const nums = "50929B74C1A04954B78B4B6035E97A5E078A5A0F28EC96D547BFEE9ACE803AC0";
+  assert.equal(
+    referenceCompatForm("wpkh([ABCDEF01/84h/0h/0h]xpub/0/*)"),
+    "wpkh([abcdef01/84'/0'/0']xpub/0/*)",
+  );
+  assert.equal(
+    referenceCompatForm(`tr(${nums},sortedmulti_a(2,[AbCdEf01/86h/0h/0h]xpub/0/*))`),
+    `tr(${nums.toLowerCase()},sortedmulti_a(2,[abcdef01/86'/0'/0']xpub/0/*))`,
+  );
+  assert.equal(referenceCompatForm("wpkh([AbCdEf01/0h]xPubZz/0/*)"), "wpkh([abcdef01/0']xPubZz/0/*)");
+});
 
 test("every fuzzed wallet's records independently verify (Core's load check included)", () => {
   for (const { wallet, includePrivate, creationTime, label } of corpus) {
