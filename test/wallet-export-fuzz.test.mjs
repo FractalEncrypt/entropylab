@@ -14,9 +14,10 @@
 //     recomputes at load (SHA-256 over the compat form + checksum) — this is
 //     the check LoadDescriptorWalletRecords enforces, so matching it is what
 //     "the wallet loads" means;
-//   - the stored descriptor string is the generator's input, key material
-//     untouched, plus the checksum Core's loader requires when the generator
-//     omitted one;
+//   - the stored descriptor string is the generator's input in Core's
+//     canonical form — SLIP-132 prefixes re-versioned to xpub/tpub, key
+//     material untouched — plus the checksum Core's loader requires when the
+//     generator omitted one;
 //   - descriptor cache bodies equal an independent BIP32 CKDpub derivation;
 //   - private key records carry a Core-form DER key whose secret, public key,
 //     and key hash all agree;
@@ -48,6 +49,7 @@ import {
   sha256,
   sqliteReadBack,
 } from "./wallet-export-harness.mjs";
+import { canonicalizeWatchDescriptor } from "../src/js/core-importdescriptors.js";
 
 // --- deterministic randomness ------------------------------------------------
 
@@ -153,6 +155,11 @@ const memoize = (fn, keyFn) => {
 };
 const fuzzDeps = {
   ...deps,
+  // Round 5: every unit's watch-only descriptor is canonicalized, single-sig
+  // included, so the fuzz deps carry the canonicalizer like the app's
+  // hodlWalletDatDeps does; the expected stored form is computed by the
+  // independent referenceCanonicalDescriptor below.
+  canonicalizeDescriptor: (descriptor) => canonicalizeWatchDescriptor(descriptor, { decode: b58checkDecode, encode: b58checkEncode }),
   deriveBranchBody: memoize(deriveBranchBody, (xpub, branch) => `${xpub}:${branch}`),
   publicKeyForPrivate: memoize(publicKeyForPrivate, (secret) => bytesToHex(secret)),
 };
@@ -190,6 +197,32 @@ const referenceCompatForm = (body) => {
     cursor = close + 1;
   }
   return out;
+};
+
+// Core's canonical stored form, reimplemented independently of the module
+// (and of core-importdescriptors.js): Bitcoin Core's descriptor parser
+// accepts only xpub/tpub, so every SLIP-132 prefix is re-versioned — the
+// testnet families (upub/vpub) to tpub, everything else to xpub — and the
+// checksum recomputed over the rewritten body. A descriptor that already
+// carries only xpub/tpub and a checksum is returned unchanged, so the
+// byte-identical xpub exports stay pinned; a checksum-less input gains the
+// checksum Core's loader requires (round 4, item 2).
+const SLIP_PUB_REFERENCE = /((?:ypub|upub|zpub|vpub|Ypub|Zpub|Upub|Vpub)[1-9A-HJ-NP-Za-km-z]{90,})/g;
+const referenceCanonicalDescriptor = (descriptor) => {
+  const hash = descriptor.lastIndexOf("#");
+  const body = hash >= 0 ? descriptor.slice(0, hash) : descriptor;
+  let changed = false;
+  const rewritten = body.replace(SLIP_PUB_REFERENCE, (key) => {
+    const raw = b58checkDecode(key).slice();
+    const version = /^[uvUV]/.test(key) ? 0x043587cf : 0x0488b21e;
+    raw[0] = (version >>> 24) & 255;
+    raw[1] = (version >>> 16) & 255;
+    raw[2] = (version >>> 8) & 255;
+    raw[3] = version & 255;
+    changed = true;
+    return b58checkEncode(raw);
+  });
+  return changed || hash < 0 ? `${rewritten}#${descriptorChecksum(rewritten)}` : descriptor;
 };
 
 const utf8 = (text) => new TextEncoder().encode(text);
@@ -352,22 +385,29 @@ const verifyWalletRecords = (label, wallet, includePrivate, creationTime) => {
   // Descriptor records.
   for (const unit of units) {
     const at = `${label} ${unit.descriptor.slice(0, 24)}…/${unit.internal ? 1 : 0}`;
+    // Round 5: every unit's watch-only descriptor is stored in Core's
+    // canonical xpub/tpub form — a SLIP-132 prefix on a single-sig
+    // descriptor is re-versioned too (Core's parser accepts only xpub/tpub),
+    // and a checksum-less input gains the checksum Core's loader requires
+    // (round 4, item 2). The expected form comes from the independent
+    // reference canonicalizer above, never from the module.
+    const expectedStored = referenceCanonicalDescriptor(unit.descriptor);
     // The exact check Bitcoin Core runs at load: the record key must be the
     // DescriptorID of the compat form of the stored descriptor.
-    const id = referenceDescriptorId(unit.descriptor);
+    const id = referenceDescriptorId(expectedStored);
     const descriptorRecord = singles.get(`walletdescriptor:${id}`);
     assert.ok(descriptorRecord, `${at}: walletdescriptor keyed by Core's DescriptorID`);
     const [textLength, textOffset] = readCompactSize(descriptorRecord.value, 0);
     const stored = new TextDecoder().decode(descriptorRecord.value.slice(textOffset, textOffset + textLength));
-    // Core's wallet loader parses every stored descriptor with
-    // require_checksum = true, so a checksum-less input is stored with the
-    // module's checksum appended (round 4, item 2): the stored string is the
-    // input body plus its checksum, key material untouched.
-    const expectedStored = unit.descriptor.lastIndexOf("#") >= 0
-      ? unit.descriptor
-      : `${unit.descriptor}#${descriptorChecksum(unit.descriptor)}`;
-    assert.equal(stored, expectedStored, `${at}: stored descriptor is the input with the checksum Core requires`);
-    assert.ok(stored.includes(unit.xpub), `${at}: stored descriptor keeps the xpub verbatim`);
+    assert.equal(stored, expectedStored, `${at}: stored descriptor is the canonical xpub/tpub form with the checksum Core requires`);
+    // Re-versioning touches only the 4 SLIP-132 version bytes: the key
+    // material the cache records derive from is kept verbatim.
+    const canonicalKey = expectedStored.match(XPUB_PATTERN)?.[1];
+    assert.ok(
+      unit.xpub && canonicalKey &&
+        bytesToHex(b58checkDecode(unit.xpub).slice(4)) === bytesToHex(b58checkDecode(canonicalKey).slice(4)),
+      `${at}: re-versioning keeps the key material verbatim`,
+    );
     assert.ok(!stored.includes("'"), `${at}: no apostrophe leaked into the stored descriptor`);
     let cursor = textOffset + textLength;
     assert.equal(u64leAt(descriptorRecord.value, cursor), creationTime, `${at}: creation time`);
@@ -383,8 +423,8 @@ const verifyWalletRecords = (label, wallet, includePrivate, creationTime) => {
     assert.equal(bodyLength, 74, `${at}: cache body length`);
     assert.equal(
       bytesToHex(cache.value.slice(bodyOffset, bodyOffset + 74)),
-      bytesToHex(referenceCacheBody(unit.descriptor, unit.xpub)),
-      `${at}: cache body is the independently derived parent of the descriptor's wildcard`,
+      bytesToHex(referenceCacheBody(expectedStored, canonicalKey)),
+      `${at}: cache body is the independently derived parent of the stored descriptor's wildcard`,
     );
     assert.equal(cache.value.length, bodyOffset + 74, `${at}: cache value length`);
 

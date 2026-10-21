@@ -350,7 +350,21 @@ var hodlWalletExport = (() => {
       return false;
     }
   };
-  const walletDatSupported = (wallet) => tailsSupported(wallet);
+  // The wallet.dat control must not render for a wallet the shape guard
+  // would refuse only on click. The gating path has no crypto injected, so
+  // the guard runs on the descriptor text alone: the checksum and
+  // Base58Check key checks stay on the export path, which carries deps.
+  const walletDatSupported = (wallet) => {
+    if (!tailsSupported(wallet)) return false;
+    try {
+      for (const unit of walletDescriptorUnits(wallet, false)) {
+        assertDescriptorShape(unit.descriptor, "watch-only", null, unit.type, Boolean(unit.multiKey));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
   // The BIP 388 builder rewrites only "/0/*" and "/1/*".
   const bip388Supported = (wallet) => tailsSupported(wallet, [0, 1]);
 
@@ -372,9 +386,10 @@ var hodlWalletExport = (() => {
     `^tr\\(${KEY_EXPRESSION_PATTERN}\\)$`,
   ].map((source) => new RegExp(source));
   // Bitcoin Core's ParseMulti refuses a threshold outside 1..n and caps the
-  // key count by script type: at most 20 keys in wsh (and sortedmulti_a), at
-  // most 15 in sh (the 520-byte push limit). Anything else would write a
-  // wallet.dat Core refuses to load.
+  // key count by script type: at most 20 keys in wsh, at most 15 in sh (the
+  // 520-byte push limit). Taproot's multi_a has no CHECKMULTISIG limit —
+  // Core caps it at MAX_PUBKEYS_PER_MULTI_A = 999 — but 20 is kept here
+  // deliberately: it fails closed, and the app never builds a wider policy.
   const MULTISIG_SHAPES = [
     { source: String.raw`^sh\((?:sorted)?multi\((\d+),(.*)\)\)$`, maxKeys: 15 },
     { source: String.raw`^wsh\((?:sorted)?multi\((\d+),(.*)\)\)$`, maxKeys: 20 },
@@ -388,6 +403,7 @@ var hodlWalletExport = (() => {
   const INVALID_PATH_STEP = "wallet.dat export: descriptor path step must be 0 or [1-9][0-9]* (no leading zeros)";
   const INVALID_PATH_STEP_MAGNITUDE = "wallet.dat export: unsupported descriptor path shape (a step of 2^31 or more)";
   const SCRIPT_TYPE_MISMATCH = "wallet.dat export: descriptor script type does not match the wallet's declared output type";
+  const WALLET_KIND_MISMATCH = "wallet.dat export: descriptor family does not match the wallet kind (HD accounts carry single-signature descriptors, multisig wallets multisig descriptors)";
   const INVALID_TAPROOT_NUMS = "wallet.dat export: Taproot internal key must be the BIP 341 NUMS point";
   // BIP 341's NUMS point H, the only Taproot internal key the app writes.
   // The module cannot check the curve validity of an arbitrary x-only key,
@@ -409,13 +425,17 @@ var hodlWalletExport = (() => {
   // Throws unless the descriptor is exactly one of the supported shapes with
   // a self-consistent checksum (when one is present), Base58Check-valid
   // extended keys, path steps Core can parse, the wrapper producing the
-  // output type the wallet declared, and — for the Taproot multisig shape —
-  // BIP 341's NUMS point as the internal key; the path after each key is
-  // placed by descriptorKeyTail.
-  const assertDescriptorShape = (descriptor, label, deps, type) => {
+  // output type the wallet declared, the descriptor family matching the
+  // wallet kind, and — for the Taproot multisig shape — BIP 341's NUMS
+  // point as the internal key; the path after each key is placed by
+  // descriptorKeyTail. deps carries the checksum and Base58Check
+  // implementations; without it (the button-gating path, which injects no
+  // crypto) the checksum and key-length checks are skipped and only the
+  // descriptor text is validated.
+  const assertDescriptorShape = (descriptor, label, deps, type, multisig) => {
     const hash = descriptor.lastIndexOf("#");
     const body = hash >= 0 ? descriptor.slice(0, hash) : descriptor;
-    if (hash >= 0 && deps.checksum(body) !== descriptor.slice(hash + 1)) {
+    if (hash >= 0 && deps && deps.checksum(body) !== descriptor.slice(hash + 1)) {
       throw new Error(`wallet.dat export: invalid descriptor checksum in ${label} descriptor`);
     }
     // A path step with a leading zero ("/084h", "/00/*") parses in Core
@@ -436,6 +456,7 @@ var hodlWalletExport = (() => {
       if (key) keys.push(key[1]);
       return Boolean(key);
     });
+    const singleSig = matched;
     if (!matched) {
       matched = MULTISIG_SHAPES.some(({ pattern, maxKeys }) => {
         const list = body.match(pattern);
@@ -456,6 +477,13 @@ var hodlWalletExport = (() => {
       });
     }
     if (!matched) throw new Error(UNSUPPORTED_DESCRIPTOR_SHAPE);
+    // The descriptor family must match the wallet kind: an HD account is
+    // single-signature, a multisig wallet is not. A wsh(sortedmulti(...)) on
+    // a bip84 account passes the wrapper check below (wsh is bech32, like
+    // wpkh) but would watch a different policy than the app showed — and the
+    // writer would cache only its first key; a wpkh(...) on a multisig
+    // wallet is the same swap in reverse.
+    if (singleSig === Boolean(multisig)) throw new Error(WALLET_KIND_MISMATCH);
     // The wrapper must produce the output type the wallet declared: a p2wsh
     // multisig exporting an sh(multi(...)) descriptor, or a bip84 account
     // exporting pkh(...), would be filed under an activeexternalspk type
@@ -466,6 +494,9 @@ var hodlWalletExport = (() => {
     // arbitrary x-only key, and the app only ever writes H.
     const nums = body.match(/^tr\(([0-9a-fA-F]{64}),/);
     if (nums && nums[1].toLowerCase() !== TAPROOT_NUMS_POINT) throw new Error(INVALID_TAPROOT_NUMS);
+    // The Base58Check decodes need deps; the gating path (no crypto
+    // injected) stops at the text checks above.
+    if (!deps) return;
     for (const key of keys) {
       let raw = null;
       try {
@@ -484,7 +515,10 @@ var hodlWalletExport = (() => {
   };
 
   // Builds the exact key/value rows of the `main` table.
-  // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate }
+  // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate,
+  //           canonicalizeDescriptor? } — the optional canonicalizer re-versions
+  //           SLIP-132 prefixes to the xpub/tpub Core parses; without it such
+  //           keys are refused.
   const buildWalletRecords = (wallet, includePrivate, deps, creationTime) => {
     const network = NETWORKS[wallet?.network];
     if (!network) throw new Error(`wallet.dat export: unknown network ${wallet?.network}`);
@@ -495,8 +529,8 @@ var hodlWalletExport = (() => {
     // private, must be exactly one of the shapes this writer can place, and
     // its wrapper must produce the output type the wallet declared.
     for (const unit of units) {
-      assertDescriptorShape(unit.descriptor, "watch-only", deps, unit.type);
-      if (unit.privateDescriptor) assertDescriptorShape(unit.privateDescriptor, "spending", deps, unit.type);
+      assertDescriptorShape(unit.descriptor, "watch-only", deps, unit.type, Boolean(unit.multiKey));
+      if (unit.privateDescriptor) assertDescriptorShape(unit.privateDescriptor, "spending", deps, unit.type, Boolean(unit.multiKey));
     }
 
     const records = [];
@@ -524,8 +558,13 @@ var hodlWalletExport = (() => {
 
     const seenActive = new Set();
     for (const unit of units) {
-      let stored = unit.descriptor; // public (watch-only) form with checksum, exactly as Core stores it
-      if (unit.multiKey && typeof deps.canonicalizeDescriptor === "function") stored = deps.canonicalizeDescriptor(stored);
+      // Every unit's watch-only descriptor is stored in canonical form:
+      // Bitcoin Core's descriptor parser accepts only xpub/tpub, so a
+      // SLIP-132 prefix (ypub/zpub/…) on a single-sig descriptor must be
+      // re-versioned too, not only a multisig's — or the wallet.dat fails
+      // to load. The DescriptorID below is computed from this stored form.
+      let stored = unit.descriptor;
+      if (typeof deps.canonicalizeDescriptor === "function") stored = deps.canonicalizeDescriptor(stored);
       // A watch-only export must never carry private key material: any
       // extended private key in a stored descriptor, single-sig or multisig,
       // is refused (spending material travels only in walletdescriptorkey).
@@ -548,8 +587,8 @@ var hodlWalletExport = (() => {
 
       const pubs = unit.multiKey ? extractExtendedPubs(stored) : [extractExtendedKey(stored, "watch-only")];
       if (!pubs.length) throw new Error("wallet.dat export: no extended key found in watch-only descriptor");
-      if (unit.multiKey && pubs.some((key) => !/^[xt]pub/.test(key))) {
-        throw new Error("wallet.dat export: multisig descriptors need the Base58Check codec to rewrite as xpub/tpub");
+      if (pubs.some((key) => !/^[xt]pub/.test(key))) {
+        throw new Error("wallet.dat export: descriptors need the Base58Check codec to rewrite SLIP-132 keys as xpub/tpub");
       }
       pubs.forEach((xpub, index) => {
         const tail = descriptorKeyTail(stored, xpub);

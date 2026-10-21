@@ -2139,3 +2139,123 @@ test("path steps of 2^31 or more fail closed", () => {
   // The boundary is Core's own: a step just below 2^31 still exports.
   assert.ok(buildWalletRecords(hdWallet(withChecksum(`wpkh([00000000/2147483647h]${xpub}/0/*)`)), false, deps, 0).length > 0);
 });
+
+// Round 5, item 1 (single-sig SLIP-132): the shape guard's key pattern
+// accepts ypub/zpub/upub/vpub, but only multisig units were canonicalized
+// (`if (unit.multiKey && ...)`), so a single-sig descriptor carrying a zpub
+// was stored verbatim — Bitcoin Core's descriptor parser accepts only
+// xpub/tpub, and loadwallet refused the file. Every unit's watch-only
+// descriptor is now stored in canonical form, and the DescriptorID is
+// computed from that stored form.
+test("a single-sig zpub is rewritten to xpub before it is stored", () => {
+  const { buildWalletRecords } = loadModule();
+  const raw = b58checkDecode(msigNode(0).publicExtendedKey).slice();
+  raw[0] = 0x04; raw[1] = 0xb2; raw[2] = 0x47; raw[3] = 0x46;
+  const zpub = b58checkEncode(raw);
+  assert.match(zpub, /^zpub/);
+  const xpub = msigNode(0).publicExtendedKey;
+  const slipBody = `wpkh([${msigFingerprint}/84h/0h/0h]${zpub}/0/*)`;
+  const wallet = {
+    kind: "hd",
+    network: "mainnet",
+    accounts: [{ def: { id: "bip84" }, receiveDescriptor: `${slipBody}#${descriptorChecksum(slipBody)}`, changeDescriptor: null }],
+  };
+  // Without the Base58Check codec in deps the SLIP-132 key cannot be
+  // rewritten, so the export is refused instead of storing a zpub verbatim.
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /Base58Check codec/);
+  const records = buildWalletRecords(wallet, false, msigDeps, 0);
+  const descriptorRecord = records.find(([key]) => key[0] === 16 && new TextDecoder().decode(key.slice(1, 17)) === "walletdescriptor");
+  assert.ok(descriptorRecord, "one descriptor record");
+  // Core's DescriptorID, computed independently of the module from the
+  // canonical xpub form: SHA-256 over the compat form plus its checksum.
+  const canonicalBody = `wpkh([${msigFingerprint}/84h/0h/0h]${xpub}/0/*)`;
+  const compat = `wpkh([${msigFingerprint}/84'/0'/0']${xpub}/0/*)`;
+  const expectedId = bytesToHex(sha256(new TextEncoder().encode(`${compat}#${descriptorChecksum(compat)}`)));
+  assert.equal(bytesToHex(descriptorRecord[0].slice(17)), expectedId, "the record key is Core's DescriptorID of the canonical form");
+  const value = Buffer.from(descriptorRecord[1]);
+  assert.ok(value[0] < 253, "the descriptor takes a one-byte CompactSize length");
+  assert.equal(
+    new TextDecoder().decode(value.subarray(1, 1 + value[0])),
+    `${canonicalBody}#${descriptorChecksum(canonicalBody)}`,
+    "the stored descriptor is the canonical xpub form",
+  );
+  // An xpub descriptor is untouched by the canonicalizer: with or without
+  // it in deps, the records are byte-identical.
+  const xpubWallet = {
+    kind: "hd",
+    network: "mainnet",
+    accounts: [{ def: { id: "bip84" }, receiveDescriptor: `${canonicalBody}#${descriptorChecksum(canonicalBody)}`, changeDescriptor: null }],
+  };
+  assert.deepEqual(
+    buildWalletRecords(xpubWallet, false, deps, 0).map(([key, row]) => [bytesToHex(key), bytesToHex(row)]),
+    buildWalletRecords(xpubWallet, false, msigDeps, 0).map(([key, row]) => [bytesToHex(key), bytesToHex(row)]),
+    "an xpub descriptor exports byte-identically without the canonicalizer",
+  );
+});
+
+// Round 5, item 2 (wallet kind vs descriptor family): the guard tied the
+// wrapper to the output type but not to the wallet kind, so an HD account
+// carrying wsh(sortedmulti(...)) of the same output type (wsh is bech32,
+// like wpkh) passed — and the writer cached only the first co-signer's key —
+// while a multisig wallet carrying wpkh(...) passed in reverse, exporting a
+// single-signature wallet.dat under an "msig-MofN" filename.
+test("the descriptor family must match the wallet kind", () => {
+  const { buildWalletRecords } = loadModule();
+  const xpubA = msigNode(0).publicExtendedKey;
+  const xpubB = msigNode(1).publicExtendedKey;
+  const withChecksum = (body) => `${body}#${descriptorChecksum(body)}`;
+  const hdWithMultisig = {
+    kind: "hd",
+    network: "mainnet",
+    accounts: [{
+      def: { id: "bip84" },
+      receiveDescriptor: withChecksum(`wsh(sortedmulti(2,${xpubA}/0/*,${xpubB}/0/*))`),
+      changeDescriptor: null,
+    }],
+  };
+  assert.throws(() => buildWalletRecords(hdWithMultisig, false, deps, 0), /wallet kind|descriptor family/);
+  const msigWithSingleSig = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    m: 2,
+    n: 3,
+    receiveDescriptor: withChecksum(`wpkh(${xpubA}/0/*)`),
+  };
+  assert.throws(() => buildWalletRecords(msigWithSingleSig, false, deps, 0), /wallet kind|descriptor family/);
+});
+
+// Round 5, item 3 (support checks): walletDatSupported only ran
+// tailsSupported, so the app offered the wallet.dat control for wallets the
+// shape guard refuses — the control failed only on click. The gating path
+// injects no crypto, so the guard runs on the descriptor text alone there.
+test("walletDatSupported returns false for a wallet the shape guard refuses", () => {
+  const { walletDatSupported, buildWalletRecords } = loadModule();
+  const xpub = msigNode(0).publicExtendedKey;
+  const withChecksum = (body) => `${body}#${descriptorChecksum(body)}`;
+  // Round 4's script-type mismatch: the tail parses, so tailsSupported alone
+  // says yes, but the guard refuses the export.
+  const scriptTypeMismatch = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    m: 1,
+    n: 1,
+    receiveDescriptor: withChecksum(`sh(multi(1,${xpub}/0/*))`),
+  };
+  assert.throws(() => buildWalletRecords(scriptTypeMismatch, false, deps, 0), /script type/);
+  assert.equal(walletDatSupported(scriptTypeMismatch), false, "the control must not render for a guard-refused wallet");
+  // The wallet-kind mismatch (round 5, item 2) is gated the same way.
+  const kindMismatch = {
+    kind: "msig",
+    network: "mainnet",
+    script: "p2wsh",
+    m: 2,
+    n: 3,
+    receiveDescriptor: withChecksum(`wpkh(${xpub}/0/*)`),
+  };
+  assert.equal(walletDatSupported(kindMismatch), false);
+  // Wallets the guard accepts still render the control.
+  assert.equal(walletDatSupported(MSIG_WALLET), true);
+  assert.equal(walletDatSupported(WATCH_ONLY_WALLET), true);
+});
