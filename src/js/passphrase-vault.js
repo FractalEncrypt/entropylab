@@ -245,6 +245,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // A composition already abandoned (an outside edit ended it) commits
     // nothing; the field only has to show the mask again.
     if (!composing) {
+      pending = null;
       if (field.value !== vault.mask()) render(Math.min(field.selectionStart ?? vault.length, vault.length));
       return;
     }
@@ -294,6 +295,9 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // never stored (it would otherwise reach the "set by script" path below
     // with mask bullets in it); the field is kept masked instead.
     if (compositionInput && !composing) {
+      // Its beforeinput set `pending`; nothing consumes it now, and a stale
+      // caret would splice the next beforeinput-less edit (an autofill).
+      pending = null;
       render(Math.min(field.selectionStart ?? vault.length, vault.length));
       return;
     }

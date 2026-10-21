@@ -485,6 +485,32 @@ test("an IME that keeps composing after an outside edit abandoned its compositio
   masked(field, vault);
 });
 
+// Reviews of this fix (GLM 5.3, Kimi K3): composition text arriving after an
+// abandonment went through beforeinput, which set `pending`, and then the
+// input handler re-masked the field and returned with `pending` still set,
+// so the next autofill was spliced at that stale caret ("abcret").
+test("composing text after an abandonment leaves no stale caret for the next browser edit", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "x", cancelable: false, isComposing: true });
+  field.value = "••x";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  assert.equal(vault.text(), "ab", "composing text with no open composition is never stored");
+  masked(field, vault);
+  // A password manager fills the field: an input event with no beforeinput.
+  field.value = "secret";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(vault.text(), "secret");
+  masked(field, vault);
+  // The same after a compositionend that arrives with no open composition.
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "y", cancelable: false, isComposing: true });
+  field.dispatchEvent({ type: "compositionend", data: "y" });
+  field.value = "hunter2";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(vault.text(), "hunter2");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives
