@@ -272,7 +272,9 @@ test("the Bitcoin Core interop job verifies the pinned bitcoind download before 
   assert.match(job, /^      BITCOIN_CORE_SHA256: "b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e"$/m);
   assert.match(job, /curl -fsSL -o "bitcoin-\$\{BITCOIN_CORE_VERSION\}-x86_64-linux-gnu\.tar\.gz" "https:\/\/bitcoincore\.org\/bin\/bitcoin-core-\$\{BITCOIN_CORE_VERSION\}\/bitcoin-\$\{BITCOIN_CORE_VERSION\}-x86_64-linux-gnu\.tar\.gz"/);
   assert.match(job, /echo "\$\{BITCOIN_CORE_SHA256\}  bitcoin-\$\{BITCOIN_CORE_VERSION\}-x86_64-linux-gnu\.tar\.gz" \| sha256sum -c -/);
-  const download = job.indexOf("bitcoincore.org");
+  // Anchor on the step itself: the env comment above the steps also names
+  // bitcoincore.org, so indexOf("bitcoincore.org") would find the comment.
+  const download = job.indexOf("curl -fsSL -o \"bitcoin-");
   const verify = job.indexOf("sha256sum -c");
   const extract = job.indexOf("tar -xzf");
   const run = job.indexOf("REQUIRE_BITCOIND=1 node --test");
