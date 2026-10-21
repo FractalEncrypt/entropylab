@@ -204,7 +204,8 @@ test("mnemonicToSeedSync: the published TREZOR vector and the empty default pass
   const empty = scureBip39.mnemonicToSeedSync(VECTOR_PHRASE, "");
   assert.deepEqual(mnemonicToSeedSync(VECTOR_PHRASE), empty, "omitted passphrase");
   assert.deepEqual(mnemonicToSeedSync(VECTOR_PHRASE, undefined), empty, "undefined passphrase");
-  assert.deepEqual(mnemonicToSeedSync(VECTOR_PHRASE, null), empty, "null passphrase");
+  // null is a caller bug: must throw, not silently derive the empty-passphrase wallet.
+  assert.throws(() => mnemonicToSeedSync(VECTOR_PHRASE, null), /Invalid passphrase/);
 });
 
 test("mnemonicToSeedSync: a non-string mnemonic is refused before hashing", () => {

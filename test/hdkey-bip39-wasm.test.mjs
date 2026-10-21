@@ -208,8 +208,8 @@ test("BIP39 refuses a passphrase that is not well-formed Unicode or valid UTF-8"
   // A well-formed surrogate pair is a valid passphrase and derives what
   // @scure/bip39 derives for it.
   assert.deepEqual(mnemonicToSeedSync(phrase, "🔑"), scureBip39.mnemonicToSeedSync(phrase, "🔑"));
-  // No passphrase is the empty one: null must not hash the text "null".
-  assert.deepEqual(mnemonicToSeedSync(phrase, null), scureBip39.mnemonicToSeedSync(phrase, ""));
+  // null is a caller bug: must throw, not silently derive the empty-passphrase wallet.
+  assert.throws(() => mnemonicToSeedSync(phrase, null), /Invalid passphrase/);
   // Valid non-ASCII UTF-8 bytes derive what the same text derives in @scure.
   assert.deepEqual(mnemonicToSeedSync(phrase, new TextEncoder().encode("päss phrase")), scureBip39.mnemonicToSeedSync(phrase, "päss phrase"));
   // The coercion matches "mnemonic" + passphrase: a Symbol still throws.

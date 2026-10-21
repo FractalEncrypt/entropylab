@@ -107,9 +107,13 @@ const validateMnemonic = (mnemonic, wordlist = bip39English) => {
 // once for its normalization.
 const MNEMONIC_SALT = textEncoder.encode("mnemonic");
 const saltFor = (passphrase) => {
-  // No passphrase is the empty one, whether the caller passes "", undefined
-  // or null; "mnemonic" + null would hash the four letters "null".
-  if (passphrase == null) passphrase = "";
+  // undefined means the caller omitted the argument: BIP39 says that is the
+  // empty passphrase. null is never passed by the app (all call sites pass
+  // strings or bytes), so a null can only be a caller bug (e.g. a missing
+  // config value). Silently deriving the no-passphrase wallet would remove
+  // the user's passphrase protection without a word. Throw instead.
+  if (passphrase === undefined) passphrase = "";
+  if (passphrase === null) throw new TypeError("Invalid passphrase");
   if (passphrase instanceof Uint8Array) {
     if (passphrase.every((byte) => byte < 0x80)) {
       const salt = new Uint8Array(MNEMONIC_SALT.length + passphrase.length);
