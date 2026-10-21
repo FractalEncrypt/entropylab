@@ -1277,17 +1277,33 @@ test("bitcoind loads a generated msig Taproot watch-only wallet.dat", { skip: !B
 // - buildWalletRecords :446 der.fill(0): der is a local buffer that is never
 //   exposed after the record is built; removing the wipe has no observable
 //   effect.
-// Survivors left alive because the only distinguishing input is invalid:
-// - descriptorKeyTail `at < 0` -> `at <= 0`: needs a valid fixture with the
-//   extended key at index 0; no valid BIP380 descriptor has that.
+// Survivors left alive (need a valid fixture):
+// - descriptorKeyTail `at < 0` -> `at <= 0`: a leading '#' makes
+//   stripChecksum return an empty body, so `at` is -1 under both the check
+//   and the mutant; `at === 0` needs the extended key to open the descriptor
+//   body, which no valid BIP380 descriptor does (they open with a script
+//   expression). The old checksum-marker test could not tell the two apart,
+//   so it was deleted instead of kept as false coverage.
+// - stripChecksum `hash >= 0` -> `hash > 0`: distinguished only by a
+//   checksum marker at index 0, whose refusal is the same empty-body
+//   accident.
 // - descriptorKeyTail branch-level wildcard `$` alternative: needs a valid
 //   fixture ending at the wildcard; valid descriptors close with `)`.
 // - cacheKeyExpIndex `startsWith` -> `includes`: needs a valid fixture; the
 //   only distinguishing input is an invalid nested wpkh(tr(...)).
-// - PRIVATE_KEY `{90,}` quantifier: needs a valid fixture; the only
-//   distinguishing input is an invalid short xprv1 substring.
-// - PRIVATE_KEY prefix class: needs a valid fixture; the only distinguishing
-//   input is an invalid Aprv... prefix.
+// - PRIVATE_KEY `{90,}` quantifier and the prefix letters no fixture uses
+//   (tprv/yprv/uprv/vprv/Yprv/Uprv): the only distinguishing inputs are
+//   invalid short or misspelled keys. Removing the regex outright, or
+//   breaking the xprv/Zprv prefixes it must catch, is pinned by the
+//   multisig refusal tests below.
+// - addBranch's duplicate/null/invalid-entry guards and the
+//   `windowStart <= 0`/`windowStart <= 1` boundaries: the app never produces
+//   duplicate branch entries, null or non-integer branch numbers, or a
+//   window starting above the default without addressBranches. The old
+//   tests pinned that such state is silently ignored (first-wins, a lone
+//   change branch, zero units) — fail-open behaviour that must not be
+//   enshrined — so they were deleted and these mutants stay alive until
+//   the source fails closed.
 // - buildWalletRecords HD xprv routing: needs a valid fixture or a fail-closed
 //   HD-specific error; the current source stores the xprv verbatim, so a
 //   no-leak assertion would fail. Left alive until the source fails closed.
@@ -1330,13 +1346,6 @@ test("compactSize boundaries match Bitcoin CompactSize", () => {
     assert.ok(bytesToHex(record[1]).startsWith(prefix), `CompactSize prefix for length ${length}`);
   }
 });
-
-test("a descriptor whose checksum marker is at index 0 is refused", () => {
-  const { buildWalletRecords } = loadModule();
-  const wallet = mutantHdWallet(`#wpkh(${XPUB_TAIL_4H}/0/*)`);
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
-});
-
 
 test("multi-digit branch steps are parsed to the end of the descriptor", () => {
   const { buildWalletRecords } = loadModule();
@@ -1382,17 +1391,6 @@ test("branch ranges ignore null rows and include index 0 but not out-of-range in
   );
 });
 
-test("msig branch entries ignore null, invalid, and duplicate branches", () => {
-  const { walletDescriptorUnits } = loadModule();
-  const wallet = structuredClone(MSIG_WALLET);
-  const desc0 = MSIG_WALLET.receiveDescriptor;
-  const desc1 = MSIG_WALLET.changeDescriptor;
-  wallet.addressBranches = [null, { branch: "x", publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc1 }];
-  const units = walletDescriptorUnits(wallet, false);
-  assert.equal(units.length, 2);
-  assert.equal(units[0].descriptor, desc0);
-});
-
 test("msig addressBranches add branches beyond the default window", () => {
   const { walletDescriptorUnits } = loadModule();
   const wallet = structuredClone(MSIG_WALLET);
@@ -1401,16 +1399,6 @@ test("msig addressBranches add branches beyond the default window", () => {
   const units = walletDescriptorUnits(wallet, false);
   assert.equal(units.length, 3);
   assert.equal(units[2].descriptor, desc2);
-});
-
-test("msig window starts above 0 and 1 control which default branches are added", () => {
-  const { walletDescriptorUnits } = loadModule();
-  const start1 = structuredClone(MSIG_WALLET);
-  start1.branchStart = 1;
-  assert.equal(walletDescriptorUnits(start1, false).length, 1);
-  const start2 = structuredClone(MSIG_WALLET);
-  start2.branchStart = 2;
-  assert.equal(walletDescriptorUnits(start2, false).length, 0);
 });
 
 test("msig branches are exported in ascending branch order", () => {
@@ -1481,32 +1469,6 @@ test("walletDescriptorUnits refuses non-HD wallets without throwing", () => {
   assert.deepEqual(walletDescriptorUnits(null, false), []);
   assert.deepEqual(walletDescriptorUnits({ kind: "hd" }, false), []);
   assert.deepEqual(walletDescriptorUnits({ kind: "hd", accounts: [{}] }, false), []);
-});
-
-test("HD branch entries ignore null, invalid, and duplicate branches", () => {
-  const { walletDescriptorUnits } = loadModule();
-  const wallet = structuredClone(WATCH_ONLY_WALLET);
-  wallet.accounts = [wallet.accounts[0]];
-  const desc0 = REF_PUBLIC_DESCRIPTORS[0];
-  const desc1 = REF_PUBLIC_DESCRIPTORS[1];
-  wallet.accounts[0].receiveDescriptor = desc0;
-  wallet.accounts[0].changeDescriptor = desc1;
-  wallet.accounts[0].addressBranches = [null, { branch: "x", publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc0 }, { branch: 0, publicDescriptor: desc1 }];
-  const units = walletDescriptorUnits(wallet, false);
-  assert.equal(units.length, 2);
-  assert.equal(units[0].descriptor, desc0);
-});
-
-test("HD window starts above 0 and 1 control which default branches are added", () => {
-  const { walletDescriptorUnits } = loadModule();
-  const start1 = structuredClone(WATCH_ONLY_WALLET);
-  start1.accounts = [start1.accounts[0]];
-  start1.accounts[0].branchStart = 1;
-  assert.equal(walletDescriptorUnits(start1, false).length, 1);
-  const start2 = structuredClone(WATCH_ONLY_WALLET);
-  start2.accounts = [start2.accounts[0]];
-  start2.accounts[0].branchStart = 2;
-  assert.equal(walletDescriptorUnits(start2, false).length, 0);
 });
 
 test("HD branches are exported in ascending branch order", () => {
@@ -1612,25 +1574,36 @@ test("buildWalletRecords refuses a null wallet", () => {
   assert.throws(() => buildWalletRecords(null, false, deps, 0));
 });
 
+// The 78-byte check lives in extendedKeyBody, which the writer reaches only
+// through a branch-level wildcard ("xpub/*" — a supported tail per the
+// module's own docs and the hardened-branch regression test); "xpub/0/*"
+// routes to deps.deriveBranchBody and never decodes the key inside the
+// module. The descriptor below is valid, so its only defect is the decoded
+// key length, and the specific error pins the check that the downstream
+// 74-byte branchBody check would otherwise mask.
 test("buildWalletRecords refuses an extended key payload that is not 78 bytes", () => {
   const { buildWalletRecords } = loadModule();
-  const badDeps = { ...deps, base58Decode: () => new Uint8Array(77) };
+  const badDeps = { ...deps, base58Decode: (text) => deps.base58Decode(text).slice(0, 77) };
   const body = `wpkh(${XPUB_TAIL_4H}/*)`;
   const wallet = mutantHdWallet(`${body}#${descriptorChecksum(body)}`);
-  assert.throws(() => buildWalletRecords(wallet, false, badDeps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, badDeps, 0), /unexpected extended key payload/);
 });
 
 
+// The co-signer xpub passes every public-key check, so the PRIVATE_KEY
+// detection is the only thing refusing these exports: with that regex
+// removed, the records are built and the private key is embedded in a
+// "watch-only" wallet.dat.
 test("multisig refuses an extended private key", () => {
   const { buildWalletRecords } = loadModule();
-  const body = `wsh(sortedmulti(1,${msigNode(0).privateExtendedKey}/0/*))`;
+  const body = `wsh(sortedmulti(2,${msigKey(0)}/0/*,${msigNode(0).privateExtendedKey}/0/*))`;
   const wallet = {
     kind: "msig",
     network: "mainnet",
     script: "p2wsh",
     receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
   };
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /refused an extended private key/);
 });
 
 test("multisig refuses SLIP-132 uppercase private keys", () => {
@@ -1639,14 +1612,14 @@ test("multisig refuses SLIP-132 uppercase private keys", () => {
   raw[0] = 0x02; raw[1] = 0xaa; raw[2] = 0x7a; raw[3] = 0x99;
   const zprv = b58checkEncode(raw);
   assert.match(zprv, /^Zprv/);
-  const body = `wsh(sortedmulti(1,${zprv}/0/*))`;
+  const body = `wsh(sortedmulti(2,${msigKey(0)}/0/*,${zprv}/0/*))`;
   const wallet = {
     kind: "msig",
     network: "mainnet",
     script: "p2wsh",
     receiveDescriptor: `${body}#${descriptorChecksum(body)}`,
   };
-  assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
+  assert.throws(() => buildWalletRecords(wallet, false, deps, 0), /refused an extended private key/);
 });
 
 
@@ -1685,6 +1658,10 @@ test("buildWalletRecords refuses a hardened step after a public key", () => {
   assert.throws(() => buildWalletRecords(wallet, false, deps, 0));
 });
 
+// Pins only that the buffers handed to the injected dependencies are zeroed
+// before buildWalletRecords returns; copies taken inside the module are not
+// observable through this seam, so this is not a proof that every secret
+// copy is wiped.
 test("private export wipes decoded key material", () => {
   const { buildWalletRecords } = loadModule();
   const capturedRaw = [], capturedSecret = [], capturedKeyHash = [];
