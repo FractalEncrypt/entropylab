@@ -2204,6 +2204,19 @@ function hodlCoreImportDescriptorsJson(scope = "msig") {
   const wallet = hodlCoreImportDescriptorsWallet(scope);
   if (!wallet?.receiveDescriptor && !wallet?.changeDescriptor) return "";
   const codec = hodlMsigCoreImportCodec();
+  // Share wallet.dat's shape/kind guard, using a public-only projection so
+  // validation never evaluates a private descriptor or key getter.
+  const descriptors = { receiveDescriptor: wallet.receiveDescriptor, changeDescriptor: wallet.changeDescriptor };
+  const publicWallet = scope === "msig"
+    ? { kind: "msig", script: wallet.script, ...descriptors }
+    : { kind: "hd", accounts: [{ def: wallet.def, ...descriptors }] };
+  const units = hodlWalletExport.walletDescriptorUnits(publicWallet, false);
+  if (!units.length) throw new Error("No supported watch-only descriptors to export.");
+  for (const unit of units) {
+    hodlWalletExport.assertDescriptorShape(unit.descriptor, "watch-only", {
+      checksum: hodlDescriptorChecksum, base58Decode: codec.decode
+    }, unit.type, Boolean(unit.multiKey));
+  }
   return buildImportDescriptorsJson({
     receiveDescriptor: wallet.receiveDescriptor,
     changeDescriptor: wallet.changeDescriptor,

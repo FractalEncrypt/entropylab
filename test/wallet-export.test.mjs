@@ -551,11 +551,11 @@ test("a kept 'now' birthday becomes 0 for a BIP 45 Core JSON export", () => {
   ui.setResult(MSIG_WALLET, false);
   ui.setWalletDatBirthday("now");
   ui.setResult(BIP45_WALLET, false);
-  const imported = JSON.parse(ui.hodlMsigCoreImportDescriptorsJson());
+  const imported = JSON.parse(ui.hodlCoreImportDescriptorsJson());
   assert.equal(imported.length, 2);
   for (const record of imported) assert.equal(record.timestamp, 0, "recovery of an old BIP 45 wallet must scan from genesis");
   ui.setResult(MSIG_WALLET, false);
-  for (const record of JSON.parse(ui.hodlMsigCoreImportDescriptorsJson())) assert.equal(record.timestamp, "now", "a supported wallet keeps the choice");
+  for (const record of JSON.parse(ui.hodlCoreImportDescriptorsJson())) assert.equal(record.timestamp, "now", "a supported wallet keeps the choice");
   ui.setWalletDatBirthday("genesis");
 });
 
@@ -862,7 +862,7 @@ ${walletSrc}
 const msigBip388Markup = typeof hodlMsigBip388Markup === "function" ? hodlMsigBip388Markup : () => "";
 const setResult = (value, flag) => { hodlWalletResult = value; hodlRevealPrivate = flag; };
 const setWalletDatBirthday = (value) => { hodlWalletDatBirthday = value; };
-export { captured, elements, copies, calls, hodlMsigCoreImportDescriptorsJson, hodlPrivateDataControls, hodlSaveRecoveryControl, hodlDownloadWalletDat, hodlBindWalletResultActions, hodlMsigCoreImportDescriptorsMarkup, hodlMsigPolicySheetMarkup, msigBip388Markup, hodlBindMsigCoreImportDescriptors, setResult, setWalletDatBirthday };
+export { captured, elements, copies, calls, hodlCoreImportDescriptorsJson, hodlPrivateDataControls, hodlSaveRecoveryControl, hodlDownloadWalletDat, hodlBindWalletResultActions, hodlMsigCoreImportDescriptorsMarkup, hodlMsigPolicySheetMarkup, msigBip388Markup, hodlBindMsigCoreImportDescriptors, setResult, setWalletDatBirthday };
 `;
 
 // Keep the transient harness out of test/ so parallel suites that list the

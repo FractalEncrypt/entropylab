@@ -20,7 +20,7 @@ import {
   descriptorChecksum,
   stripDescriptorChecksum,
 } from "../src/js/core-importdescriptors.js";
-import { b58checkDecode, b58checkEncode, descriptorChecksum as harnessChecksum } from "./wallet-export-harness.mjs";
+import { b58checkDecode, b58checkEncode, descriptorChecksum as harnessChecksum, loadModule } from "./wallet-export-harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -48,6 +48,7 @@ const parse = (json) => JSON.parse(json);
 function keyExportHarness() {
   const source = read("src/js/app.js");
   const context = vm.createContext({ buildImportDescriptorsJson, hodlBase58Check: codec,
+    hodlWalletExport: loadModule(), hodlDescriptorChecksum: descriptorChecksum,
     hodlWalletDatBirthday: "genesis", hodlAccountId: "bip84", hodlWalletResult: null });
   for (const name of ["hodlMsigCoreImportCodec", "hodlMsigDisplayedAddressEnd", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson"]) {
     const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
@@ -68,7 +69,9 @@ test("Key Station exports only the selected public account with the existing bir
     };
     return { def: { id: `bip${purpose}` }, receiveDescriptor: descriptor(0), changeDescriptor: descriptor(1),
       addressBranches: [{ branch: 0, rows: [{ index: 5000 }] }, { branch: 1, rows: [{ index: 5002 }] }],
-      get privateNode() { throw new Error("private material read"); } };
+      get privateNode() { throw new Error("private material read"); },
+      get receiveDescriptorPriv() { throw new Error("private descriptor read"); },
+      get changeDescriptorPriv() { throw new Error("private descriptor read"); } };
   });
   ui.hodlWalletResult = { kind: "hd", accounts, get seed() { throw new Error("seed read"); } };
   for (const account of accounts) for (const birthday of ["genesis", "now"]) {
@@ -88,6 +91,33 @@ test("Key Station exports only the selected public account with the existing bir
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
   ui.hodlWalletResult = { kind: "single" };
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
+});
+
+// Contract: export public descriptors for the selected script and wallet kind;
+// refuse malformed keys, unsupported shapes, and a different spending policy.
+// Rejection conditions follow the wallet.dat guard added in #1039.
+test("Key Station refuses descriptors that disagree with its account or Core's supported shapes", () => {
+  const ui = keyExportHarness();
+  const xpub = master.derive("m/84'/0'/0'").publicExtendedKey;
+  const withChecksum = body => `${body}#${harnessChecksum(body)}`;
+  for (const [body, reason] of [
+    [`pkh(${xpub}/0/*)`, /script type/],
+    [`wsh(sortedmulti(1,${xpub}/0/*))`, /wallet kind|descriptor family/],
+    [`wpkh(tr(${xpub}/0/*))`, /descriptor shape/],
+    [`${xpub}/0/*`, /descriptor shape/],
+    [`wpkh(${xpub}/2147483648/*)`, /2\^31/],
+    [`wpkh([00000000/084h]${xpub}/0/*)`, /leading zeros/],
+    [`wpkh(${xpub.slice(0, -1)}${xpub.endsWith("1") ? "2" : "1"}/0/*)`, /valid extended key/],
+  ]) {
+    ui.hodlWalletResult = { kind: "hd", accounts: [{ def: { id: "bip84" }, receiveDescriptor: withChecksum(body) }] };
+    assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), error => {
+      assert.match(error.message, reason);
+      assert.ok(!error.message.includes(xpub), "refusal must not disclose key material");
+      return true;
+    }, body.split("(")[0]);
+  }
+  ui.hodlWalletResult = { kind: "msig", script: "p2wsh", receiveDescriptor: withChecksum(`wpkh(${xpub}/0/*)`) };
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("msig"), /wallet kind|descriptor family/);
 });
 
 test("checksum matches the independent Core reference", () => {
@@ -125,7 +155,7 @@ test("Key Station handles imported watch-only keys and never reuses a previous w
   assert.deepEqual(parse(ui.hodlCoreImportDescriptorsJson("calc"))[0].range, [0, 999999]);
   second.receive[0].index = 999000;
   assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /importdescriptors refuses a range span/);
-  ui.hodlWalletResult = { kind: "msig", receiveDescriptor: receive, changeDescriptor: change };
+  ui.hodlWalletResult = { kind: "msig", script: "p2wsh", receiveDescriptor: receive, changeDescriptor: change };
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "", "a stale key control cannot export the active multisig");
   assert.equal(parse(ui.hodlCoreImportDescriptorsJson("msig"))[0].desc, receive);
 });
@@ -387,7 +417,9 @@ for (const network of Object.keys(CHAIN_FIXTURES)) {
         ui.hodlRevealPrivate = true;
         ui.hodlWalletResult = { kind: "hd", accounts: [{ def: { id: ui.hodlAccountId },
           receiveDescriptor: descriptor(0), changeDescriptor: descriptor(1), receive: [{ index: 2 }], change: [{ index: 2 }],
-          get privateNode() { throw new Error("private material read"); } }] };
+          get privateNode() { throw new Error("private material read"); },
+          get receiveDescriptorPriv() { throw new Error("private descriptor read"); },
+          get changeDescriptorPriv() { throw new Error("private descriptor read"); } }] };
         for (const birthday of ["genesis", "now"]) {
           ui.hodlWalletDatBirthday = birthday;
           const name = `key-${purpose}-${birthday}`, wallet = `-rpcwallet=${name}`;
