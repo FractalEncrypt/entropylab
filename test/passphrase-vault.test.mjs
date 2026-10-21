@@ -389,6 +389,39 @@ test("without event data, mask bullets read back over a selection are never take
   masked(field, vault);
 });
 
+test("an on-screen key during a composition lands where the composition began, not at the composing caret", () => {
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "とう", cancelable: false, isComposing: true });
+  field.value = "•とう•";
+  field.setSelectionRange(3, 3);
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  api.insert("c");
+  assert.equal(vault.text(), "acb");
+  masked(field, vault);
+  field.dispatchEvent({ type: "compositionend", data: "とう" });
+  assert.equal(vault.text(), "acb", "the abandoned composition is not applied later");
+});
+
+test("a browser edit in the middle of a composition resets the field to the vault instead of splicing", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  field.value = "•と•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: true });
+  // An autofill lands mid-composition.
+  field.value = "secret";
+  field.dispatchEvent({ type: "input", inputType: "insertReplacementText" });
+  assert.equal(vault.text(), "ab");
+  masked(field, vault);
+  field.dispatchEvent({ type: "compositionend", data: "と" });
+  assert.equal(vault.text(), "ab");
+  masked(field, vault);
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives

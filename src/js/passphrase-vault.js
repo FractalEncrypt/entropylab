@@ -259,8 +259,20 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
 
   // An edit the browser made itself, or a value set by script. Runs on the
   // field before the page's listeners on its ancestors, so they see the mask.
-  field.addEventListener("input", () => {
-    if (!active() || echoing || composing) return;
+  field.addEventListener("input", (event) => {
+    if (!active() || echoing) return;
+    if (composing) {
+      if (event?.isComposing || /^(insert|delete)Composition/.test(event?.inputType ?? "")) return;
+      // Any other edit in the middle of a composition (an autofill, a
+      // password manager) cannot be placed: the field mixes mask bullets and
+      // raw composing text. Abandon both and show the vault as it is, a
+      // visible reset rather than a silent splice at stale indices.
+      const at = composing.start;
+      composing = null;
+      pending = null;
+      render(at);
+      return;
+    }
     const value = field.value;
     if (value === vault.mask()) {
       pending = null;
@@ -289,9 +301,14 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // Any change to the vault made from outside the field ends an open
   // composition: a compositionend that arrives later would apply its stale
   // indices to the new contents (mask bullets into the vault).
+  // While a composition is open the field holds raw composing text, so its
+  // caret is not a vault index: the mask is put back first, with the caret
+  // where the composition began.
   const endComposition = () => {
+    const open = composing;
     composing = null;
     pending = null;
+    if (open && active()) render(open.start);
   };
 
   return {
