@@ -4,7 +4,7 @@ EntropyLab handles seeds, keys and transactions, so every change is tested well 
 
 ## 1. The test suite
 
-- **About 2,500 tests** run on every pull request (`npm run test:ci`, the CI job "complete dependency-free suite": 2,500 at rock `63752da5`, 2026-10-21). A guard test (`test/ci-completeness.test.mjs`) fails CI if any test file on disk is missing from that list, so no suite is silently skipped; the two browser suites are the only exceptions and run in their own job (section 4).
+- **About 2,500 tests** run on every pull request (`npm run test:ci`, the CI job "complete dependency-free suite": 2,500 at rock `63752da5`, 2026-10-21). A guard test (`test/ci-completeness.test.mjs`) fails CI if any test file on disk is missing from that list, so no test file is left out of the run; the two browser suites are the only exceptions and run in their own job (section 4). It does not stop a test from skipping itself: a few tests skip when an outside tool they need (for example Bitcoin Core) is not installed, and CI reports them as skipped.
 - **Published vectors, not our own outputs.** Expected values come from the specifications and from independent implementations: BIP 39 (TREZOR vectors), BIP 32, BIP 143, BIP 174 PSBT vectors, the official BIP 352 send-and-receive vectors (`test/fixtures/bip352-send-and-receive.json`), and Bitcoin Core's `tx_valid.json` and sighash vectors (`test/fixtures/core/`).
 - **The page checks itself on load.** Before any input is wired, the page runs published vectors against its own WASM modules and refuses to start if one fails (see the README).
 - **Rejected input is tested as carefully as accepted input.** Security-sensitive parsing and validation changes must include cases the code must refuse, not only cases it must accept (pull request checklist).
@@ -40,7 +40,7 @@ Mutation testing changes the code on purpose (flips a comparison, deletes a line
 ## 5. Builds you can check
 
 - **Reproducible:** `entropylab.html` rebuilds byte for byte, and CI checks it from two different source paths. See [Reproductions.md](Reproductions.md) and the README's "Verifying the download".
-- **Attested and timestamped:** every merge to `rock` publishes a `SHA256SUMS.txt` manifest (it detects corruption; it is not a signature), a Sigstore build attestation for provenance (`gh attestation verify`), and an OpenTimestamps proof. The v1.0.0 release was also signed by its maintainers over its checksum manifest.
+- **Attested, with a timestamp receipt:** every merge to `rock` publishes a `SHA256SUMS.txt` manifest (it detects corruption; it is not a signature), a Sigstore build attestation for provenance (`gh attestation verify`), and an OpenTimestamps receipt. A fresh receipt is pending: it proves a timestamp only once `ots info` shows a Bitcoin attestation (see [Verifying the download](../README.md#verifying-the-download)). The v1.0.0 release was also signed by its maintainers over its checksum manifest.
 - **Pinned toolchain:** CI actions are pinned to commit SHAs, and a test fails if one is not.
 
 ## 6. Review and red-teaming
@@ -50,7 +50,7 @@ Every change is reviewed by more than its author:
 - **Independent reviews.** One AI model writes a fix. Several others that did not write it review it (DeepSeek V4.1, Kimi K3, GLM 5.3, Muse Spark and Nemotron 3 Ultra take turns), and each review names the model that wrote it.
 - **A red-team gate.** DeepSeek V4.1 audits every pull request adversarially before the final decision.
 - **Proof before belief.** A reported bug counts only after an executed probe shows it, and two rounds of judging (one with the real `app.js` call sites) agree it is a defect and not behaviour the BIPs require. Model findings are often confidently wrong; this filter exists because of that.
-- **Final check.** Claude Opus coordinates and checks each change against the BIPs and the actual code before it merges. Bug fixes merge only with green CI, at least three approvals from models that did not write the change, and no unresolved blocker from the red-team gate. Features wait for the maintainer.
+- **Final check.** Claude Opus coordinates and checks each change against the BIPs and the actual code before it merges. Bug fixes merge only with green CI, at least two approvals from models that did not write the change (three for signing, key derivation or WASM changes), and no unresolved blocker from the red-team gate. When Claude writes a change itself (this page, for one), Claude is not an independent check: the model reviews, the red-team gate and the maintainer are. Features wait for the maintainer.
 - **The ledger.** Every audit, finding, refutation and fix is recorded in [audits/README.md](audits/README.md). Earlier audits are in [Adversarial_Audit.md](Adversarial_Audit.md).
 
 Reviews and decisions are posted on each pull request, so the trail is public.
