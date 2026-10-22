@@ -6,7 +6,8 @@
 // guard cannot parse YAML, but it fails the moment any of these lines move.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -194,32 +195,40 @@ test("the upgrade push refuses a proof with fewer Bitcoin attestations than the 
   const block = jobBlock(read(".github/workflows/ots-upgrade.yml"), "upgrade-push");
   const all = steps(block);
   const validate = all.find((step) => step.includes("stat -c %s"));
-  assert.match(validate, /grep -o ' 05 88 96 0d 73 d7 19 01'/, "the BitcoinBlockHeaderAttestation tag is counted byte-aligned");
-  assert.match(validate, /NEW=\$\(attestations "\$PROOF"\)/, "the uploaded proof's attestations are counted");
-  assert.match(validate, /OLD=\$\(attestations entropylab\.html\.ots\)/, "the committed proof's attestations are counted");
+  assert.match(validate, /NEW=\$\(python3 scripts\/ots-attestations\.py "\$PROOF"\)/, "the uploaded proof's attestations are counted");
+  assert.match(validate, /OLD=\$\(python3 scripts\/ots-attestations\.py entropylab\.html\.ots\)/, "the committed proof's attestations are counted");
   assert.match(validate, /if \[ "\$NEW" -lt "\$OLD" \]; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "fewer attestations fail the job");
+  assert.match(validate, /^ {10}set -euo pipefail$/m, "a malformed proof (the counter exits 1) fails the job");
   assert.ok(all.indexOf(validate) < all.findIndex((step) => step.includes("git commit")), "before the commit");
 });
 
-test("the attestation counter counts Bitcoin attestations exactly, run as the workflow runs it", (t) => {
-  // The function is taken from ots-upgrade.yml itself and fed each proof on
-  // stdin, so the test exercises the shipped shell, not a copy.
-  const validate = steps(jobBlock(read(".github/workflows/ots-upgrade.yml"), "upgrade-push")).find((step) => step.includes("stat -c %s"));
-  const fn = validate.split("\n").map((line) => line.trim()).find((line) => line.startsWith("attestations() {"));
-  assert.ok(fn, "the counter is defined in the validation step");
+test("the attestation counter walks the proof structure", (t) => {
+  // Crafted proofs with counts worked out by hand; the script also gives 0
+  // for rock's pending proof and 3 for the upgraded proof of 27362f2. The
+  // tag's bytes inside an append argument (DeepSeek's red-team of 2e213f0)
+  // are not an attestation.
+  const script = join(root, "scripts", "ots-attestations.py");
+  const python = ["python3", "python"].find((name) => !spawnSync(name, ["--version"]).error);
+  if (!python) return t.skip("python is not available");
   const count = (bytes) => {
-    const run = spawnSync("bash", ["-c", `set -euo pipefail\n${fn}\nattestations -`], { input: Buffer.from(bytes) });
-    if (run.error?.code === "ENOENT") return null;
-    assert.equal(run.status, 0, String(run.stderr));
-    return Number(String(run.stdout).trim());
+    const dir = mkdtempSync(join(tmpdir(), "ots-"));
+    const file = join(dir, "p.ots");
+    writeFileSync(file, Buffer.from(bytes));
+    const run = spawnSync(python, [script, file]);
+    rmSync(dir, { recursive: true, force: true });
+    return run.status === 0 ? Number(String(run.stdout).trim()) : `exit ${run.status}`;
   };
+  const varbytes = (bytes) => [bytes.length, ...bytes];
   const BTC = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
   const PENDING = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
   const header = [0x00, ...Buffer.from("OpenTimestamps"), 0x00, 0x00, ...Buffer.from("Proof"), 0x00, 0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01, 0x08, ...new Array(32).fill(0x11)];
-  const none = count([...header, 0x00, ...PENDING, 0x05]);
-  if (none === null) return t.skip("bash is not available");
-  assert.equal(none, 0, "a pending-only proof has no Bitcoin attestation");
-  assert.equal(count([...header, 0x00, ...BTC, 0x02, 0x01, 0x02, 0x00, ...BTC, 0x01, 0x07, 0x00, ...BTC, 0x01, 0x09]), 3, "three attestations, as in the upgraded proof of 27362f2");
-  assert.equal(count([...header, 0x50, 0x58, 0x89, 0x60, 0xd7, 0x3d, 0x71, 0x90, 0x10]), 0, "a lookalike shifted by half a byte is not counted");
-  assert.equal(count([...new Array(44).fill(0), ...BTC]), 1, "a tag split across od's 16-byte lines is counted");
+  const pending = [0x00, ...PENDING, ...varbytes([...Buffer.from("https://a.pool.opentimestamps.org")])];
+  assert.equal(count([...header, ...pending]), 0, "a pending-only proof");
+  // fork: an attestation, then append -> sha256 -> attestation
+  assert.equal(count([...header, 0xff, 0x00, ...BTC, ...varbytes([0x01]), 0xf0, ...varbytes([0xaa]), 0x08, 0x00, ...BTC, ...varbytes([0x02])]), 2, "two attestations on two branches");
+  assert.equal(count([...header, 0xf0, ...varbytes([...BTC, 0x78]), ...pending]), 0, "the tag inside an op argument is not an attestation");
+  assert.equal(count([...header, ...pending.slice(0, 20)]), "exit 1", "a truncated proof is refused");
+  assert.equal(count([...header, ...pending, 0x00]), "exit 1", "trailing bytes are refused");
+  assert.equal(count([...header.slice(0, 32), 0x09, ...header.slice(33), ...pending]), "exit 1", "a proof whose file hash is not SHA-256 is refused");
+  assert.equal(count([...header, 0x99, ...pending]), "exit 1", "an unknown op is refused");
 });
