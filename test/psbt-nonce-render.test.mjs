@@ -243,7 +243,7 @@ test("two key-path signatures with different R are a clean result", () => {
 test("a key-path signature whose previous output is not in the file is incomplete, never clean", () => {
   const psbt = tapPsbt([
     [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
-    [tapKeySigEntry(tapSigB)], // no witness UTXO: the key Q is missing
+    [tapKeySigEntry(tapSigC)], // no witness UTXO: the key Q is missing (C's own R, so only the key is in question)
   ]);
   const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
   assert.match(html, /Some could not be checked for a repeated nonce/);
@@ -281,10 +281,14 @@ test("a crafted PSBT with 20,000 same-R Taproot signatures is refused by the com
 
 test("the analysis summary row reports Schnorr reuse as a problem, ECDSA reuse text first", async () => {
   const { hodlPsbtNonceCheck } = await loadAppFunctions(["hodlPsbtNonceCheck"]);
-  const schnorrOnly = hodlPsbtNonceCheck([], [], false, [[{}, {}]]);
+  const sameKey = Object.assign([{}, {}], { sameKey: true });
+  const schnorrOnly = hodlPsbtNonceCheck([], [], false, [sameKey]);
   assert.equal(schnorrOnly.state, "problem");
   assert.match(schnorrOnly.detail, /Two Taproot signatures reuse a nonce under the same key/);
-  const both = hodlPsbtNonceCheck([{}], [], false, [[{}, {}]]);
+  const crossKey = hodlPsbtNonceCheck([], [], false, [[{}, {}]]);
+  assert.equal(crossKey.state, "problem");
+  assert.match(crossKey.detail, /Two Taproot signatures share a nonce under different keys/, "a pair not marked same-key is cross-key");
+  const both = hodlPsbtNonceCheck([{}], [], false, [sameKey]);
   assert.equal(both.state, "problem");
   assert.match(both.detail, /repeated ECDSA nonce/, "ECDSA reuse text wins when both exist");
   assert.equal(hodlPsbtNonceCheck([], [], false, []).state, "complete", "no Schnorr records, no change");
@@ -436,4 +440,44 @@ test("a finalized key-path input with no previous output is an unchecked Taproot
   assert.match(html, /Some finalized Taproot inputs could not be read/);
   assert.doesNotMatch(html, /Some ECDSA signatures could not be inspected/);
   assert.equal(recorded.at(-1).verdict, "incomplete");
+});
+
+// DeepSeek's red-team of #1051 (89360c2), F1/F2: a real Taproot output key
+// is the tweaked internal key, so a key-path signature (under Q) and a
+// script-path signature (under P) never share a key, yet a shared nonce
+// leaks P's secret: s1 - s2 = (e1 - e2)*d + e1*t with t public.
+test("a key-path signature under the tweaked output key and a script-path signature under its internal key that share R are reuse", () => {
+  const P = tapKey;
+  const leaf = Uint8Array.of(0x20, ...P, 0xac);
+  const leafHash = schnorr.utils.taggedHash("TapLeaf", Uint8Array.of(0xc0, leaf.length, ...leaf));
+  const t = bytesToNum(schnorr.utils.taggedHash("TapTweak", P, leafHash)) % curveN;
+  const dEven = secp256k1.getPublicKey(numToBytes(tapSecret), true)[0] === 0x03 ? curveN - tapSecret : tapSecret;
+  const q = (dEven + t) % curveN;
+  const Q = schnorr.getPublicKey(numToBytes(q));
+  assert.notDeepEqual(Q, P, "a real output key is the tweaked internal key");
+  const k = bytesToNum(new Uint8Array(32).fill(0xcc));
+  const keyPathSig = signWithNonce(tapMsgA, q, k);
+  const scriptPathSig = signWithNonce(tapMsgB, tapSecret, k);
+  assert.ok(schnorr.verify(keyPathSig, tapMsgA, Q) && schnorr.verify(scriptPathSig, tapMsgB, P), "both signatures are genuine");
+  assert.deepEqual(keyPathSig.slice(0, 32), scriptPathSig.slice(0, 32), "one nonce, one R");
+  const utxoQ = () => {
+    const val = new Uint8Array(8 + 1 + 34);
+    new DataView(val.buffer).setBigUint64(0, 1000n, true);
+    val.set([34, 0x51, 0x20, ...Q], 8);
+    return { type: 1, keydata: new Uint8Array(), val };
+  };
+  const html = app.hodlRenderPsbt(tapPsbt([
+    [utxoQ(), tapKeySigEntry(keyPathSig)],
+    [utxoQ(), { type: 20, keydata: Uint8Array.of(...P, ...leafHash), val: scriptPathSig }],
+  ]), undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce across different keys/);
+  assert.match(html, /Two Taproot signatures share a nonce under different keys/);
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+});
+
+test("a keyless key-path signature that shares R with another is still reported", () => {
+  const html = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), tapKeySigEntry(tapSigA)], [tapKeySigEntry(tapSigB)]]), undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce across different keys/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
 });

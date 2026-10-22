@@ -76,27 +76,28 @@ function hodlSchnorrRHex(bytes) {
   return hex;
 }
 
-// BIP340 nonce reuse. Every same-key same-R pair is a key leak: BIP341's
-// signature message commits to the input index and, for script path, to the
-// leaf hash, and key path and script path sign different messages
-// (ext_flag) — so two valid signatures with one R under one x-only key are
-// always on different messages, and s1 - s2 = (e1 - e2)*d reveals the key.
-// One R and one key with the same s is one signature copied into two fields
-// (same e, so the same message): it leaks nothing and is not reported. A
-// pair whose s is missing is reported (fail closed). Same R under different
-// keys is not reuse and is not reported. A record without a parsed R or without a
-// 32-byte x-only key cannot be compared: it counts in `incomplete`, never
-// silently skipped.
+// BIP340 nonce reuse. Two signatures sharing R share their nonce. Under one
+// x-only key that is a key leak: BIP341's signature message commits to the
+// input index, the leaf hash and the spend path (ext_flag), so the messages
+// differ and s1 - s2 = (e1 - e2)*d reveals the key. Under two keys it leaks
+// whenever the keys are related: a Taproot output key Q = P + tG and its
+// internal key P (s1 - s2 = (e1 - e2)*d + e1*t, with t public), or one
+// wallet's non-hardened keys (DeepSeek's red-team of #1051, F1). So every
+// pair sharing R is reported, whatever its keys, and each says whether its
+// keys match; the one exception is one signature copied into two fields
+// (the same R and the same s: the same e, so the same message), which leaks
+// nothing. A pair whose s is missing is reported (fail closed). A record
+// without a parsed R cannot be compared and one without a 32-byte x-only key
+// cannot be attributed: both count in `incomplete`, never silently skipped,
+// and a keyless record with an R still joins the comparison.
 export function hodlCompareSchnorrNonces(records, hodlEq) {
   const reused = [];
   let incomplete = 0;
   const comparable = [];
   for (const record of records) {
-    if (!record.r || record.r.length !== 32 || !record.pubkey || record.pubkey.length !== 32) {
-      incomplete++;
-      continue;
-    }
-    comparable.push(record);
+    const readable = record.r && record.r.length === 32;
+    if (!readable || !record.pubkey || record.pubkey.length !== 32) incomplete++;
+    if (readable) comparable.push(record);
   }
   // Group by R and compare only within a group, like hodlCompareNonces:
   // identical attacker-supplied R values collapse into one quadratic bucket,
@@ -118,9 +119,10 @@ export function hodlCompareSchnorrNonces(records, hodlEq) {
     for (let first = 0; first < group.length; first++)
       for (let second = first + 1; second < group.length; second++) {
         const a = group[first], b = group[second];
-        if (!hodlEq(a.pubkey, b.pubkey)) continue;
         if (a.s && b.s && hodlEq(a.s, b.s)) continue; // the same signature twice
-        reused.push([a, b]);
+        const pair = [a, b];
+        pair.sameKey = Boolean(a.pubkey?.length === 32 && b.pubkey?.length === 32 && hodlEq(a.pubkey, b.pubkey));
+        reused.push(pair);
       }
   }
   return { reused, incomplete };

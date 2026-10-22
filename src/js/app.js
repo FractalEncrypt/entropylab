@@ -12674,10 +12674,17 @@ function hodlPsbtAnalysisSummary(checks) {
   }).join("");
   return "<section class='psbt-analysis-summary' aria-label='" + hodlTAttr("PSBT security analysis status") + "'><p class='label psbt-section-label'>" + hodlT("PSBT security analysis") + "</p><p class='" + overallClass + "'><strong>" + overall + "</strong></p><ul>" + rows + "</ul><p class='edge-note is-private'>" + hodlT("Completed means only that the named check ran on the information available here. It does not prove that the PSBT claims are true or that the transaction is safe to sign.") + "</p></section>";
 }
+// The Taproot nonce-reuse warning: the same key, or different keys (a
+// reused nonce leaks related keys; DeepSeek's red-team of #1051, F1).
+function hodlSchnorrReuseHtml(schnorrReused) {
+  return schnorrReused.some((pair) => pair.sameKey)
+    ? "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>"
+    : "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce across different keys.") + "</strong> " + hodlT("The same R value appears on Taproot signatures under different keys, so their nonce was reused. If the keys are related, as a Taproot output key is to its internal key or as keys from one wallet are, the private key can be recovered. Do not broadcast this transaction.") + "</p>";
+}
 function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0) {
   let label = hodlTText("Nonce analysis");
   if (reused.length) return { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
-  if (schnorrReused.length) return { label, state: "problem", detail: hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") };
+  if (schnorrReused.length) return { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
   if (possible.length) return { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
   if (nonceIncomplete) return { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
   // The completed line names the signatures that were compared (DeepSeek's
@@ -13059,7 +13066,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   else if (rValues.length === 1) nonceHtml.push("<p class='muted'>" + hodlT("Only one ECDSA signature with a readable r is present. Nonce reuse cannot be judged from this file alone.") + "</p>");
   else nonceHtml.push("<p class='muted'>" + hodlT("No ECDSA signatures with a readable r value are present, so there is no nonce to compare yet.") + "</p>");
-  if (schnorrReused.length) nonceHtml.push("<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>");
+  if (schnorrReused.length) nonceHtml.push(hodlSchnorrReuseHtml(schnorrReused));
   if (rValues.length) nonceHtml.push("<p class='psbt-kv'>" + hodlT("r values:") + "<br>" + rValues.map(value => hodlEscapeHtml(value.hex) + " " + hodlT("(input {n})", { n: value.input })).join("<br>") + "</p>");
   rows.forEach(row => nonceHtml.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: row.input }) + "</strong><br>" + hodlPublicInlineHtml(row.pubkey, { label: hodlTText("Public key"), preview: row.pubkey.slice(0, 18) + "…", className: "psbt-address" }) + "<br><span class='" + row.className + "'>" + hodlEscapeHtml(row.message) + "</span></p>"));
   // The Taproot total counts parseable signatures only (issue #333); an
@@ -13198,7 +13205,7 @@ function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt =
   }
   else if (rValues.length === 1) verdictHtml.push("<p class='muted'>" + hodlT("Only one ECDSA signature with a readable r is present. Nonce reuse cannot be judged from this file alone.") + "</p>");
   else verdictHtml.push("<p class='muted'>" + hodlT("No ECDSA signatures with a readable r and public key were found.") + "</p>");
-  if (schnorrReused.length) verdictHtml.push("<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>");
+  if (schnorrReused.length) verdictHtml.push(hodlSchnorrReuseHtml(schnorrReused));
   else if (tapUnchecked || schnorrIncomplete) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("Some Taproot signatures in this transaction could not be checked for a repeated nonce. A key-path signature's key is in the previous output, which a raw transaction does not include, and only single-key and multi_a script-path spends are read. This is not a clean result.") + "</p>");
   else if (tapCount === 1) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("This transaction also contains 1 Taproot / Schnorr signature in a script-path spend. Only one Taproot signature is present, so nonce reuse cannot be judged from this transaction alone.") + "</p>");
   else if (tapCount) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("This transaction also contains {count} Taproot / Schnorr signature(s) in script-path spends. No repeated BIP340 nonces were found among them.", { count: tapCount }) + "</p>");

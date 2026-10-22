@@ -142,12 +142,15 @@ test("tap script sig records slice the x-only pubkey out of the keydata", () => 
   assert.deepEqual(unparseable[0].leafHash, leafHash);
 });
 
-test("same R under different keys is not reported, and different R is not reuse", () => {
+test("same R under different keys is a reused nonce, reported as cross-key; different R is not reuse", () => {
+  // A reused nonce leaks related keys (an output key and its internal key,
+  // one wallet's non-hardened keys): DeepSeek's red-team of #1051, F1.
   const differentKeys = hodlCompareSchnorrNonces([
     { input: 0, source: "tap-key", r: rA, pubkey: key },
     { input: 1, source: "tap-key", r: rA, pubkey: new Uint8Array(32).fill(0x55) },
   ], eq);
-  assert.equal(differentKeys.reused.length, 0, "same R under different keys is not reuse");
+  assert.equal(differentKeys.reused.length, 1, "same R under different keys is a reused nonce");
+  assert.equal(differentKeys.reused[0].sameKey, false, "and is marked cross-key");
   assert.equal(differentKeys.incomplete, 0);
   const differentR = hodlCompareSchnorrNonces([
     { input: 0, source: "tap-key", r: rA, pubkey: key },
@@ -168,14 +171,15 @@ test("records without a parsed R or a 32-byte key count as incomplete, never ski
     { input: 0, source: "tap-key", r: rA, pubkey: new Uint8Array() },
     { input: 1, source: "tap-key", r: rA, pubkey: key },
   ], eq);
-  assert.equal(missingKey.reused.length, 0, "a keyless record cannot be compared");
-  assert.equal(missingKey.incomplete, 1);
+  assert.equal(missingKey.incomplete, 1, "a keyless record cannot be attributed");
+  assert.equal(missingKey.reused.length, 1, "but its R still joins the comparison: a shared R is reported");
+  assert.equal(missingKey.reused[0].sameKey, false);
   const shortKey = hodlCompareSchnorrNonces([
     { input: 0, source: "tap-key", r: rA, pubkey: new Uint8Array(31) },
     { input: 1, source: "tap-key", r: rA, pubkey: key },
   ], eq);
-  assert.equal(shortKey.reused.length, 0);
   assert.equal(shortKey.incomplete, 1, "a non-32-byte key is not a key");
+  assert.equal(shortKey.reused.length, 1, "the shared R is still reported");
 });
 
 test("the comparison budget refuses a flood of identical R values, like the ECDSA cap", () => {
