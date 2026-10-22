@@ -5,6 +5,7 @@
 // fail, and no step that runs the client may see the push token. A textual
 // guard cannot parse YAML, but it fails the moment any of these lines move.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -198,4 +199,27 @@ test("the upgrade push refuses a proof with fewer Bitcoin attestations than the 
   assert.match(validate, /OLD=\$\(attestations entropylab\.html\.ots\)/, "the committed proof's attestations are counted");
   assert.match(validate, /if \[ "\$NEW" -lt "\$OLD" \]; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "fewer attestations fail the job");
   assert.ok(all.indexOf(validate) < all.findIndex((step) => step.includes("git commit")), "before the commit");
+});
+
+test("the attestation counter counts Bitcoin attestations exactly, run as the workflow runs it", (t) => {
+  // The function is taken from ots-upgrade.yml itself and fed each proof on
+  // stdin, so the test exercises the shipped shell, not a copy.
+  const validate = steps(jobBlock(read(".github/workflows/ots-upgrade.yml"), "upgrade-push")).find((step) => step.includes("stat -c %s"));
+  const fn = validate.split("\n").map((line) => line.trim()).find((line) => line.startsWith("attestations() {"));
+  assert.ok(fn, "the counter is defined in the validation step");
+  const count = (bytes) => {
+    const run = spawnSync("bash", ["-c", `set -euo pipefail\n${fn}\nattestations -`], { input: Buffer.from(bytes) });
+    if (run.error?.code === "ENOENT") return null;
+    assert.equal(run.status, 0, String(run.stderr));
+    return Number(String(run.stdout).trim());
+  };
+  const BTC = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
+  const PENDING = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
+  const header = [0x00, ...Buffer.from("OpenTimestamps"), 0x00, 0x00, ...Buffer.from("Proof"), 0x00, 0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01, 0x08, ...new Array(32).fill(0x11)];
+  const none = count([...header, 0x00, ...PENDING, 0x05]);
+  if (none === null) return t.skip("bash is not available");
+  assert.equal(none, 0, "a pending-only proof has no Bitcoin attestation");
+  assert.equal(count([...header, 0x00, ...BTC, 0x02, 0x01, 0x02, 0x00, ...BTC, 0x01, 0x07, 0x00, ...BTC, 0x01, 0x09]), 3, "three attestations, as in the upgraded proof of 27362f2");
+  assert.equal(count([...header, 0x50, 0x58, 0x89, 0x60, 0xd7, 0x3d, 0x71, 0x90, 0x10]), 0, "a lookalike shifted by half a byte is not counted");
+  assert.equal(count([...new Array(44).fill(0), ...BTC]), 1, "a tag split across od's 16-byte lines is counted");
 });
