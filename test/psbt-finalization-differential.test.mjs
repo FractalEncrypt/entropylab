@@ -25,16 +25,12 @@
 // the app must not complete it. @scure/btc-signer exposes no
 // public raw-transaction parser, so "re-parses strictly" is enforced as
 // Transaction.fromPSBT with its default (strict) flags on the app's bytes.
-// The inspect document reports the fee as a display-shaped object, and no
-// existing test pins the field or shape in which an input's decoded
-// amount is reported (psbt-differential-fuzz pins only doc.tx.outputs's
-// plain satoshi values; doc.tx.inputs carries txid/vout/scriptSig/
-// sequence only), so the fee invariant is pinned to satoshi values, never
-// to display formats: the app's decoded output amounts must sum to the
-// generator's independently constructed sum(outputs), each of the app's
-// decoded input amounts must be the generator's amount for that input
-// wherever the document reports it, and the fee the document reports
-// must be exactly sum(inputs) − sum(outputs).
+// The fee invariant is pinned field by field against the generator's own
+// amounts: each input's amount where the inspect document decodes that
+// input's UTXO record (PSBT_IN_WITNESS_UTXO's decoded.value, or
+// PSBT_IN_NON_WITNESS_UTXO's decoded.prevout.value), doc.totalIn, the
+// decoded output values, and doc.fee.sats — so two inputs with swapped
+// amounts, or a fee read from the wrong field, fail the run.
 //
 // If @scure/btc-signer refuses to build or finalize a shape — a documented
 // limitation of the oracle — the refusal is recognized by error message and
@@ -99,8 +95,11 @@ const p2wpkh = (pub) => cat([0x00, 0x14], hash160(pub));
 const p2sh = (redeem) => cat([0xa9, 0x14], hash160(redeem), [0x87]);
 const p2wsh = (witnessScript) => cat([0x00, 0x20], sha256(witnessScript));
 const p2tr = (xonly) => cat([0x51, 0x20], xonly);
-const reversedHex = (bytes) => hex(Uint8Array.from(bytes).reverse());
-const txidOf = (raw) => reversedHex(sha256(sha256(raw)));
+// The txid hashes the serialization WITHOUT the witness (BIP141); hashing
+// extract()'s full bytes would give the wtxid for every segwit input.
+// @scure's Transaction.id is sha256d(toBytes(true)) reversed: scriptSig in,
+// witness out.
+const txidOf = (raw) => Transaction.fromRaw(raw, SCURE_OPTS).id;
 
 // --- PSBT framing: signature fields in the input maps ------------------------
 
@@ -113,31 +112,38 @@ const compactSize = (bytes, at) => {
 };
 
 // Walks the global map then the per-input maps (framing only; the decoders
-// under test do the parsing) and returns, per input, the key types of its
-// map. PSBT_IN_PARTIAL_SIG is 0x02 (BIP174); PSBT_IN_TAP_KEY_SIG is 0x13
-// and PSBT_IN_TAP_SCRIPT_SIG 0x14 (BIP371). BIP174's 0x0c and 0x0d are
-// the PSBT_IN_HASH160 and PSBT_IN_HASH256 preimage fields, not signatures.
-const inputMapKeyTypes = (psbt, inputCount) => {
+// under test do the parsing) and returns, per input, the entries of its
+// map as { type, key, value } (key is the whole key, type byte included).
+// PSBT_IN_PARTIAL_SIG is 0x02 (BIP174); PSBT_IN_TAP_KEY_SIG is 0x13 and
+// PSBT_IN_TAP_SCRIPT_SIG 0x14 (BIP371). BIP174's 0x0c and 0x0d are the
+// PSBT_IN_HASH160 and PSBT_IN_HASH256 preimage fields, not signatures.
+const inputMapEntries = (psbt, inputCount) => {
   assert.deepEqual([...psbt.subarray(0, 5)], [0x70, 0x73, 0x62, 0x74, 0xff], "PSBT magic");
   let at = 5;
   const maps = [];
   while (maps.length < 1 + inputCount) {
-    const types = [];
+    const entries = [];
     for (;;) {
       const [keyLength, keySize] = compactSize(psbt, at);
       at += keySize;
       if (keyLength === 0) break;
-      types.push(psbt[at]);
+      const key = psbt.subarray(at, at + keyLength);
       at += keyLength;
       const [valueLength, valueSize] = compactSize(psbt, at);
-      at += valueSize + valueLength;
+      at += valueSize;
+      entries.push({ type: key[0], key, value: psbt.subarray(at, at + valueLength) });
+      at += valueLength;
     }
-    maps.push(types);
+    maps.push(entries);
   }
   return maps.slice(1);
 };
-const staleSigFields = (types) => types.filter((type) => type === 0x02 || type === 0x13 || type === 0x14);
-const stalePerInput = (psbt, inputCount) => inputMapKeyTypes(psbt, inputCount).map(staleSigFields);
+const isSigField = ({ type }) => type === 0x02 || type === 0x13 || type === 0x14;
+const stalePerInput = (psbt, inputCount) => inputMapEntries(psbt, inputCount).map((entries) => entries.filter(isSigField).map(({ type }) => type));
+// Every signature-class record of each input map, key and value, as sorted
+// hex: what a cosigner has already contributed.
+const sigRecordsPerInput = (psbt, inputCount) =>
+  inputMapEntries(psbt, inputCount).map((entries) => entries.filter(isSigField).map(({ key, value }) => `${hex(key)}:${hex(value)}`).sort());
 
 // --- case generation ---------------------------------------------------------
 
@@ -149,7 +155,9 @@ const SCURE_OPTS = { allowUnknownOutputs: true, allowUnknownInputs: true, allowU
 // bug in this generator). Refusals are recognized by message fragment, so
 // a generator bug — or a @scure upgrade that rewords its errors — fails
 // the run instead of silently skipping coverage.
-const SCURE_REFUSALS = ["Unknown input", "Unknown output", "Cannot finalize", "Cannot extract", "not supported"];
+// ("not supported" was dropped in round 2: no case needs it, and it is broad
+// enough to hide a generator bug or a @scure change as a silent skip.)
+const SCURE_REFUSALS = ["Unknown input", "Unknown output", "Cannot finalize", "Cannot extract"];
 
 const buildCase = (index) => {
   const kind = KINDS[index % KINDS.length];
@@ -283,52 +291,25 @@ const buildCase = (index) => {
   return {
     label: `case ${index}: ${kind}, ${inputs} input${inputs === 1 ? "" : "s"}, ${outputs} outputs`,
     kind, inputs, finalizedPsbt: fin.toPSBT(), raw, txid: txidOf(raw),
-    fee: sumIn - sumOut, sumOut, amounts, incompletePsbt, dropIdx,
+    fee: sumIn - sumOut, sumIn, sumOut, amounts, incompletePsbt, dropIdx,
   };
 };
 
 // --- the app's reported amounts ----------------------------------------------
 
-// psbtInspectDoc reports the fee as a display-shaped object, and no
-// existing test pins the field or shape in which an input's decoded
-// amount is reported (psbt-differential-fuzz pins only doc.tx.outputs's
-// plain satoshi values; doc.tx.inputs carries txid/vout/scriptSig/
-// sequence only). Amounts are therefore pinned to satoshi values, never
-// to display formats or user-facing copy: whatever a reported field
-// carries, one of its readings must be the exact satoshi amount — a plain
-// satoshi integer, or the BTC decimal of the same value. Integer strings
-// are read as sats only (a BTC display of a random satoshi amount always
-// carries decimals), so digit runs inside hex blobs cannot collide with
-// an amount through a spurious BTC reading.
-const satoshisIn = (leaf) => {
-  if (leaf === null || leaf === undefined) return [];
-  if (typeof leaf === "bigint") return [leaf];
-  if (typeof leaf === "number" && Number.isFinite(leaf)) return [BigInt(Math.round(leaf)), BigInt(Math.round(leaf * 1e8))];
-  if (typeof leaf === "string") {
-    const out = [];
-    for (const token of leaf.replace(/[\s,]/g, "").match(/\d+\.\d+|\d+/g) || []) {
-      const [whole, frac = ""] = token.split(".");
-      out.push(BigInt(whole));
-      if (frac !== "") out.push(BigInt(whole + frac.padEnd(8, "0").slice(0, 8)));
-    }
-    return out;
-  }
-  if (typeof leaf === "object") return Object.values(leaf).flatMap(satoshisIn);
-  return [];
-};
-// The fee the document reports, wherever the key naming it lives; like
-// the amounts, only the satoshi value is pinned, never the display shape.
-const feeReadings = (doc) => {
-  const out = [];
-  const walk = (node) => {
-    if (node === null || node === undefined || typeof node !== "object") return;
-    for (const [key, leaf] of Object.entries(node)) {
-      if (/fee/i.test(key)) out.push(...satoshisIn(leaf));
-      else if (leaf !== null && typeof leaf === "object") walk(leaf);
-    }
-  };
-  walk(doc);
-  return out;
+// The amount the inspect document decodes for input j, from that input's
+// own UTXO record: PSBT_IN_WITNESS_UTXO carries it as decoded.value, and
+// PSBT_IN_NON_WITNESS_UTXO as decoded.prevout.value (the spent output of
+// the embedded previous transaction). Both are satoshi strings. When an
+// input carries both records, they must agree.
+const docInputAmount = (doc, j) => {
+  const entries = doc.inputs[j] ?? [];
+  const witness = entries.find((entry) => entry.name === "PSBT_IN_WITNESS_UTXO");
+  const nonWitness = entries.find((entry) => entry.name === "PSBT_IN_NON_WITNESS_UTXO");
+  const readings = [witness?.decoded?.value, nonWitness?.decoded?.prevout?.value].filter((value) => value !== undefined).map(BigInt);
+  assert.ok(readings.length > 0, `input ${j} has no decoded UTXO amount in the inspect document`);
+  assert.ok(readings.every((value) => value === readings[0]), `input ${j}'s witness and non-witness UTXO amounts disagree: ${readings.join(" vs ")}`);
+  return readings[0];
 };
 
 // --- the run -----------------------------------------------------------------
@@ -338,6 +319,7 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
   let ran = 0;
   let skipped = 0;
   let scriptPathRan = 0;
+  let survivalChecked = 0;
   for (let index = 0; index < CASES; index++) {
     const kind = KINDS[index % KINDS.length];
     if (unsupported.has(kind)) {
@@ -368,32 +350,27 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     assert.equal(doc.rustBitcoinError, null, `${where}: rust-bitcoin rejected the finalized PSBT: ${doc.rustBitcoinError}`);
     const appBytes = psbtBuildBytes(doc);
     const rawApp = Transaction.fromPSBT(appBytes, SCURE_OPTS).extract();
-    assert.deepEqual(rawApp, c.raw, `${where}: the app's round-trip changed the extracted transaction`);
-    assert.equal(txidOf(rawApp), c.txid, `${where}: the app's round-trip changed the txid`);
+    assert.deepEqual(rawApp, c.raw, `${where}: the app's round-trip changed the extracted transaction (full serialization, witness included)`);
+    assert.equal(txidOf(rawApp), c.txid, `${where}: the app's round-trip changed the txid (witness-stripped serialization)`);
 
     // (2) Strict re-parse: @scure exposes no raw-transaction parser, so
     // strictness is fromPSBT with its default (strict) flags.
     Transaction.fromPSBT(appBytes);
 
     // (3) Fee = sum(inputs) − sum(outputs); the generator's amounts are the
-    // independent source. The app's decoded output amounts must sum to the
-    // generator's sum(outputs); each of the app's decoded input amounts —
-    // pinned to the satoshi value wherever the document reports it, since
-    // no existing test pins the field or shape — must be the generator's
-    // amount for that input; and the fee the document reports, in whatever
-    // display shape, must be exactly sum(inputs) − sum(outputs).
+    // independent source. Each input's amount is read from that input's own
+    // UTXO record, so swapped amounts fail; then the document's total input,
+    // its decoded output values and its fee must all match exactly.
     assert.ok(c.fee > 0n, `${where}: generated a non-paying transaction`);
+    assert.equal(doc.inputs.length, c.inputs, `${where}: the inspect document has ${doc.inputs.length} input maps`);
+    for (let j = 0; j < c.inputs; j++) {
+      assert.equal(docInputAmount(doc, j), c.amounts[j], `${where}: the app's decoded amount for input ${j} is not the generator's ${c.amounts[j]} sats`);
+    }
+    assert.equal(BigInt(doc.totalIn), c.sumIn, `${where}: the app's totalIn is not sum(inputs)`);
     const docSumOut = doc.tx.outputs.reduce((total, output) => total + BigInt(output.value), 0n);
-    assert.equal(docSumOut, c.sumOut, `${where}: the app's decoded outputs do not sum to sum(inputs) − fee`);
-    const docReadings = satoshisIn(doc);
-    doc.tx.inputs.forEach((input, j) => {
-      assert.ok(
-        docReadings.includes(c.amounts[j]),
-        `${where}: the app's reported amount for input ${j} is not the generator's ${c.amounts[j]} sats; tx-level entry: ${JSON.stringify(input).slice(0, 300)}`);
-    });
-    const fees = feeReadings(doc);
-    assert.ok(fees.length > 0, `${where}: psbtInspectDoc reported no readable fee`);
-    assert.ok(fees.includes(c.fee), `${where}: the app's reported fee is not sum(inputs) − sum(outputs) = ${c.fee} sats`);
+    assert.equal(docSumOut, c.sumOut, `${where}: the app's decoded outputs do not sum to sum(outputs)`);
+    assert.equal(doc.fee?.known, true, `${where}: the app reports the fee as unknown`);
+    assert.equal(BigInt(doc.fee.sats), c.fee, `${where}: the app's fee is not sum(inputs) − sum(outputs) = ${c.fee} sats`);
 
     // (4) No stale signature fields may remain in any finalized input map:
     // BIP174's finalizer strips PSBT_IN_PARTIAL_SIG (0x02) and BIP371's
@@ -417,24 +394,32 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     // workflow's normal input) and no finalize or extract entry point is
     // exported — so the honest app-side assertion is what the app actually
     // does with the incomplete PSBT: it must inspect it without a
-    // rust-bitcoin error, and its re-serialization must still be one
-    // signature short — the app must not complete it.
+    // rust-bitcoin error, its re-serialization must keep every signature the
+    // cosigners already contributed, byte for byte, and it must still be one
+    // signature short — the app must not complete it. Each PSBT is parsed
+    // OUTSIDE the throws block, so a malformed PSBT fails the run instead of
+    // passing as "refused".
+    const scureIncomplete = Transaction.fromPSBT(c.incompletePsbt, SCURE_OPTS);
     assert.throws(
       () => {
-        const t = Transaction.fromPSBT(c.incompletePsbt, SCURE_OPTS);
-        t.finalize();
-        t.extract();
+        scureIncomplete.finalize();
+        scureIncomplete.extract();
       },
       (error) => error instanceof Error && !(error instanceof WebAssembly.RuntimeError),
       `${where}: @scure finalized a PSBT whose input ${c.dropIdx} is one signature short`);
     const incompleteDoc = psbtInspectDoc(c.incompletePsbt);
     assert.equal(incompleteDoc.rustBitcoinError, null, `${where}: the app refused to inspect a partially signed PSBT (the cosigner workflow's normal input)`);
     const incompleteBytes = psbtBuildBytes(incompleteDoc);
+    // (A one-input PSBT whose only signature was dropped has none left; the
+    // run counts the cases where there was something to keep.)
+    const contributed = sigRecordsPerInput(c.incompletePsbt, c.inputs);
+    if (contributed.some((records) => records.length > 0)) survivalChecked += 1;
+    assert.deepEqual(sigRecordsPerInput(incompleteBytes, c.inputs), contributed, `${where}: the app's round-trip changed the signatures a cosigner already contributed`);
+    const appIncomplete = Transaction.fromPSBT(incompleteBytes, SCURE_OPTS);
     assert.throws(
       () => {
-        const t = Transaction.fromPSBT(incompleteBytes, SCURE_OPTS);
-        t.finalize();
-        t.extract();
+        appIncomplete.finalize();
+        appIncomplete.extract();
       },
       (error) => error instanceof Error && !(error instanceof WebAssembly.RuntimeError),
       `${where}: the app's round-trip completed a PSBT whose input ${c.dropIdx} is one signature short`);
@@ -458,4 +443,5 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     assert.ok(!unsupported.has(kind), `@scure/btc-signer refused the taproot shape "${kind}"; its BIP341/BIP371 coverage would be skipped`);
   }
   assert.equal(scriptPathRan, CASES / KINDS.length, "a p2tr script-path case was skipped: every script-path case must actually be built");
+  assert.ok(survivalChecked >= CASES / 4, `only ${survivalChecked} cases left a contributed signature to check in the one-signature-short PSBT`);
 });
