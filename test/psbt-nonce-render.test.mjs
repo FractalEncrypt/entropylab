@@ -338,3 +338,76 @@ test("the completed nonce line names the signatures that were compared (F4)", as
   assert.match(hodlPsbtNonceCheck([], [], false, [], 2, 0).detail, /^All ECDSA signatures in this PSBT/);
   assert.match(hodlPsbtNonceCheck([], [], false).detail, /^All ECDSA signatures in this PSBT/, "callers without counts keep the ECDSA line");
 });
+
+// --- finalized script path, raw transactions (#1051 round 3) ---------------
+const leafKey = new Uint8Array(32).fill(0x44);
+const pkLeaf = Uint8Array.of(0x20, ...leafKey, 0xac);
+const controlBlock = Uint8Array.of(0xc0, ...new Uint8Array(32).fill(0x55));
+const rawSig = (r, s) => Uint8Array.of(...new Uint8Array(32).fill(r), ...new Uint8Array(32).fill(s));
+const finalScriptPath = (sig) => ({ type: 8, keydata: new Uint8Array(), val: witnessStack([sig, pkLeaf, controlBlock]) });
+
+test("finalized script-path signatures join the comparison: a shared R under the leaf key is reuse", () => {
+  const reuse = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), finalScriptPath(rawSig(0xa1, 0x01))], [witnessUtxoEntry(), finalScriptPath(rawSig(0xa1, 0x02))]]), undefined, undefined, "all");
+  assert.match(reuse, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+  const distinct = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), finalScriptPath(rawSig(0xa1, 0x01))], [witnessUtxoEntry(), finalScriptPath(rawSig(0xb2, 0x02))]]), undefined, undefined, "all");
+  assert.match(distinct, /No repeated BIP340 nonces were found among them/);
+  assert.equal(recorded.at(-1).verdict, "clean");
+});
+
+test("a finalized Taproot spend the check cannot read is an unchecked Taproot input, not an ECDSA one", () => {
+  const unknownLeaf = { type: 8, keydata: new Uint8Array(), val: witnessStack([rawSig(0xa1, 0x01), Uint8Array.of(0x51), controlBlock]) };
+  const html = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), unknownLeaf], [witnessUtxoEntry(), tapKeySigEntry(tapSigA)], [witnessUtxoEntry(), tapKeySigEntry(tapSigC)]]), undefined, undefined, "all");
+  assert.match(html, /Some finalized Taproot inputs could not be read/);
+  assert.doesNotMatch(html, /Some ECDSA signatures could not be inspected/);
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+});
+
+test("a Taproot signature starting 0x30 is not mistaken for an uninspected ECDSA signature", () => {
+  // hodlFinalSigs' DER test is a first byte of 0x30 and a length up to 73,
+  // which a 64-byte Schnorr signature passes one time in 256.
+  const keyPath = (sig) => ({ type: 8, keydata: new Uint8Array(), val: witnessStack([sig]) });
+  const html = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), keyPath(rawSig(0x30, 0x01))], [witnessUtxoEntry(), keyPath(rawSig(0x31, 0x02))]]), undefined, undefined, "all");
+  assert.doesNotMatch(html, /Some ECDSA signatures could not be inspected/);
+  assert.equal(recorded.at(-1).verdict, "clean");
+});
+
+test("a 0x13 or 0x14 field with malformed keydata counts as incomplete, never dropped (Kimi K3's review)", () => {
+  const html = app.hodlRenderPsbt(tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA), { type: 19, keydata: Uint8Array.of(0xaa), val: tapSigB }],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigC)],
+  ]), undefined, undefined, "all");
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+  app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), tapKeySigEntry(tapSigA), { type: 20, keydata: new Uint8Array(31), val: tapSigB }], [witnessUtxoEntry(), tapKeySigEntry(tapSigC)]]), undefined, undefined, "all");
+  assert.equal(recorded.at(-1).verdict, "incomplete", "a 0x14 whose keydata is not key + leaf hash");
+});
+
+const rawTx = (witnesses, legacy = []) => ({
+  version: 2, locktime: 0, segwit: true,
+  inputs: [
+    ...legacy.map((r, vout) => ({ txid: new Uint8Array(32).fill(0x11), vout, sequence: 0xffffffff, scriptSig: Uint8Array.of(9, ...signature(r), 33, ...pubkey), witness: [] })),
+    ...witnesses.map((witness, k) => ({ txid: new Uint8Array(32).fill(0x22), vout: k, sequence: 0xffffffff, scriptSig: new Uint8Array(), witness })),
+  ],
+  outputs: [{ amount: 1000n, script: Uint8Array.of(0x51) }],
+});
+
+test("raw transaction: script-path signatures are compared; a shared R under the leaf key is reuse", () => {
+  const reuse = app.hodlRenderRawTx(rawTx([[rawSig(0xa1, 0x01), pkLeaf, controlBlock], [rawSig(0xa1, 0x02), pkLeaf, controlBlock]]), undefined, undefined, "nonce");
+  assert.match(reuse, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+  const distinct = app.hodlRenderRawTx(rawTx([[rawSig(0xa1, 0x01), pkLeaf, controlBlock], [rawSig(0xb2, 0x02), pkLeaf, controlBlock]]), undefined, undefined, "nonce");
+  assert.match(distinct, /This transaction also contains 2 Taproot \/ Schnorr signature\(s\) in script-path spends/);
+  assert.equal(recorded.at(-1).verdict, "clean");
+  app.hodlRenderRawTx(rawTx([[rawSig(0xa1, 0x01), pkLeaf, controlBlock]]), undefined, undefined, "nonce");
+  assert.equal(recorded.at(-1).verdict, "incomplete", "one script-path signature cannot be judged");
+});
+
+test("raw transaction: a Taproot key-path input is unchecked, so two clean ECDSA signatures are no longer a clean result", () => {
+  app.hodlRenderRawTx(rawTx([], [1, 2]), undefined, undefined, "nonce");
+  assert.equal(recorded.at(-1).verdict, "clean", "control: two distinct ECDSA signatures");
+  const html = app.hodlRenderRawTx(rawTx([[rawSig(0xa1, 0x01)]], [1, 2]), undefined, undefined, "nonce");
+  assert.match(html, /Some Taproot signatures in this transaction could not be checked for a repeated nonce/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+});

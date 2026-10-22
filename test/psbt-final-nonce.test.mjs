@@ -48,6 +48,7 @@ import { hex as hodlHex } from "../src/js/coders.js";
 import { p2shScript, p2wshScript } from "../src/js/addresses.js";
 import { wasmExports as hodlWasm, withInput as hodlWasmIn, withOutput as hodlWasmOut } from "../src/js/entropylab-wasm.js";
 import { serializeTx } from "../src/js/tx.js";
+import { isP2tr } from "../src/js/bip352.js";
 ${[
   "hodlPsbtNeed",
   "hodlR32",

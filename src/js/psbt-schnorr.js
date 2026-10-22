@@ -125,3 +125,70 @@ export function hodlCompareSchnorrNonces(records, hodlEq) {
   }
   return { reused, incomplete };
 }
+
+// BIP341 witness shapes. With at least two elements, a last element starting
+// 0x50 is the annex, which no signature check reads; it is dropped first.
+function hodlTapStack(stack) {
+  const last = stack[stack.length - 1];
+  return stack.length >= 2 && last.length && last[0] === 0x50 ? stack.slice(0, -1) : stack;
+}
+
+// A tapscript (leaf version 0xc0) control block: 33 + 32m bytes, m <= 128.
+// No P2WSH witness script starts 0xc0/0xc1 (undefined opcodes in v0), so a
+// v0 witness is never mistaken for a script-path spend.
+function hodlLooksControlBlock(item) {
+  return item.length >= 33 && item.length <= 33 + 32 * 128 && (item.length - 33) % 32 === 0 && (item[0] & 0xfe) === 0xc0;
+}
+
+// "key" for a key-path spend (one 64/65-byte signature), "script" for a
+// tapscript script-path spend, null for anything else.
+export function hodlTapWitnessShape(stack) {
+  const items = hodlTapStack(stack);
+  if (items.length === 1 && (items[0].length === 64 || items[0].length === 65)) return "key";
+  if (items.length >= 2 && hodlLooksControlBlock(items[items.length - 1])) return "script";
+  return null;
+}
+
+// The keys of the two leaf templates whose signatures can be attributed from
+// the script alone: pk() is <key> OP_CHECKSIG; multi_a (and sortedmulti_a)
+// is <k1> OP_CHECKSIG <k2> OP_CHECKSIGADD … <kn> OP_CHECKSIGADD <m> OP_NUMEQUAL.
+function hodlTapLeafKeys(script) {
+  if (script.length === 34 && script[0] === 0x20 && script[33] === 0xac) return [script.slice(1, 33)];
+  const keys = [];
+  let at = 0;
+  while (at + 34 <= script.length && script[at] === 0x20 && script[at + 33] === (keys.length ? 0xba : 0xac)) {
+    keys.push(script.slice(at + 1, at + 33));
+    at += 34;
+  }
+  if (!keys.length) return null;
+  let m = 0;
+  if (script[at] >= 0x51 && script[at] <= 0x60) { m = script[at] - 0x50; at += 1; }
+  else if (script[at] === 0x01 && at + 2 <= script.length) { m = script[at + 1]; at += 2; }
+  else if (script[at] === 0x02 && at + 3 <= script.length) { m = script[at + 1] | (script[at + 2] << 8); at += 3; }
+  if (!m || m > keys.length || at + 1 !== script.length || script[at] !== 0x9c) return null;
+  return keys;
+}
+
+// The BIP340 signatures of a finalized script-path spend whose leaf is pk()
+// or multi_a, each keyed by its x-only key from the leaf: the script checks
+// the top stack item first, so the witness lists the signatures in reverse
+// key order, and an empty item is a key that did not sign. An unparseable
+// signature is kept with r null (incomplete, never skipped). Null for any
+// other witness or leaf: the caller counts it as unchecked.
+export function hodlTapScriptPathSigs(stack) {
+  const items = hodlTapStack(stack);
+  if (items.length < 2 || !hodlLooksControlBlock(items[items.length - 1])) return null;
+  const keys = hodlTapLeafKeys(items[items.length - 2]);
+  const inputs = items.slice(0, -2);
+  if (!keys || inputs.length !== keys.length) return null;
+  const records = [];
+  keys.forEach((pubkey, at) => {
+    const item = inputs[inputs.length - 1 - at];
+    if (!item.length) return;
+    const parsed = hodlParseSchnorr(item);
+    records.push(parsed
+      ? { pubkey, r: parsed.r, s: parsed.s, source: "tap-script" }
+      : { pubkey, r: null, s: null, source: "tap-script" });
+  });
+  return records.length ? records : null;
+}

@@ -53,7 +53,7 @@ import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFr
 // The Lightning node key tool (its own workspace tab): aezeed deciphering
 // and the LND/LDK node identity derivations live in lightning.js/aezeed.js.
 import { hodlInitLn, hodlLnWipeMem } from "./lightning.js";
-import { hodlCompareSchnorrNonces, hodlParseSchnorr, hodlTapKeySigs, hodlTapScriptSigs, hodlTapSighashProblems } from "./psbt-schnorr.js";
+import { hodlCompareSchnorrNonces, hodlParseSchnorr, hodlTapKeySigs, hodlTapScriptPathSigs, hodlTapScriptSigs, hodlTapSighashProblems, hodlTapWitnessShape } from "./psbt-schnorr.js";
 import {
   buildImportDescriptorsJson,
   canonicalizeWatchDescriptor,
@@ -10379,6 +10379,19 @@ function hodlFinalTapKeySig(entries, witnessUtxo) {
   if (!parsed) return null;
   return { pubkey: witnessUtxo.script.slice(2), r: parsed.r, s: parsed.s, source: "tap-key" };
 }
+// The Schnorr signatures of a finalized P2TR script-path input whose leaf is
+// pk() or multi_a (psbt-schnorr.js reads the witness); null for any other
+// spend, which the caller counts as an unchecked Taproot input.
+function hodlFinalTapScriptSigs(entries, witnessUtxo) {
+  if (!witnessUtxo || !isP2tr(witnessUtxo.script)) return null;
+  let finals = hodlFind(entries, 8);
+  if (finals.length !== 1 || finals[0].keydata.length) return null;
+  try {
+    return hodlTapScriptPathSigs(hodlWitnessStackItems(finals[0].val));
+  } catch {
+    return null;
+  }
+}
 function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
   let items = [], candidates = [], malformed = false;
   for (let entry of hodlFind(entries, 7)) {
@@ -10389,7 +10402,11 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
       malformed = true;
     }
   }
-  for (let entry of hodlFind(entries, 8)) {
+  // Tapscript has no ECDSA (BIP342): a P2TR final witness is read by the
+  // Schnorr path only, where a signature starting 0x30 would otherwise pass
+  // for DER here.
+  let taproot = witnessUtxo && isP2tr(witnessUtxo.script);
+  for (let entry of taproot ? [] : hodlFind(entries, 8)) {
     if (entry.keydata.length) { malformed = true; continue; }
     try {
       items.push(...hodlWitnessStackItems(entry.val));
@@ -12674,6 +12691,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     schnorrRecords = [],
     rows = [],
     tapSignatureCount = 0,
+    tapUninspected = 0,
     ecdsaIndex = 0,
     uninspected = 0,
     policyProblems = 0,
@@ -12759,21 +12777,25 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // Finalized signatures moved into the final script fields must not
       // escape repeated-nonce analysis (issue #87).
       let finalMaterial = hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks);
-      // A finalized P2TR key-path input carries its Schnorr signature in the
-      // final witness instead of a 0x13 field; it must not escape the BIP340
-      // nonce comparison either.
-      // A 0x13 a finalizer left beside it holds either the same signature
-      // (compared once, from the 0x13) or a different one, and then both are
-      // compared (DeepSeek's red-team of #1051, F2).
-      let finalTapKey = hodlFinalTapKeySig(entries, witnessUtxo);
-      if (finalTapKey && !tapSignatures.some((tapSig) => tapSig.source === "tap-key" && tapSig.r && hodlEq(tapSig.r, finalTapKey.r) && hodlEq(tapSig.s, finalTapKey.s))) {
-        schnorrRecords.push(Object.assign({ input: index }, finalTapKey));
-        tapSignatureCount++;
+      // A finalized P2TR input carries its Schnorr signatures in the final
+      // witness instead of 0x13/0x14 fields; they must not escape the BIP340
+      // nonce comparison either. The key path and pk()/multi_a script-path
+      // leaves are read. A field a finalizer left beside them holds either
+      // the same signature (compared once, from the field) or a different
+      // one, and then both are compared (DeepSeek's red-team of #1051, F2).
+      let finalTap = [hodlFinalTapKeySig(entries, witnessUtxo)].concat(hodlFinalTapScriptSigs(entries, witnessUtxo) || []).filter(Boolean);
+      finalTap.forEach((record) => {
+        if (tapSignatures.some((tapSig) => tapSig.source === record.source && tapSig.r && record.r && hodlEq(tapSig.r, record.r) && hodlEq(tapSig.s, record.s) && (record.source === "tap-key" || hodlEq(tapSig.pubkey, record.pubkey)))) return;
+        schnorrRecords.push(Object.assign({ input: index }, record));
+        if (record.r) tapSignatureCount++;
+      });
+      // A finalized input whose fields yield no analyzable signature never
+      // yields a clean or no-signatures verdict: a Taproot one counts as an
+      // unchecked Taproot input, any other as an uninspected ECDSA one.
+      if (!signatures.length && !finalMaterial.signatures.length && !finalMaterial.uninspected && !finalTap.length) {
+        if (witnessUtxo && isP2tr(witnessUtxo.script)) tapUninspected++;
+        else finalMaterial.uninspected = 1;
       }
-      // A finalized input whose fields yield no analyzable ECDSA signature
-      // (for example a Taproot-only witness) never yields a clean or
-      // no-signatures verdict.
-      if (!signatures.length && !finalMaterial.signatures.length && !finalMaterial.uninspected && !finalTapKey) finalMaterial.uninspected = 1;
       signatures = signatures.concat(finalMaterial.signatures);
       uninspected += finalMaterial.uninspected + (finalMaterial.malformed ? 1 : 0);
     }
@@ -12835,6 +12857,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       let schnorrKey = tapSig.source === "tap-script" ? tapSig.pubkey : witnessUtxo && isP2tr(witnessUtxo.script) ? witnessUtxo.script.slice(2) : new Uint8Array();
       schnorrRecords.push({ input: index, source: tapSig.source, pubkey: schnorrKey, r: tapSig.r, s: tapSig.s, leafHash: tapSig.leafHash });
     });
+    // A 0x13 with keydata or a 0x14 whose keydata is not key + leaf hash is
+    // no signature field the collectors accept, but it may still carry a
+    // signature: it counts as incomplete, never silently dropped (Kimi K3's
+    // review of #1051).
+    let oddTapFields = hodlFind(entries, 19).filter((entry) => entry.keydata.length).length + hodlFind(entries, 20).filter((entry) => entry.keydata.length !== 64).length;
+    for (let odd = 0; odd < oddTapFields; odd++) schnorrRecords.push({ input: index, source: "tap-malformed", pubkey: new Uint8Array(), r: null, s: null });
     if (tapSignatures.length || (finalized && !signatures.length)) policyIncomplete++;
     signatures.forEach(signature => {
       let parts = hodlSigParts(signature.der),
@@ -13017,7 +13045,9 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // unreadable one still makes the result incomplete. A single comparable
   // signature has nothing to be compared with, like a single ECDSA r
   // (DeepSeek's red-team of #1051, F5).
-  if (schnorrRecords.length && !schnorrReused.length) nonceHtml.push("<p class='edge-note is-muted'>" + (schnorrIncomplete && !tapSignatureCount
+  if (!schnorrReused.length && (schnorrRecords.length || tapUninspected)) nonceHtml.push("<p class='edge-note is-muted'>" + (tapUninspected
+    ? hodlT("Some finalized Taproot inputs could not be read, so their signatures could not be checked for a repeated nonce. This check reads key-path spends and single-key or multi_a script-path spends. This is not a clean result.")
+    : schnorrIncomplete && !tapSignatureCount
     ? hodlT("Taproot / Schnorr signature data in this PSBT could not be read, so it could not be checked for a repeated nonce. This is not a clean result.")
     : schnorrIncomplete
       ? hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above. Some could not be checked for a repeated nonce, because a signature was unreadable or its key is not in this file. This is not a clean result.", { count: tapSignatureCount })
@@ -13029,7 +13059,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // so each family needs two comparable signatures of its own: one of each
   // is not a clean result (DeepSeek's red-team of #1051, F1).
   let schnorrCompared = schnorrRecords.length - schnorrIncomplete;
-  let nonceIncomplete = uninspected || schnorrIncomplete || unsupportedNonceChecks || crossKey.length || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
+  let nonceIncomplete = uninspected || schnorrIncomplete || tapUninspected || unsupportedNonceChecks || crossKey.length || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
   let nonceVerdict = reused.length || schnorrReused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
   if (view !== "inspect" && options?.record !== false) hodlPsbtRecordNonceInspection("psbt", rValues, nonceSourceTag, nonceVerdict, nonceCheckedAt);
   let checks = [
@@ -13127,6 +13157,18 @@ function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt =
     });
   });
   let { reused, possible, crossKey } = hodlCompareNonces(rValues);
+  // Taproot: a script-path spend names its keys in the leaf, so pk() and
+  // multi_a signatures are compared as in a PSBT. A key-path signature's key
+  // is in the previous output, which a raw transaction does not carry, so it
+  // and any other Taproot spend count as unchecked: never a clean result.
+  let schnorrRecords = [], tapUnchecked = 0;
+  tx.inputs.forEach((input, index) => {
+    let stack = input.witness || [], records = hodlTapScriptPathSigs(stack);
+    if (records) records.forEach((record) => schnorrRecords.push(Object.assign({ input: index }, record)));
+    else if (hodlTapWitnessShape(stack)) tapUnchecked++;
+  });
+  let { reused: schnorrReused, incomplete: schnorrIncomplete } = hodlCompareSchnorrNonces(schnorrRecords, hodlEq);
+  let schnorrCompared = schnorrRecords.length - schnorrIncomplete, tapCount = schnorrRecords.filter((record) => record.r).length;
   if (reused.length || possible.length) verdictHtml.push("<p class='psbt-bad'><strong>" + hodlT("Repeated nonce r for the same public key.") + "</strong> " + hodlT("Message digests cannot be rebuilt from a raw transaction without prevouts, so treat this as a warning and do not broadcast until the signatures are checked independently.") + "</p>");
   if (crossKey.length) verdictHtml.push("<p class='psbt-warn'><strong>" + hodlT("Same r value claimed under different public keys.") + "</strong> " + hodlT("A key association in a raw transaction is read from the script, not verified; verify these signatures independently before broadcast.") + "</p>");
   else if (uninspected) verdictHtml.push("<p class='psbt-warn'><strong>" + hodlT("Incomplete nonce coverage.") + "</strong> " + hodlT("Some ECDSA signatures could not be inspected.") + "</p>");
@@ -13135,11 +13177,16 @@ function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt =
   }
   else if (rValues.length === 1) verdictHtml.push("<p class='muted'>" + hodlT("Only one ECDSA signature with a readable r is present. Nonce reuse cannot be judged from this file alone.") + "</p>");
   else verdictHtml.push("<p class='muted'>" + hodlT("No ECDSA signatures with a readable r and public key were found.") + "</p>");
+  if (schnorrReused.length) verdictHtml.push("<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>");
+  else if (tapUnchecked || schnorrIncomplete) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("Some Taproot signatures in this transaction could not be checked for a repeated nonce. A key-path signature's key is in the previous output, which a raw transaction does not include, and only single-key and multi_a script-path spends are read. This is not a clean result.") + "</p>");
+  else if (tapCount === 1) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("This transaction also contains 1 Taproot / Schnorr signature in a script-path spend. Only one Taproot signature is present, so nonce reuse cannot be judged from this transaction alone.") + "</p>");
+  else if (tapCount) verdictHtml.push("<p class='edge-note is-muted'>" + hodlT("This transaction also contains {count} Taproot / Schnorr signature(s) in script-path spends. No repeated BIP340 nonces were found among them.", { count: tapCount }) + "</p>");
   nonceHtml.push(...verdictHtml);
   if (rValues.length) nonceHtml.push("<p class='psbt-kv'>" + hodlT("r values:") + "<br>" + rValues.map((value) => hodlEscapeHtml(value.hex) + " " + hodlT("(input {n})", { n: value.input })).join("<br>") + "</p>");
   nonceHtml.push("<p class='field-note'>" + hodlT("Raw-transaction inspect does not reconstruct sighashes. Paste the PSBT when you still can; use this path for a fully signed hex dump from a hardware wallet or Bitcoin Core.") + "</p>");
-  let nonceIncomplete = uninspected || crossKey.length || rValues.length < 2;
-  let nonceVerdict = crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
+  // Each family needs two comparable signatures of its own, as in a PSBT.
+  let nonceIncomplete = uninspected || crossKey.length || schnorrIncomplete || tapUnchecked || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
+  let nonceVerdict = schnorrReused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
   if (view !== "inspect" && options?.record !== false) hodlPsbtRecordNonceInspection("transaction", rValues, nonceSourceTag, nonceVerdict, nonceCheckedAt);
   if (view === "nonce") return nonceHtml.join("");
   if (view === "inspect") return html.concat(["<p class='label'>" + hodlT("Nonce analysis") + "</p>"], verdictHtml, ["<p class='muted'>" + hodlT("Open the Nonce Inspector for every r value and the per-signature detail.") + "</p>"]).join("");

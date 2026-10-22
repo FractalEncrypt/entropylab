@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hodlLooksSchnorr, hodlParseSchnorr, hodlTapSighashProblems, hodlCompareSchnorrNonces, hodlTapKeySigs, hodlTapScriptSigs } from "../src/js/psbt-schnorr.js";
+import { hodlLooksSchnorr, hodlParseSchnorr, hodlTapSighashProblems, hodlCompareSchnorrNonces, hodlTapKeySigs, hodlTapScriptPathSigs, hodlTapScriptSigs, hodlTapWitnessShape } from "../src/js/psbt-schnorr.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 
@@ -233,4 +233,69 @@ test("one signature copied into two fields is not reuse; the same R with a diffe
     { input: 1, source: "tap-key", r: rA, pubkey: key },
   ], eq);
   assert.equal(oneMissing.reused.length, 1, "a missing s fails closed");
+});
+
+// --- finalized script-path spends (#1051 round 3) ---------------------------
+// Real spends built and finalized by @scure/btc-signer: every signature the
+// reader attributes must verify under its key against the BIP341 script-path
+// sighash, which pins the reverse key order of a multi_a witness.
+const scureSpend = async (leafScript, signers) => {
+  const { Transaction } = await import("@scure/btc-signer");
+  const { p2tr: scureP2TR } = await import("@scure/btc-signer/payment.js");
+  const { schnorr } = await import("@noble/curves/secp256k1.js");
+  const internal = schnorr.getPublicKey(new Uint8Array(32).fill(0x31));
+  const payment = scureP2TR(internal, { script: leafScript }, undefined, true);
+  const tx = new Transaction();
+  tx.addInput({ txid: "11".repeat(32), index: 0, witnessUtxo: { script: payment.script, amount: 50000n }, tapInternalKey: payment.tapInternalKey, tapMerkleRoot: payment.tapMerkleRoot, tapLeafScript: payment.tapLeafScript });
+  tx.addOutput({ script: Uint8Array.of(0x00, 0x14, ...new Uint8Array(20).fill(0x33)), amount: 40000n });
+  for (const key of signers) tx.signIdx(key, 0);
+  const message = tx.preimageWitnessV1(0, [payment.script], 0, [50000n], -1, leafScript, 0xc0);
+  tx.finalizeIdx(0);
+  return { witness: tx.getInput(0).finalScriptWitness, message, schnorr };
+};
+
+test("a finalized multi_a script-path witness attributes each signature to its key, in reverse stack order", async () => {
+  const { p2tr_ms } = await import("@scure/btc-signer/payment.js");
+  const { schnorr } = await import("@noble/curves/secp256k1.js");
+  const secrets = [0x41, 0x42, 0x43].map((byte) => new Uint8Array(32).fill(byte));
+  const pubs = secrets.map((secret) => schnorr.getPublicKey(secret));
+  const { witness, message } = await scureSpend(p2tr_ms(2, pubs).script, [secrets[0], secrets[2]]);
+  const records = hodlTapScriptPathSigs(witness);
+  assert.equal(records.length, 2, "two of three keys signed");
+  assert.deepEqual(records.map((record) => Buffer.from(record.pubkey).toString("hex")), [pubs[0], pubs[2]].map((pub) => Buffer.from(pub).toString("hex")));
+  for (const record of records) {
+    assert.ok(schnorr.verify(Uint8Array.of(...record.r, ...record.s), message, record.pubkey), "each signature verifies under the key it is attributed to");
+    assert.equal(record.source, "tap-script");
+  }
+  assert.equal(hodlTapWitnessShape(witness), "script");
+});
+
+test("a finalized pk() script-path witness yields its one signature, keyed by the leaf key", async () => {
+  const { schnorr } = await import("@noble/curves/secp256k1.js");
+  const secret = new Uint8Array(32).fill(0x44), pub = schnorr.getPublicKey(secret);
+  const leaf = Uint8Array.of(0x20, ...pub, 0xac);
+  const { witness, message } = await scureSpend(leaf, [secret]);
+  const records = hodlTapScriptPathSigs(witness);
+  assert.equal(records.length, 1);
+  assert.deepEqual(records[0].pubkey, pub);
+  assert.ok(schnorr.verify(Uint8Array.of(...records[0].r, ...records[0].s), message, pub));
+  // An annex (last element starting 0x50) is dropped first.
+  assert.deepEqual(hodlTapScriptPathSigs([...witness, Uint8Array.of(0x50, 1, 2)]).map((record) => record.r), records.map((record) => record.r));
+});
+
+test("script-path witnesses the reader cannot attribute return null; shapes are told apart", () => {
+  const sig = new Uint8Array(64).fill(0x07), key = new Uint8Array(32).fill(0x44);
+  const pk = Uint8Array.of(0x20, ...key, 0xac), control = Uint8Array.of(0xc0, ...new Uint8Array(32).fill(0x55));
+  assert.equal(hodlTapScriptPathSigs([sig, Uint8Array.of(0x51), control]), null, "an unknown leaf script");
+  assert.equal(hodlTapScriptPathSigs([sig, pk, Uint8Array.of(0xc2, ...control.slice(1))]), null, "a leaf version other than tapscript");
+  assert.equal(hodlTapScriptPathSigs([sig, sig, pk, control]), null, "more stack items than keys");
+  assert.equal(hodlTapScriptPathSigs([new Uint8Array(), pk, control]), null, "no signature at all");
+  const short = hodlTapScriptPathSigs([new Uint8Array(10), pk, control]);
+  assert.equal(short.length, 1);
+  assert.equal(short[0].r, null, "an unparseable signature is kept as incomplete, never skipped");
+  assert.equal(hodlTapWitnessShape([sig]), "key");
+  assert.equal(hodlTapWitnessShape([Uint8Array.of(...sig, 0x01)]), "key");
+  assert.equal(hodlTapWitnessShape([sig, Uint8Array.of(0x50)]), "key", "key path with an annex");
+  assert.equal(hodlTapWitnessShape([sig, pk, control]), "script");
+  assert.equal(hodlTapWitnessShape([new Uint8Array(72).fill(0x30), new Uint8Array(33).fill(0x02)]), null, "a P2WPKH witness");
 });
