@@ -300,3 +300,41 @@ test("the same Taproot signature copied onto two inputs is not reported as a key
   assert.match(html, /No repeated BIP340 nonces were found among them/);
   assert.notEqual(recorded.at(-1).verdict, "reuse");
 });
+
+// DeepSeek's red-team of #1051 (c6ad892). F1 (mixed families) is tested in
+// psbt-codeseparator.test.mjs, whose control PSBT has two checked ECDSA
+// signatures.
+
+test("a single Taproot signature is not read as clean (F5)", () => {
+  const html = app.hodlRenderPsbt(tapPsbt([[witnessUtxoEntry(), tapKeySigEntry(tapSigA)]]), undefined, undefined, "all");
+  assert.match(html, /Only one Taproot signature is present, so nonce reuse cannot be judged from this file alone/);
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+});
+
+test("a final witness beside a 0x13 is compared too, and an identical copy counts once (F2)", () => {
+  // Input 0 keeps a 0x13 (C) beside a different final witness (A); A and
+  // input 1's B share R under one key.
+  const hidden = app.hodlRenderPsbt(tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigC), { type: 8, keydata: new Uint8Array(), val: witnessStack([tapSigA]) }],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigB)],
+  ]), undefined, undefined, "all");
+  assert.match(hidden, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+  // The same signature in the 0x13 and the final witness is one signature.
+  const copied = app.hodlRenderPsbt(tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA), { type: 8, keydata: new Uint8Array(), val: witnessStack([tapSigA]) }],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigC)],
+  ]), undefined, undefined, "all");
+  assert.match(copied, /This PSBT also contains 2 Taproot \/ Schnorr signature\(s\)/);
+  assert.match(copied, /No repeated BIP340 nonces were found among them/);
+  assert.equal(recorded.at(-1).verdict, "clean");
+});
+
+test("the completed nonce line names the signatures that were compared (F4)", async () => {
+  const { hodlPsbtNonceCheck } = await loadAppFunctions(["hodlPsbtNonceCheck"]);
+  assert.match(hodlPsbtNonceCheck([], [], false, [], 0, 2).detail, /^All Taproot signatures in this PSBT/);
+  assert.match(hodlPsbtNonceCheck([], [], false, [], 2, 2).detail, /^All ECDSA and Taproot signatures in this PSBT/);
+  assert.match(hodlPsbtNonceCheck([], [], false, [], 2, 0).detail, /^All ECDSA signatures in this PSBT/);
+  assert.match(hodlPsbtNonceCheck([], [], false).detail, /^All ECDSA signatures in this PSBT/, "callers without counts keep the ECDSA line");
+});
