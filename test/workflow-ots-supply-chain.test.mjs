@@ -21,6 +21,24 @@ const jobBlock = (workflow, name) =>
   workflow.match(new RegExp(`^  ${name}:\\n[\\s\\S]*?(?=^  [a-z0-9_-]+:\\n|(?![\\s\\S]))`, "m"))?.[0] ?? "";
 const steps = (job) => job.split(/^ {6}- /m).slice(1);
 
+// Each top-level job under `jobs:` as { job, block }.
+const jobsOf = (text) => {
+  const body = text.split(/^jobs:\n/m)[1] ?? "";
+  return [...body.matchAll(/^ {2}([a-z0-9_-]+):\n([\s\S]*?)(?=^ {2}[a-z0-9_-]+:\n|(?![\s\S]))/gm)].map(
+    ([, job, block]) => ({ job, block }),
+  );
+};
+
+// The two workflows that install and run the OpenTimestamps client.
+const otsWorkflows = ["ci-cd.yml", "ots-upgrade.yml"].map((name) => ({
+  name,
+  text: read(`.github/workflows/${name}`),
+}));
+
+// A job "runs the OTS client" when it creates the venv, invokes the binary or
+// installs the wheels.
+const runsOtsClient = (block) => /\$RUNNER_TEMP\/ots|\$OTS\b|\bpip3?"? install\b/.test(block);
+
 // opentimestamps-client 0.7.2's dependency closure, from the requires_dist
 // metadata PyPI publishes for it and for each dependency in turn.
 const closure = [
@@ -67,28 +85,73 @@ test("every pip install in CI takes only the hash-locked OTS wheels", () => {
   assert.equal(installs, 3, "the timestamp, upgrade and release-asset jobs each install the client once");
 });
 
-test("no step that runs the OTS client can reach the release-push token", () => {
+// The old guard checked that the push was a later *step* of the same job. A
+// step boundary is not isolation: the client can write .git/hooks/pre-push or
+// leave a background process in the workspace the push token later enters.
+// The client and the token must live in different jobs on different runners.
+test("no job that installs or runs the OTS client can reach a secret or the release environment", () => {
+  for (const { name, text } of otsWorkflows) {
+    const jobs = jobsOf(text).filter(({ block }) => runsOtsClient(block));
+    assert.ok(jobs.length > 0, `${name} has a job that installs and runs the OTS client`);
+    for (const { job, block } of jobs) {
+      assert.doesNotMatch(block, /^ {4}environment:/m, `${name}:${job} runs the OTS client and must not hold an environment`);
+      assert.doesNotMatch(block, /secrets\./, `${name}:${job} runs the OTS client and must not read a secret`);
+      assert.doesNotMatch(block, /PUSH_TOKEN/, `${name}:${job} runs the OTS client and must not hold the push token`);
+    }
+  }
+});
+
+test("no job that holds the push token or the release environment runs the OTS client", () => {
+  for (const { name, text } of otsWorkflows) {
+    const jobs = jobsOf(text).filter(({ block }) => /PUSH_TOKEN|^ {4}environment: release$/m.test(block));
+    assert.ok(jobs.length > 0, `${name} has a job that pushes the proof`);
+    for (const { job, block } of jobs) {
+      assert.doesNotMatch(
+        block,
+        /\$RUNNER_TEMP\/ots|\$OTS\b|\bpip3?"? install\b/,
+        `${name}:${job} holds the push token and must not install or run the OTS client`,
+      );
+    }
+  }
+});
+
+test("the push job validates the proof and pushes with hooks disabled and an explicit refspec", () => {
   for (const [file, job] of [
-    ["ci-cd.yml", "timestamp"],
-    ["ots-upgrade.yml", "upgrade"],
+    ["ci-cd.yml", "timestamp-push"],
+    ["ots-upgrade.yml", "upgrade-push"],
   ]) {
     const block = jobBlock(read(`.github/workflows/${file}`), job);
     assert.ok(block, `${file}:${job} exists`);
     const all = steps(block);
     const checkout = all.find((step) => step.includes("actions/checkout@"));
     assert.match(checkout, /persist-credentials: false/, `${file}:${job} must not leave GITHUB_TOKEN in .git/config`);
-    const runsOts = all.filter((step) => /"\$OTS"|\bpip"? install/.test(step));
-    assert.ok(runsOts.length >= 2, `${file}:${job} installs and runs the client`);
-    for (const step of runsOts) {
-      assert.doesNotMatch(step, /secrets\./, `${file}:${job}: a step that runs OTS code must not hold a secret`);
-    }
-    const pushes = all.filter((step) => step.includes("secrets.RELEASE_PUSH_TOKEN"));
-    assert.equal(pushes.length, 1, `${file}:${job} pushes from exactly one step`);
-    const [push] = pushes;
+    const validate = all.find((step) => step.includes("stat -c %s"));
+    assert.ok(validate, `${file}:${job} validates the proof size`);
+    assert.match(validate, /65536/, "the size limit is enforced");
+    assert.match(
+      validate,
+      /004f70656e54696d657374616d7073000050726f6f6600bf89e2e884e892940108/,
+      "the 31-byte magic, major version 1 and the SHA-256 op tag are pinned",
+    );
+    assert.match(validate, /head -c 33/, "the header is read");
+    assert.match(validate, /head -c 65/, "the digest is read");
+    assert.match(validate, /tail -c 32/, "the digest is the 32 bytes after the header");
+    // The push job checks rock out after the OTS job finished: the proof must
+    // cover the HTML rock carries now, not only the digest the run expected.
+    assert.match(validate, /sha256sum entropylab\.html/, `${file}:${job} compares the proof with rock's entropylab.html`);
+    const commit = all.find((step) => step.includes("git commit"));
+    assert.ok(commit, `${file}:${job} commits the proof`);
+    assert.ok(all.indexOf(validate) < all.indexOf(commit), "validation runs before the commit");
+    assert.match(commit, /git add entropylab\.html\.ots\n/, "only the proof is staged");
+    assert.match(commit, /rev-list --count origin\/rock\.\.HEAD/, "exactly one commit may be ahead of rock");
+    assert.match(commit, /diff --name-only origin\/rock\.\.HEAD/, "that commit may change only the proof");
+    const push = all.find((step) => step.includes("push origin HEAD:rock"));
+    assert.ok(push, `${file}:${job} pushes the explicit refspec HEAD:rock`);
+    assert.ok(all.indexOf(commit) < all.indexOf(push), "the push comes after the checked commit");
+    assert.match(push, /core\.hooksPath=\/dev\/null/, "hooks are disabled for the push");
     assert.match(push, /^ {8}env:\n {10}PUSH_TOKEN: \$\{\{ secrets\.RELEASE_PUSH_TOKEN \}\}$/m, "the token arrives through env, not inlined into the script");
     assert.doesNotMatch(push.split(/\n {8}run: /)[1] ?? "", /\$\{\{/, "the push script has no expression substitution");
-    assert.match(push, /^ {8}if: steps\.[a-z]+\.outputs\.committed == 'true'$/m, "the push runs only when the OTS step committed a proof");
-    assert.ok(all.indexOf(push) > Math.max(...runsOts.map((step) => all.indexOf(step))), "the push comes after every OTS step");
+    assert.equal(all.filter((step) => step.includes("secrets.RELEASE_PUSH_TOKEN")).length, 1, `${file}:${job} reads the token in exactly one step`);
   }
 });
 
