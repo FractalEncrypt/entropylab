@@ -144,6 +144,7 @@ jobs:
             exit 1
           fi
       - name: Commit the proof
+        id: proof
         run: |
           set -euo pipefail
           cp "$RUNNER_TEMP/entropylab.html.ots" entropylab.html.ots
@@ -166,7 +167,10 @@ jobs:
             echo "::error::the proof commit changes more than entropylab.html.ots: $CHANGED"
             exit 1
           fi
+          echo "committed=true" >> "$GITHUB_OUTPUT"
       - name: Push the proof
+        # Only after a checked commit: "already on rock" exits 0 above.
+        if: steps.proof.outputs.committed == 'true'
         env:
           PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
         run: |

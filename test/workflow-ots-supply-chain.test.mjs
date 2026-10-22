@@ -148,6 +148,13 @@ test("the push job validates the proof and pushes with hooks disabled and an exp
     const push = all.find((step) => step.includes("push origin HEAD:rock"));
     assert.ok(push, `${file}:${job} pushes the explicit refspec HEAD:rock`);
     assert.ok(all.indexOf(commit) < all.indexOf(push), "the push comes after the checked commit");
+    // "Already on rock" exits 0 without a commit; the push must not run then.
+    assert.match(commit, /^ {8}id: proof$/m, `${file}:${job} names the commit step`);
+    assert.ok(
+      commit.lastIndexOf('echo "committed=true" >> "$GITHUB_OUTPUT"') > commit.lastIndexOf("diff --name-only origin/rock..HEAD"),
+      "committed=true is set only after the one-commit and proof-only checks",
+    );
+    assert.match(push, /^ {8}if: steps\.proof\.outputs\.committed == 'true'$/m, `${file}:${job} pushes only after a checked commit`);
     assert.match(push, /core\.hooksPath=\/dev\/null/, "hooks are disabled for the push");
     assert.match(push, /^ {8}env:\n {10}PUSH_TOKEN: \$\{\{ secrets\.RELEASE_PUSH_TOKEN \}\}$/m, "the token arrives through env, not inlined into the script");
     assert.doesNotMatch(push.split(/\n {8}run: /)[1] ?? "", /\$\{\{/, "the push script has no expression substitution");
