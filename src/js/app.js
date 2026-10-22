@@ -12967,7 +12967,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       html.push(sectionHtml, ...own);
       shownInputs++;
     } else {
-      warnings.push(...own);
+      for (const warning of own) warnings.push(warning); // no spread: `own` can hold hundreds of thousands
     }
   });
   if (psbt.inputs.length > shownInputs) html.push("<p class='muted'>" + hodlT("…and {n} more inputs (not rendered).", { n: psbt.inputs.length - shownInputs }) + "</p>");

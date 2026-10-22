@@ -1319,6 +1319,21 @@ test("a capped view counts every input's warnings through the collected list, wi
   assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the analysis still covers every input");
 });
 
+test("one input with 300,000 warnings renders capped instead of throwing (GLM 5.3 review of cd4065b)", () => {
+  // A 5 MB PSBT fits hundreds of thousands of minimal inscription envelopes
+  // in one input's witness. Moving that input's warnings to the collected
+  // list with a spread (`warnings.push(...own)`) passed them all as call
+  // arguments and threw a RangeError, so the crafted PSBT this cap exists to
+  // survive killed the render instead.
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(1, 1);
+  const envelopes = Array.from({ length: 300000 }, (_, envelopeIndex) => ({ envelopeIndex, source: "witness", bodyBytes: 1, unrecognizedEven: false }));
+  doc.stubInscriptions = { inputs: [{ envelopes }], envelopes };
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.equal((html.match(/<strong>Inscription envelope<\/strong>/g) || []).length, vizModule.PSBT_RENDER_LIMIT, "the collected warnings render capped");
+  assert.match(html, /…and \d+ more warnings \(not rendered\)\./, "the rest are counted");
+});
+
 test("the budget line counts the maps the overflow sections skipped, not the ones they rendered (F7 round 7)", () => {
   // 600 input maps: 0–499 empty, 500–597 with 10 pairs each, and the two
   // empty maps two Add Input clicks appended at 598/599. All 496 outputs
