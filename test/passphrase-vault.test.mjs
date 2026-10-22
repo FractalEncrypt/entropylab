@@ -558,6 +558,30 @@ for (const inputType of ["deleteByComposition", "insertFromComposition", "delete
   });
 }
 
+// DeepSeek V4.1 red-team of 947698a: a composition-type beforeinput saved the
+// caret and returned. When no input event followed (another listener
+// prevented it, or the browser made no change), that caret stayed, and the
+// next autofill was spliced at it: "ab" with the caret at 1 became "aecreb".
+for (const inputType of ["insertCompositionText", "deleteCompositionText", "insertFromComposition", "deleteByComposition"]) {
+  for (const isComposing of [false, true]) {
+    for (const prevented of [true, false]) {
+      test(`a ${prevented ? "prevented" : "no-op"} ${inputType} (isComposing ${isComposing}) with no input leaves no stale caret`, () => {
+        const { field, vault } = bound();
+        field.type("ab");
+        field.select(1);
+        if (prevented) field.addEventListener("beforeinput", (event) => { if (event.inputType === inputType) event.preventDefault(); });
+        field.dispatchEvent({ type: "beforeinput", inputType, data: "x", cancelable: true, isComposing });
+        assert.equal(vault.text(), "ab", "a composition-type beforeinput is not applied as an edit");
+        // A password manager fills the field: an input event with no beforeinput.
+        field.value = "secret";
+        field.dispatchEvent({ type: "input", inputType: "insertText" });
+        assert.equal(vault.text(), "secret");
+        masked(field, vault);
+      });
+    }
+  }
+}
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives

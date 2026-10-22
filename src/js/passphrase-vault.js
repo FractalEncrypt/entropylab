@@ -211,10 +211,19 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // composing text, so its caret is not a vault index): drop the
     // composition first, then apply the edit to the restored selection.
     if (composing && !event.isComposing && !isCompositionInputType(event.inputType) && event.cancelable) abandonComposition();
+    const type = event.inputType || "";
+    // Composition text is only taken at compositionend, so no input event
+    // reads a caret saved here. Saving one anyway left it stale whenever no
+    // input followed (a composition input another listener prevented, or a
+    // no-op one), and the next beforeinput-less edit (an autofill) was spliced
+    // at it.
+    if (event.isComposing || isCompositionInputType(type)) {
+      pending = null;
+      return;
+    }
     const [start, end] = caret();
     pending = { start, end };
-    const type = event.inputType || "";
-    if (event.isComposing || isCompositionInputType(type) || !event.cancelable) return;
+    if (!event.cancelable) return;
     event.preventDefault();
     let from = start, to = end, text = "";
     if (type.startsWith("insert")) {
