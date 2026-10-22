@@ -11081,8 +11081,9 @@ function hodlPsbtShowMore(event) {
   let button = event.target?.closest?.("[data-psbt-more]"), last = hodlPsbtLast, output = document.getElementById("psbt-out");
   if (!button || !last?.limits || !output) return;
   let kind = button.dataset.psbtMore === "outputs" ? "outputs" : "inputs", from = last.limits[kind];
-  // The grown window is kept only once the page shows it, so a render that
-  // throws leaves the window and the page in step (Kimi K3 review of #1031).
+  // The grown window is kept as soon as the page shows it, so a render that
+  // throws leaves the window and the page in step (Kimi K3 review of #1031;
+  // Muse Spark review of #1052: the other tail's refresh runs after that).
   let limits = { ...last.limits, [kind]: from + last.limits.step };
   let render = (options) => last.kind === "psbt" ? hodlRenderPsbt(last.parsed, last.sourceTag, last.checkedAt, "inspect", options) : hodlRenderRawTx(last.parsed, last.sourceTag, last.checkedAt, "inspect", options);
   let options = { network: last.network, record: false, limits };
@@ -11094,6 +11095,7 @@ function hodlPsbtShowMore(event) {
   if (part && typeof part === "object") {
     tail.insertAdjacentHTML("beforebegin", part.chunk);
     tail.innerHTML = part.tail;
+    last.limits = limits;
     // The grown window also grows the view's render budget, so the other
     // list's tail (its collected warnings and their count) is rendered again
     // at the new limits. When that render declines or would add a block, the
@@ -11106,8 +11108,8 @@ function hodlPsbtShowMore(event) {
     }
   } else {
     output.innerHTML = render(options);
+    last.limits = limits;
   }
-  last.limits = limits;
   let next = output.querySelector("[data-psbt-more='" + kind + "']");
   if (next) next.focus();
   else {

@@ -602,3 +602,20 @@ test("the Show-more count falls back to plain digits when the locale tag is malf
   const good = await loadAppFunctions(["hodlFormatCount"], { stubs: { hodlGetLocale: () => "en" } });
   assert.equal(good.hodlFormatCount(2000), "2,000");
 });
+
+test("when the other list's tail refresh throws after the block is in, the window has grown with the page", async () => {
+  // Muse Spark's review of #1052: the block is inserted by the first render;
+  // a throw in the second (the other tail) must not leave the window behind.
+  const last = { kind: "psbt", parsed: {}, sourceTag: new Uint8Array(1), checkedAt: "t1", network: "mainnet", limits: { inputs: 2000, outputs: 2000, step: 2000 } };
+  const tail = { innerHTML: "old", insertAdjacentHTML: () => {} };
+  const output = { innerHTML: "", querySelector: (selector) => (selector.includes("data-psbt-tail") ? tail : null), hasAttribute: () => true, setAttribute: () => {}, focus: () => {} };
+  let calls = 0;
+  const ui = await loadAppFunctions(["hodlPsbtShowMore"], { stubs: {
+    document: { getElementById: (id) => (id === "psbt-out" ? output : null) },
+    hodlPsbtLast: last,
+    hodlRenderPsbt: () => { if (++calls === 1) return { chunk: "<block>", tail: "<tail>" }; throw new Error("tail render failed"); },
+    hodlRenderRawTx: () => { throw new Error("not a transaction"); },
+  } });
+  assert.throws(() => ui.hodlPsbtShowMore({ target: { closest: () => ({ dataset: { psbtMore: "inputs" } }) } }), /tail render failed/);
+  assert.equal(last.limits.inputs, 4000, "the inserted block's window is kept");
+});
