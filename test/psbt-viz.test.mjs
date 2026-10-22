@@ -1332,6 +1332,13 @@ test("one input with 300,000 warnings renders capped instead of throwing (GLM 5.
   const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
   assert.equal((html.match(/<strong>Inscription envelope<\/strong>/g) || []).length, vizModule.PSBT_RENDER_LIMIT, "the collected warnings render capped");
   assert.match(html, /…and \d+ more warnings \(not rendered\)\./, "the rest are counted");
+  // The Nonce Inspector builds the same input sections with an unbounded
+  // budget (it discards them), so its inline branch took the same spread
+  // (DeepSeek V4.1 red-team and GLM 5.3 review of 8094939). Every view must
+  // survive the PSBT.
+  for (const view of ["nonce", "all"]) {
+    assert.doesNotThrow(() => render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", view, { network: "mainnet" }), `the ${view} view renders`);
+  }
 });
 
 test("the budget line counts the maps the overflow sections skipped, not the ones they rendered (F7 round 7)", () => {

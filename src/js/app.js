@@ -12964,7 +12964,8 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     const own = warnings.splice(warningsBefore);
     if (index < PSBT_RENDER_LIMIT && budget.left >= 1 + own.length) {
       budget.take(1 + own.length);
-      html.push(sectionHtml, ...own);
+      html.push(sectionHtml);
+      for (const warning of own) html.push(warning); // no spread here either: the nonce view's budget is unbounded
       shownInputs++;
     } else {
       for (const warning of own) warnings.push(warning); // no spread: `own` can hold hundreds of thousands

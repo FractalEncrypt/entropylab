@@ -117,7 +117,7 @@ import { hodlTapKeySigs, hodlTapScriptSigs, hodlTapSighashProblems } from "../sr
 import { inspectPsbtInscriptions, describeEnvelope } from "../src/js/inscription.js";
 import { parseOpReturn, describeOpReturn } from "../src/js/opreturn.js";
 import { publicValueHtml as hodlPublicValueHtml } from "../src/js/public-data.js";
-import { PSBT_RENDER_LIMIT, cappedHtml } from "../src/js/psbt-viz.js";
+import { PSBT_RENDER_LIMIT, cappedHtml, renderBudget } from "../src/js/psbt-viz.js";
 const document = { getElementById: () => null };
 const hodlNetworkDefault = "mainnet";
 const hodlNetworkChoice = "mainnet";
