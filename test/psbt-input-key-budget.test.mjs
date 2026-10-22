@@ -69,20 +69,28 @@ function renderCountingCkds(root, psbt) {
 
 test("a path deeper than 255 levels costs no derivation", () => {
   const root = HDKey.fromMasterSeed(new Uint8Array(32).fill(7));
-  const [pubkey] = pubkeys(1);
-  const ckds = renderCountingCkds(root, fixture([{ type: 2, keydata: pubkey, val: SIGNATURE }, bip32Entry(pubkey, root.fingerprint, 300)]));
-  assert.equal(ckds, 0, "the walk used to run 255 CKDs before HDKey refused the 256th level");
+  const [deep, honest] = pubkeys(2);
+  const ckds = renderCountingCkds(root, fixture([
+    { type: 2, keydata: deep, val: SIGNATURE }, bip32Entry(deep, root.fingerprint, 300),
+    { type: 2, keydata: honest, val: SIGNATURE }, bip32Entry(honest, root.fingerprint, 5),
+  ]));
+  // rock ran 255 CKDs on the deep path before HDKey refused the 256th level.
+  // Skipping it must not zero the budget either (Muse Spark and DeepSeek V4.1
+  // on b31504d): the later 5-step path is still walked.
+  assert.equal(ckds, 5);
 });
 
 test("signature rows share one input-side derivation budget per render", () => {
   const root = HDKey.fromMasterSeed(new Uint8Array(32).fill(7));
-  // 25 rows of 200 steps each would be 5,000 CKDs; the budget stops at 4,096
-  // (20 full paths), and the render still completes.
+  // 25 rows of 200 steps each would be 5,000 CKDs; the budget covers 20 full
+  // paths (4,000), skips the five that no longer fit, and a later 50-step path
+  // still fits in the 96 left. The render completes.
   const entries = [];
-  for (const pubkey of pubkeys(25)) entries.push({ type: 2, keydata: pubkey, val: SIGNATURE }, bip32Entry(pubkey, root.fingerprint, 200));
+  const keys = pubkeys(26);
+  keys.forEach((pubkey, i) => entries.push({ type: 2, keydata: pubkey, val: SIGNATURE }, bip32Entry(pubkey, root.fingerprint, i < 25 ? 200 : 50)));
   const ckds = renderCountingCkds(root, fixture(entries));
   assert.ok(ckds <= 4096, `${ckds} CKDs in one render`);
-  assert.equal(ckds, 20 * 200, "paths the budget covers are still walked");
+  assert.equal(ckds, 20 * 200 + 50, "paths the budget covers are still walked");
 });
 
 test("each input's BIP32 records are parsed once, not once per signature row", () => {

@@ -10826,10 +10826,10 @@ function hodlPrivFromPath(entries, pubkey, budget = null) {
     // past BIP32's 255 levels names no key; the rest share the render's budget,
     // as output paths do (audit M3), or a file with thousands of signature rows
     // could spend 255 CKDs on each (xflow sweep of cb18b09: GLM 5.3, Kimi K3).
-    if (derivation.path.length > 255 || (budget && derivation.path.length > budget.remaining)) {
-      if (budget) budget.remaining = 0;
-      continue;
-    }
+    // A skipped path costs nothing and leaves the budget to later rows: zeroing
+    // it would let one free record turn off every later check (Muse Spark and
+    // DeepSeek V4.1 on b31504d). Every walked step is still counted.
+    if (derivation.path.length > 255 || (budget && derivation.path.length > budget.remaining)) continue;
     if (budget) budget.remaining -= derivation.path.length;
     let node = hodlPsbtHd;
     try {
