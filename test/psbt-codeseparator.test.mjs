@@ -53,7 +53,7 @@ const DECLARED = new Set([
   "hodlT", "hodlTText", "hodlTAttr", "matchOwnership", "indexHdKey", "indexSingleKey", "pathLabel",
   "hodlCompareSchnorrNonces", "hodlParseSchnorr", "hodlTapKeySigs", "hodlTapScriptPathSigs", "hodlTapScriptSigs", "hodlTapSighashProblems", "hodlTapWitnessShape",
   "inspectPsbtInscriptions", "describeEnvelope", "parseOpReturn", "describeOpReturn",
-  "hodlPublicValueHtml",
+  "hodlPublicValueHtml", "PSBT_RENDER_LIMIT",
   // Harness seams from the prelude below (no browser chrome; controllable session).
   "document", "hodlNetworkDefault", "hodlNetworkChoice", "hodlPsbtPriv", "hodlPsbtHd", "hodlPsbtRecordNonceInspection",
 ]);
@@ -118,6 +118,7 @@ import { isP2tr } from "../src/js/bip352.js";
 import { inspectPsbtInscriptions, describeEnvelope } from "../src/js/inscription.js";
 import { parseOpReturn, describeOpReturn } from "../src/js/opreturn.js";
 import { publicValueHtml as hodlPublicValueHtml } from "../src/js/public-data.js";
+import { PSBT_RENDER_LIMIT, cappedHtml, renderBudget } from "../src/js/psbt-viz.js";
 const document = { getElementById: () => null };
 const hodlNetworkDefault = "mainnet";
 const hodlNetworkChoice = "mainnet";
