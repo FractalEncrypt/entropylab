@@ -10364,8 +10364,8 @@ function hodlLooksSignature(item) {
 // 0x13 record. Any other finalized Taproot witness (script path, odd stack
 // shapes, an unparseable signature) is not a key-path spend and stays
 // uninspected.
-function hodlFinalTapKeySig(entries, witnessUtxo) {
-  if (!witnessUtxo || !isP2tr(witnessUtxo.script)) return null;
+function hodlFinalTapKeySig(entries, prevout) {
+  if (!prevout || !isP2tr(prevout.script)) return null;
   let finals = hodlFind(entries, 8);
   if (finals.length !== 1 || finals[0].keydata.length) return null;
   let stack;
@@ -10377,19 +10377,33 @@ function hodlFinalTapKeySig(entries, witnessUtxo) {
   let sig = stack.length === 1 ? stack[0] : stack.length === 2 && stack[1].length && stack[1][0] === 0x50 ? stack[0] : null;
   let parsed = sig && hodlParseSchnorr(sig);
   if (!parsed) return null;
-  return { pubkey: witnessUtxo.script.slice(2), r: parsed.r, s: parsed.s, source: "tap-key" };
+  return { pubkey: prevout.script.slice(2), r: parsed.r, s: parsed.s, source: "tap-key" };
 }
 // The Schnorr signatures of a finalized P2TR script-path input whose leaf is
 // pk() or multi_a (psbt-schnorr.js reads the witness); null for any other
-// spend, which the caller counts as an unchecked Taproot input.
-function hodlFinalTapScriptSigs(entries, witnessUtxo) {
-  if (!witnessUtxo || !isP2tr(witnessUtxo.script)) return null;
+// spend, which the caller counts as an unchecked Taproot input. The leaf
+// names the keys, so an unknown previous output is no obstacle; a known one
+// must be P2TR.
+function hodlFinalTapScriptSigs(entries, prevout) {
+  if (prevout && !isP2tr(prevout.script)) return null;
   let finals = hodlFind(entries, 8);
   if (finals.length !== 1 || finals[0].keydata.length) return null;
   try {
     return hodlTapScriptPathSigs(hodlWitnessStackItems(finals[0].val));
   } catch {
     return null;
+  }
+}
+// Whether a finalized input spends a Taproot output: by its resolved
+// previous output, or by its final witness's shape when that is unknown.
+function hodlFinalIsTaproot(entries, prevout) {
+  if (prevout) return isP2tr(prevout.script);
+  let finals = hodlFind(entries, 8);
+  if (finals.length !== 1 || finals[0].keydata.length) return false;
+  try {
+    return Boolean(hodlTapWitnessShape(hodlWitnessStackItems(finals[0].val)));
+  } catch {
+    return false;
   }
 }
 function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
@@ -10402,14 +10416,17 @@ function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
       malformed = true;
     }
   }
-  // Tapscript has no ECDSA (BIP342): a P2TR final witness is read by the
+  // Tapscript has no ECDSA (BIP342): a P2TR final witness (known by its
+  // previous output, or by its shape when that is missing) is read by the
   // Schnorr path only, where a signature starting 0x30 would otherwise pass
   // for DER here.
   let taproot = witnessUtxo && isP2tr(witnessUtxo.script);
   for (let entry of taproot ? [] : hodlFind(entries, 8)) {
     if (entry.keydata.length) { malformed = true; continue; }
     try {
-      items.push(...hodlWitnessStackItems(entry.val));
+      let stack = hodlWitnessStackItems(entry.val);
+      if (!witnessUtxo && hodlTapWitnessShape(stack)) continue;
+      items.push(...stack);
     } catch {
       malformed = true;
     }
@@ -12783,7 +12800,10 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // leaves are read. A field a finalizer left beside them holds either
       // the same signature (compared once, from the field) or a different
       // one, and then both are compared (DeepSeek's red-team of #1051, F2).
-      let finalTap = [hodlFinalTapKeySig(entries, witnessUtxo)].concat(hodlFinalTapScriptSigs(entries, witnessUtxo) || []).filter(Boolean);
+      // Keyed by the resolved previous output (Nemotron 3 Ultra's review of
+      // #1051): the witness UTXO, the verified non-witness UTXO, or nothing
+      // when the two disagree, which leaves a key-path signature unkeyed.
+      let finalTap = [hodlFinalTapKeySig(entries, claim)].concat(hodlFinalTapScriptSigs(entries, claim) || []).filter(Boolean);
       finalTap.forEach((record) => {
         if (tapSignatures.some((tapSig) => tapSig.source === record.source && tapSig.r && record.r && hodlEq(tapSig.r, record.r) && hodlEq(tapSig.s, record.s) && (record.source === "tap-key" || hodlEq(tapSig.pubkey, record.pubkey)))) return;
         schnorrRecords.push(Object.assign({ input: index }, record));
@@ -12793,7 +12813,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // yields a clean or no-signatures verdict: a Taproot one counts as an
       // unchecked Taproot input, any other as an uninspected ECDSA one.
       if (!signatures.length && !finalMaterial.signatures.length && !finalMaterial.uninspected && !finalTap.length) {
-        if (witnessUtxo && isP2tr(witnessUtxo.script)) tapUninspected++;
+        if (hodlFinalIsTaproot(entries, claim)) tapUninspected++;
         else finalMaterial.uninspected = 1;
       }
       signatures = signatures.concat(finalMaterial.signatures);
@@ -12851,10 +12871,11 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     // BIP340 nonce inspection: one record per Taproot signature. A
     // script-path record's key is the x-only key in its keydata; a key-path
     // 0x13 record carries no key, so the key is the previous output's P2TR
-    // output key Q — without a P2TR witness UTXO the key is missing and the
-    // record cannot be compared.
+    // output key Q, read from the resolved previous output (the witness UTXO,
+    // or the verified non-witness UTXO). Without one, or when the two
+    // disagree, the key is missing and the record cannot be compared.
     tapSignatures.forEach((tapSig) => {
-      let schnorrKey = tapSig.source === "tap-script" ? tapSig.pubkey : witnessUtxo && isP2tr(witnessUtxo.script) ? witnessUtxo.script.slice(2) : new Uint8Array();
+      let schnorrKey = tapSig.source === "tap-script" ? tapSig.pubkey : claim && isP2tr(claim.script) ? claim.script.slice(2) : new Uint8Array();
       schnorrRecords.push({ input: index, source: tapSig.source, pubkey: schnorrKey, r: tapSig.r, s: tapSig.s, leafHash: tapSig.leafHash });
     });
     // A 0x13 with keydata or a 0x14 whose keydata is not key + leaf hash is

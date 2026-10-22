@@ -411,3 +411,29 @@ test("raw transaction: a Taproot key-path input is unchecked, so two clean ECDSA
   assert.match(html, /Some Taproot signatures in this transaction could not be checked for a repeated nonce/);
   assert.equal(recorded.at(-1).verdict, "incomplete");
 });
+
+// Nemotron 3 Ultra's review of #1051 (7e87de9): Taproot signatures are keyed
+// by the input's resolved previous output, not the witness UTXO alone.
+test("a P2TR input whose previous output is only in its non-witness UTXO is keyed from it", async () => {
+  const { createHash } = await import("node:crypto");
+  const sha256d = (bytes) => new Uint8Array(createHash("sha256").update(createHash("sha256").update(bytes).digest()).digest());
+  const le64 = (value) => { const bytes = new Uint8Array(8); new DataView(bytes.buffer).setBigUint64(0, value, true); return bytes; };
+  const prevTx = (amount) => Uint8Array.of(2, 0, 0, 0, 1, ...new Uint8Array(32), 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 1, ...le64(amount), 34, 0x51, 0x20, ...tapKey, 0, 0, 0, 0);
+  const prevs = [prevTx(1000n), prevTx(2000n)];
+  const psbt = {
+    tx: { version: 2, locktime: 0, segwit: false, inputs: prevs.map((prev) => ({ txid: sha256d(prev), vout: 0, sequence: 0xffffffff, scriptSig: new Uint8Array() })), outputs: [{ amount: 1000n, script: Uint8Array.of(0x51) }] },
+    inputs: [[{ type: 0, keydata: new Uint8Array(), val: prevs[0] }, tapKeySigEntry(tapSigA)], [{ type: 0, keydata: new Uint8Array(), val: prevs[1] }, tapKeySigEntry(tapSigB)]],
+    outputs: [[]],
+  };
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+});
+
+test("a finalized key-path input with no previous output is an unchecked Taproot input, not an ECDSA one", () => {
+  const keyPathOnly = { type: 8, keydata: new Uint8Array(), val: witnessStack([tapSigA]) };
+  const html = app.hodlRenderPsbt(tapPsbt([[keyPathOnly], [witnessUtxoEntry(), tapKeySigEntry(tapSigB)], [witnessUtxoEntry(), tapKeySigEntry(tapSigC)]]), undefined, undefined, "all");
+  assert.match(html, /Some finalized Taproot inputs could not be read/);
+  assert.doesNotMatch(html, /Some ECDSA signatures could not be inspected/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+});
