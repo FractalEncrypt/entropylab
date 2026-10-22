@@ -185,10 +185,14 @@ var hodlWalletExport = (() => {
   // paren, reduced to the step above the wildcard: { branch, hardened } for
   // "…/0/*" style tails, { branch: null } when the key is already at the
   // branch level ("…/*"). Stops at "," so a sortedmulti with N keys still
-  // parses; a two-step tail (BIP45 "…/0/0/*") is refused.
-  const descriptorKeyTail = (descriptor, extendedKey) => {
+  // parses; a two-step tail (BIP45 "…/0/0/*") is refused. `occurrence`
+  // picks which copy of a repeated key to read: one extended key may fill two
+  // co-signer slots with different paths ("xpubA/0/*,xpubA/5/0/*"), and
+  // reading the first copy for both caches the wrong parent for the second.
+  const descriptorKeyTail = (descriptor, extendedKey, occurrence = 0) => {
     const body = stripChecksum(descriptor);
-    const at = body.indexOf(extendedKey);
+    let at = body.indexOf(extendedKey);
+    for (let seen = 0; seen < occurrence && at >= 0; seen++) at = body.indexOf(extendedKey, at + extendedKey.length);
     if (at < 0) throw new Error("wallet.dat export: extended key not in descriptor");
     const after = body.slice(at + extendedKey.length);
     if (/^\/\*(?=[,)]|$)/.test(after)) return { branch: null, hardened: false };
@@ -196,6 +200,8 @@ var hodlWalletExport = (() => {
     if (!branch || Number(branch[1]) >= 0x80000000) throw new Error("wallet.dat export: unsupported descriptor path shape");
     return { branch: Number(branch[1]), hardened: Boolean(branch[2]) };
   };
+  // How many earlier slots in `keys` hold the same extended key as slot `index`.
+  const keyOccurrence = (keys, index) => keys.slice(0, index).filter((key) => key === keys[index]).length;
 
   // Core numbers every pubkey provider, including a constant Taproot
   // internal key that is not an xpub. The supported tr(NUMS,sortedmulti_a)
@@ -339,8 +345,8 @@ var hodlWalletExport = (() => {
       for (const unit of units) {
         const keys = unit.multiKey ? extractExtendedPubs(unit.descriptor) : [extractExtendedKey(unit.descriptor, "key")];
         if (!keys.length) return false;
-        for (const key of keys) {
-          const tail = descriptorKeyTail(unit.descriptor, key);
+        for (const [index, key] of keys.entries()) {
+          const tail = descriptorKeyTail(unit.descriptor, key, keyOccurrence(keys, index));
           if (tail.hardened) return false;
           if (branches && !branches.includes(tail.branch)) return false;
         }
@@ -591,7 +597,7 @@ var hodlWalletExport = (() => {
         throw new Error("wallet.dat export: descriptors need the Base58Check codec to rewrite SLIP-132 keys as xpub/tpub");
       }
       pubs.forEach((xpub, index) => {
-        const tail = descriptorKeyTail(stored, xpub);
+        const tail = descriptorKeyTail(stored, xpub, keyOccurrence(pubs, index));
         if (tail.hardened) throw new Error("wallet.dat export: hardened step after a public key");
         // Core caches the parent key of the wildcard: the branch child for
         // account-level descriptors ("…xpub/0/*"), or the descriptor root key
