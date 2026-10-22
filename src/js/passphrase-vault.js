@@ -169,6 +169,13 @@ const isCompositionInputType = (type) => COMPOSITION_INPUT_TYPES.has(type ?? "")
 
 export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   let pending = null, composing = null, echoing = false;
+  // Whether the browser has a composition open (compositionstart to
+  // compositionend), which an abandonment does not end. A composition-type
+  // edit outside any browser composition (WebKit dictation and autocorrect
+  // send these) is an ordinary edit: its caret goes in its own slot, which
+  // only the matching composition-type input reads, so an unrelated autofill
+  // can never be spliced at it.
+  let browserComposing = false, compositionPending = null;
   const caret = () => [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
   const render = (at, end = at) => {
     field.value = vault.mask();
@@ -217,8 +224,13 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // input followed (a composition input another listener prevented, or a
     // no-op one), and the next beforeinput-less edit (an autofill) was spliced
     // at it.
+    compositionPending = null;
     if (event.isComposing || isCompositionInputType(type)) {
       pending = null;
+      if (!event.isComposing && !browserComposing && !composing) {
+        const [start, end] = caret();
+        compositionPending = { start, end };
+      }
       return;
     }
     const [start, end] = caret();
@@ -251,11 +263,15 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   });
 
   field.addEventListener("compositionstart", () => {
+    browserComposing = true;
+    compositionPending = null;
     if (!active()) return;
     const [start, end] = caret();
     composing = { start, end, before: vault.length, value: field.value };
   });
   field.addEventListener("compositionend", (event) => {
+    browserComposing = false;
+    compositionPending = null;
     if (!active()) return;
     // A composition already abandoned (an outside edit ended it) commits
     // nothing; the field only has to show the mask again.
@@ -310,11 +326,19 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // never stored (it would otherwise reach the "set by script" path below
     // with mask bullets in it); the field is kept masked instead.
     if (compositionInput && !composing) {
-      // Its beforeinput set `pending`; nothing consumes it now, and a stale
-      // caret would splice the next beforeinput-less edit (an autofill).
-      pending = null;
-      render(Math.min(field.selectionStart ?? vault.length, vault.length));
-      return;
+      // A composition-type edit with no browser composition open, whose own
+      // beforeinput saved the caret: splice it like any other browser edit.
+      const sessionless = !event?.isComposing && !browserComposing ? compositionPending : null;
+      compositionPending = null;
+      if (sessionless) {
+        pending = sessionless;
+      } else {
+        pending = null;
+        render(Math.min(field.selectionStart ?? vault.length, vault.length));
+        return;
+      }
+    } else {
+      compositionPending = null;
     }
     if (composing) {
       if (compositionInput) return;
@@ -342,6 +366,12 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
         vault.replace(at, at + lost, "");
         render(at);
       }
+    } else if (vault.length && value.includes(VAULT_MASK)) {
+      // No caret was saved, and the field held the mask: a bullet in it now
+      // may be the mask's own, edited in a way no event described. A mask
+      // character never enters the vault on a guess, so show the vault as it
+      // is instead.
+      render(Math.min(field.selectionStart ?? vault.length, vault.length));
     } else {
       // Set by script: the whole value is the passphrase.
       vault.setText(value);

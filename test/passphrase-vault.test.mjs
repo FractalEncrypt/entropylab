@@ -582,6 +582,65 @@ for (const inputType of ["insertCompositionText", "deleteCompositionText", "inse
   }
 }
 
+// GLM 5.3 review of 0f3a854: WebKit dictation and autocorrect can send a
+// composition-type edit with no composition session at all. The head dropped
+// it (rock spliced it); with a non-composition inputType on its input event,
+// the "set by script" path stored the edited mask, bullets included.
+for (const inputType of ["insertCompositionText", "insertFromComposition"]) {
+  test(`an ${inputType} edit outside any composition is spliced into the vault`, () => {
+    const { field, vault } = bound();
+    field.type("ab");
+    field.select(1);
+    field.dispatchEvent({ type: "beforeinput", inputType, data: "x", cancelable: false, isComposing: false });
+    field.value = "•x•"; // the browser inserted into the masked field
+    field.setSelectionRange(2, 2);
+    field.dispatchEvent({ type: "input", inputType, isComposing: false });
+    assert.equal(vault.text(), "axb");
+    masked(field, vault);
+  });
+}
+
+test("a composition-type edit reported by a plain input event never stores the mask", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "x", cancelable: false, isComposing: false });
+  field.value = "•x•";
+  field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.ok(!vault.text().includes(VAULT_MASK), "a mask bullet must never enter the vault");
+  assert.equal(vault.text(), "ab", "an edit that cannot be placed leaves the vault as it was");
+  masked(field, vault);
+});
+
+test("a composition-type edit while the browser's composition is still open is not spliced", () => {
+  // An outside edit abandoned the vault's composition, but the browser's own
+  // session runs until compositionend: its edits stay out of the vault.
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "compositionstart" });
+  api.insert("c");
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertCompositionText", data: "x", cancelable: false, isComposing: false });
+  field.value = "••x•";
+  field.dispatchEvent({ type: "input", inputType: "insertCompositionText", isComposing: false });
+  assert.equal(vault.text(), "acb");
+  masked(field, vault);
+});
+
+test("with no caret saved, a value holding the mask over a non-empty vault is not taken as the passphrase", () => {
+  const { field, vault } = bound();
+  field.type("ab");
+  field.value = "•z•";
+  field.dispatchEvent({ type: "input", inputType: "insertReplacementText" });
+  assert.equal(vault.text(), "ab");
+  masked(field, vault);
+  // Into an empty field nothing was masked, so a bullet is the source's own.
+  const empty = bound();
+  empty.field.value = "a•b";
+  empty.field.dispatchEvent({ type: "input", inputType: "insertText" });
+  assert.equal(empty.vault.text(), "a•b");
+});
+
 // Red-team F5: a prevented beforeinput (Enter, Ctrl+Z) used to return with
 // `pending` still holding the caret. The next edit the browser makes by
 // itself — an autofill, a password manager, an Android-IME commit — arrives
