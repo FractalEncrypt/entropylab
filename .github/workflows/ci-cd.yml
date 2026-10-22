@@ -803,11 +803,12 @@ jobs:
           EXPECTED: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
-          # A proof on rock that already covers this HTML stays. Another run
-          # (a re-run, or one whose push waited for approval) may have pushed
-          # it and ots-upgrade completed it since, and a fresh pending proof
-          # must not replace a completed one.
-          if [ -f entropylab.html.ots ] && [ "$(head -c 65 entropylab.html.ots | tail -c 32 | od -An -v -tx1 | tr -d ' \n')" = "$EXPECTED" ]; then
+          # A well-formed proof on rock that already covers this HTML stays.
+          # Another run (a re-run, or one whose push waited for approval) may
+          # have pushed it and ots-upgrade completed it since, and a fresh
+          # pending proof must not replace a completed one. A malformed one is
+          # replaced by this validated proof.
+          if [ -f entropylab.html.ots ] && [ "$(head -c 65 entropylab.html.ots | tail -c 32 | od -An -v -tx1 | tr -d ' \n')" = "$EXPECTED" ] && python3 scripts/ots-attestations.py entropylab.html.ots > /dev/null 2>&1; then
             echo "Rock already has a proof for $EXPECTED; not replacing it."
             exit 0
           fi

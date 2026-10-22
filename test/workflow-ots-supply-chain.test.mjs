@@ -271,8 +271,14 @@ test("the preserve check passes an upgrade that adds and refuses one that drops 
   const three = [...header, 0xff, 0xf0, ...varbytes([0xaa]), 0x08, ...attest(1), 0xff, 0x08, ...attest(2), 0xf1, ...varbytes([0xbb]), 0x08, ...attest(3)];
   assert.equal(preserves(two, two), 0, "unchanged");
   assert.equal(preserves(two, three), 0, "an added attestation");
-  assert.equal(preserves([...header, ...pending], two), 0, "a pending proof upgraded");
+  assert.equal(preserves([...header, ...pending], two), 1, "an upgrade that drops the pending calendar entry (ots upgrade keeps it)");
   assert.equal(preserves(two, [...header, ...pending]), 1, "a completed proof swapped for a pending one");
+  // Pending calendar attestations are preserved too (DeepSeek red-team of
+  // cf1a3c2): a pending proof cannot be traded for one that points at
+  // other calendars, while a real upgrade keeps them beside the new ones.
+  const otherCalendar = [0x00, ...PENDING, ...varbytes([...Buffer.from("https://attacker.example.org")])];
+  assert.equal(preserves([...header, ...pending], [...header, ...otherCalendar]), 1, "a pending proof swapped for one at another calendar");
+  assert.equal(preserves([...header, ...pending], [...header, 0xff, ...pending, 0x08, ...attest(5)]), 0, "a pending proof upgraded, keeping its calendar entry");
   assert.equal(preserves(two, [...header, 0xff, 0xf0, ...varbytes([0xaa]), 0x08, ...attest(1), 0x08, ...attest(9)]), 1, "one attestation swapped, same count");
   assert.equal(preserves(two, [...header, 0xff, 0xf0, ...varbytes([0xab]), 0x08, ...attest(1), 0x08, ...attest(2)]), 1, "an attestation moved to another op path");
   assert.equal(preserves(two, [...header, 0x99]), 1, "a malformed upload");
@@ -287,9 +293,10 @@ test("timestamp-push walks the proof and never replaces a proof on rock that alr
   assert.match(validate, /if ! python3 scripts\/ots-attestations\.py "\$PROOF" > \/dev\/null; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "the stamped proof is walked");
   const commit = all.find((step) => step.includes("git commit"));
   assert.match(commit, /^ {8}env:\n {10}EXPECTED: \$\{\{ needs\.build\.outputs\.sha256 \}\}$/m, "the commit step knows the tested digest");
-  const keep = commit.indexOf('= "$EXPECTED" ]; then'), copy = commit.indexOf('cp "$RUNNER_TEMP/entropylab.html.ots"');
+  const keep = commit.indexOf('= "$EXPECTED" ]'), copy = commit.indexOf('cp "$RUNNER_TEMP/entropylab.html.ots"');
   assert.ok(keep > 0 && keep < copy, "a proof on rock covering the tested digest is kept, checked before the copy");
   assert.match(commit.slice(keep, copy), /exit 0\n/, "and the step ends without committing (no committed=true, so no push)");
+  assert.match(commit.slice(keep, keep + 140), /= "\$EXPECTED" \] && python3 scripts\/ots-attestations\.py entropylab\.html\.ots > \/dev\/null 2>&1; then/, "only a well-formed proof on rock is kept (DeepSeek red-team of cf1a3c2)");
 });
 
 test("the attestation walker refuses the same op twice at one node", (t) => {
