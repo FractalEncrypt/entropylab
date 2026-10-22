@@ -1558,3 +1558,57 @@ test("an appended output block spends the derivation budget as a full render doe
   assert.ok(full.includes("<strong>Output 1364</strong> derived") && full.includes("<strong>Output 1365</strong> over budget"));
   assert.equal(page, full);
 });
+
+// GLM 5.3's review of #1031 (a47705c): Show more on one list grows the whole
+// view's budget, so the other list's tail must follow. The real click handler
+// runs against a string-backed stand-in for #psbt-out.
+const pageElement = (initial) => {
+  const element = { html: initial, hasAttribute: () => true, setAttribute: () => {}, focus: () => {} };
+  Object.defineProperty(element, "innerHTML", { get: () => element.html, set: (value) => { element.html = value; } });
+  const tailSpan = (kind) => {
+    const open = "<div data-psbt-tail='" + kind + "'>", start = element.html.indexOf(open);
+    if (start < 0) return null;
+    let depth = 1, at = start + open.length;
+    while (depth) {
+      const next = element.html.indexOf("<div", at), close = element.html.indexOf("</div>", at);
+      if (next >= 0 && next < close) { depth++; at = next + 4; } else { depth--; at = close + 6; }
+    }
+    return { start, inner: start + open.length, end: at - 6 };
+  };
+  element.querySelector = (selector) => {
+    const kind = (selector.match(/data-psbt-tail='(\w+)'/) || [])[1];
+    if (!kind || !tailSpan(kind)) return null;
+    return {
+      get innerHTML() { const s = tailSpan(kind); return element.html.slice(s.inner, s.end); },
+      set innerHTML(value) { const s = tailSpan(kind); element.html = element.html.slice(0, s.inner) + value + element.html.slice(s.end); },
+      insertAdjacentHTML: (where, value) => { const s = tailSpan(kind); element.html = element.html.slice(0, s.start) + value + element.html.slice(s.start); },
+    };
+  };
+  return element;
+};
+
+test("Show more on outputs after inputs keeps the inputs tail equal to a full render of the grown window", () => {
+  // GLM's case: inputs 2,000+ carry three warnings each (a SIGHASH_SINGLE
+  // policy problem and two inscription envelopes), so the inputs tail's
+  // collected warnings depend on the whole view's budget.
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(5000, 3000);
+  const envelopes = [];
+  doc.stubInscriptions = { inputs: doc.inputs.map((entries, index) => {
+    if (index < 2000) return { envelopes: [] };
+    entries.push({ type: 0x03, sighash: 3 });
+    const own = [0, 1].map((k) => ({ envelopeIndex: envelopes.length + k, source: "witness", bodyBytes: 1, unrecognizedEven: false }));
+    envelopes.push(...own);
+    return { envelopes: own };
+  }), envelopes };
+  const ts = [new Uint8Array(), "2024-01-01T00:00:00Z", "inspect"];
+  const last = { kind: "psbt", parsed: doc, sourceTag: ts[0], checkedAt: ts[1], network: "mainnet", limits: { ...INSPECTOR } };
+  const output = pageElement(render(doc, ...ts, { network: "mainnet", limits: last.limits }));
+  const showMore = new Function("document", "hodlPsbtLast", "hodlRenderPsbt", "hodlRenderRawTx", `${extractAppFunction("hodlPsbtShowMore")}; return hodlPsbtShowMore;`)(
+    { getElementById: (id) => (id === "psbt-out" ? output : null) }, last, render, () => { throw new Error("not a transaction"); });
+  const click = (kind) => showMore({ target: { closest: () => ({ dataset: { psbtMore: kind } }) } });
+  click("inputs");
+  assert.equal(output.html, render(doc, ...ts, { network: "mainnet", limits: { ...INSPECTOR, inputs: 4000 } }), "after the inputs click");
+  click("outputs");
+  assert.equal(output.html, render(doc, ...ts, { network: "mainnet", limits: { ...INSPECTOR, inputs: 4000, outputs: 4000 } }), "after the outputs click, the inputs tail follows the grown budget");
+});

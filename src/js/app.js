@@ -11032,6 +11032,16 @@ function hodlPsbtShowMore(event) {
   if (part && typeof part === "object") {
     tail.insertAdjacentHTML("beforebegin", part.chunk);
     tail.innerHTML = part.tail;
+    // The grown window also grows the view's render budget, so the other
+    // list's tail (its collected warnings and their count) is rendered again
+    // at the new limits. When that render declines or would add a block, the
+    // whole run is painted again (GLM 5.3's review of #1031).
+    let otherKind = kind === "outputs" ? "inputs" : "outputs", otherTail = output.querySelector("[data-psbt-tail='" + otherKind + "']");
+    if (otherTail) {
+      let other = render({ ...options, only: { kind: otherKind, from: last.limits[otherKind] } });
+      if (other && typeof other === "object" && !other.chunk) otherTail.innerHTML = other.tail;
+      else output.innerHTML = render(options);
+    }
   } else {
     output.innerHTML = render(options);
   }
