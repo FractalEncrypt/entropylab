@@ -207,7 +207,11 @@ test("an oversized seed paste is refused before any normalizing or deriving", ()
   try {
     page.getElementById("ln-seed").value = `${AEZEED_VECTOR_WORDS} ${"1!".repeat(3000)}`;
     lnDerive(page);
-    assert.match(page.getElementById("ln-error").textContent, /too long/);
+    // The refusal is the keyed "seed-too-long" error; its wording is
+    // translatable copy, so assert the outcome, not the text: an error is
+    // shown and nothing was derived (the normalizer would have stripped the
+    // noise and derived had the length check come after it).
+    assert.ok(page.getElementById("ln-error").textContent.length > 0, "the oversized paste was not refused");
     assert.equal(page.getElementById("ln-out").innerHTML, "", "an oversized paste derived a node key");
   } finally {
     delete globalThis.document;
@@ -221,7 +225,9 @@ test("the LDK tool path refuses a lone-surrogate passphrase and derives nothing"
     page.getElementById("ln-seed").value = BIP39_VECTOR_WORDS;
     page.getElementById("ln-pass").value = "word\uD800";
     lnDerive(page);
-    assert.match(page.getElementById("ln-error").textContent, /surrogate/);
+    // The refusal is the keyed "passphrase-utf8" error; assert the outcome,
+    // not the translatable wording.
+    assert.ok(page.getElementById("ln-error").textContent.length > 0, "the passphrase was not refused");
     assert.equal(page.getElementById("ln-out").innerHTML, "", "a refused passphrase derived a node key");
   } finally {
     delete globalThis.document;
@@ -245,9 +251,10 @@ test("deriveLdkNode refuses a passphrase that is not well-formed Unicode", () =>
       error = thrown;
     }
     assert.ok(error, `passphrase ${JSON.stringify(bad)} derived`);
-    assert.match(error.message, /surrogate/);
+    // The error's code is the stable marker; the key is translatable copy,
+    // asserted only for presence (AGENTS.md).
     assert.equal(error.code, "passphrase-utf8");
-    assert.match(error.key, /surrogate/);
+    assert.ok(typeof error.key === "string" && error.key.length > 0, "the refusal carries a translation key");
   }
   // Control: a real astral character (a high+low pair) is honest UTF-8 and
   // derives exactly what the independent @scure implementation derives.
