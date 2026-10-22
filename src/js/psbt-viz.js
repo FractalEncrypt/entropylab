@@ -34,6 +34,14 @@ const escapeHtml = (text) =>
 // rendering stops at the cap, with the elided count noted under the list.
 export const PSBT_RENDER_LIMIT = 500;
 
+// The PSBT Inspector shows more per list than the other views. Measured
+// 2026-10-22, rendering an input there costs about 0.2 ms on a desktop and
+// 1.3 ms with the CPU throttled 4x (a phone), against about 2.7 and 22 ms in
+// the Editor. 2,000 keeps every standard transaction (about 1,400 P2WPKH
+// inputs fit in 100 kvB) on one screen, and each "Show 2,000 more" button
+// grows the window by the same step.
+export const PSBT_INSPECTOR_LIMIT = 2000;
+
 // One total render budget per view (red-team F7, round 4): the per-list cap
 // bounds one list, but nested lists multiply — 500 capped map sections of
 // 200 pairs still render 100,000 rows. The budget bounds the whole view:
@@ -331,7 +339,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Inputs <span class="label-value">(${doc.tx.inputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${inputsHint}</p>
       ${inputs || `<div class="psbted-viz-box muted">No inputs.</div>`}
-      ${moreInputs ? `<p class="muted">…and ${moreInputs} more inputs (not rendered).</p>` : ""}
+      ${moreInputs ? `<p class="psbted-note-warn">${moreInputs === 1 ? "1 more input not shown, still included in this transaction." : `${moreInputs} more inputs not shown, still included in this transaction.`}</p>` : ""}
     </div>
     <div class="psbted-viz-mid">
       <div class="psbted-viz-arrow" aria-hidden="true"></div>
@@ -347,7 +355,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Outputs <span class="label-value">(${doc.tx.outputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${doc.totalOut === null ? "outputs total unknown — amounts overflow u64" : `${groupSats(doc.totalOut)} sats in total`} · editable in the boxes</p>
       ${outputs || `<div class="psbted-viz-box muted">No outputs.</div>`}
-      ${moreOutputs ? `<p class="muted">…and ${moreOutputs} more outputs (not rendered).</p>` : ""}
+      ${moreOutputs ? `<p class="psbted-note-warn">${moreOutputs === 1 ? "1 more output not shown, still included in this transaction." : `${moreOutputs} more outputs not shown, still included in this transaction.`}</p>` : ""}
     </div>
   </div>
 </div>`;

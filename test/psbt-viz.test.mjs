@@ -537,8 +537,8 @@ test("an oversize PSBT renders only 500 boxes per side, notes the elided counts,
   assert.ok(!html.includes('data-viz="output:500"'), "output #500 is not rendered");
   // One elision line per column, in the same element and class the editor
   // uses for its truncated-problems note.
-  assert.ok(html.includes('<p class="muted">…and 700 more inputs (not rendered).</p>'), "inputs elision line");
-  assert.ok(html.includes('<p class="muted">…and 200 more outputs (not rendered).</p>'), "outputs elision line");
+  assert.ok(html.includes('<p class="psbted-note-warn">700 more inputs not shown, still included in this transaction.</p>'), "inputs elision line");
+  assert.ok(html.includes('<p class="psbted-note-warn">200 more outputs not shown, still included in this transaction.</p>'), "outputs elision line");
   // Headings, totals and the fee still cover all 1,200 inputs and 700 outputs.
   assert.match(html, /Inputs[\s\S]{0,40}\(1200\)/);
   assert.match(html, /Outputs[\s\S]{0,40}\(700\)/);
@@ -678,8 +678,8 @@ test("a 1,200-input PSBT renders 500 input sections in the inspector, notes the 
   assert.ok(!html.includes("<strong>Output 500</strong>"), "output #500 is not rendered");
   // One elision line per list, in the same element and class hodlRenderRawTx
   // uses, with the count as a plain integer.
-  assert.ok(html.includes("<p class='muted'>…and 700 more inputs (not rendered).</p>"), "inputs elision line");
-  assert.ok(html.includes("<p class='muted'>…and 200 more outputs (not rendered).</p>"), "outputs elision line");
+  assert.ok(html.includes("<p class='psbt-warn'>700 more inputs not shown, still included in this transaction.</p>"), "inputs elision line");
+  assert.ok(html.includes("<p class='psbt-warn'>200 more outputs not shown, still included in this transaction.</p>"), "outputs elision line");
   // The analysis still covers every element: input 900's declared
   // SIGHASH_SINGLE is a policy problem even though its section is elided…
   assert.ok(html.includes("input 900 requests SIGHASH_SINGLE"), "warning from elided input 900 still appears");
@@ -700,7 +700,7 @@ test("the inspector under the render cap renders every section and no elision li
 
 test("app.js shares the one PSBT_RENDER_LIMIT and cappedHtml with the PSBT views (no local duplicate)", () => {
   const source = readFileSync(join(repoRoot, "src/js/app.js"), "utf8");
-  assert.match(source, /import \{ PSBT_RENDER_LIMIT, cappedHtml, renderBudget \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
+  assert.match(source, /import \{ PSBT_INSPECTOR_LIMIT, PSBT_RENDER_LIMIT, cappedHtml, renderBudget \} from "\.\/psbt-viz\.js";/, "imported from psbt-viz.js");
   assert.doesNotMatch(source, /const PSBT_RENDER_LIMIT =/, "no duplicated local constant");
 });
 
@@ -1005,7 +1005,8 @@ test("the inspector's whole view stays within the render budget when every input
   const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
   const sections = (html.match(/<strong>Input \d+<\/strong>/g) || []).length;
   const outputs = (html.match(/<strong>Output \d+<\/strong>/g) || []).length;
-  const warnings = (html.match(/<p class='psbt-(?:bad|warn)'>/g) || []).length;
+  // The capped-list note is warning-styled too (TC's review), but it is not a rendered warning row.
+  const warnings = (html.match(/<p class='psbt-(?:bad|warn)'>(?!\d+ more (?:input|output)s? not shown)/g) || []).length;
   assert.equal(sections, 500, "input sections capped at 500");
   assert.equal(outputs, 1, "the one output renders");
   // 1 output block + 500 inputs × (1 section + 2 warnings) = 1,501 units
@@ -1116,7 +1117,7 @@ test("when both the inputs table and the input map sections are capped, the seco
   const { render, out } = editorRenderForTest(editorDoc(1200, 0));
   render();
   const html = out.innerHTML;
-  assert.equal((html.match(/700 more inputs \(not rendered\)/g) || []).length, 1, "the transaction table's note appears once");
+  assert.equal((html.match(/700 more inputs not shown, still included in this transaction\./g) || []).length, 1, "the transaction table's note appears once");
   assert.equal((html.match(/700 more input maps \(not rendered\)/g) || []).length, 1, "the map sections' note names the maps");
 });
 
@@ -1330,7 +1331,11 @@ test("one input with 300,000 warnings renders capped instead of throwing (GLM 5.
   const envelopes = Array.from({ length: 300000 }, (_, envelopeIndex) => ({ envelopeIndex, source: "witness", bodyBytes: 1, unrecognizedEven: false }));
   doc.stubInscriptions = { inputs: [{ envelopes }], envelopes };
   const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
-  assert.equal((html.match(/<strong>Inscription envelope<\/strong>/g) || []).length, vizModule.PSBT_RENDER_LIMIT, "the collected warnings render capped");
+  // The input's section and as many of its warnings as the 2,000-unit budget
+  // holds render inline (2,000 - 1 output block - 1 section); the rest are
+  // counted, not rendered.
+  assert.equal((html.match(/<strong>Inscription envelope<\/strong>/g) || []).length, 1998, "warnings render up to the budget");
+  assert.ok(html.includes("<strong>Input 0</strong>"), "the input's own section renders");
   assert.match(html, /…and \d+ more warnings \(not rendered\)\./, "the rest are counted");
   // The Nonce Inspector builds the same input sections with an unbounded
   // budget (it discards them), so its inline branch took the same spread
@@ -1417,4 +1422,116 @@ test("Add/Delete Input, Add/Delete Output and Add Pair repaint the result panel 
     }
   }
   assert.ok(checked >= 4, "the tx-add, Add Pair and both delete handlers were checked");
+});
+
+// "Show more" (the owner, 2026-10-22, after a reviewer asked whether users can
+// see inputs past the cap): the Inspector passes a window of 2,000 per list
+// and a step; past the window the note is followed by one button per list
+// that names the next step. Hooked on data-psbt-more, never on a class.
+const INSPECTOR = { inputs: 2000, outputs: 2000, step: 2000, format: (n) => n.toLocaleString("en-US") };
+const moreButtons = (html) => [...html.matchAll(/<button[^>]*data-psbt-more='(\w+)'[^>]*>([^<]*)<\/button>/g)].map(([, kind, label]) => [kind, label]);
+
+test("the Inspector shows 2,000 inputs and outputs, then one Show-more button per list naming the next step", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const html = render(inspectorDoc(2500, 2300), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
+  assert.equal(html.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 2000, "2,000 input sections");
+  assert.equal(html.match(/<strong>Output \d+<\/strong>/g)?.length ?? 0, 2000, "2,000 output blocks");
+  assert.ok(html.includes("500 more inputs not shown, still included in this transaction."));
+  assert.ok(html.includes("300 more outputs not shown, still included in this transaction."));
+  assert.deepEqual(moreButtons(html), [["outputs", "Show 300 more outputs"], ["inputs", "Show 500 more inputs"]]);
+});
+
+test("Show more grows the window by one step, and the button goes once a list is complete", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(5000, 3);
+  const first = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
+  assert.deepEqual(moreButtons(first), [["inputs", "Show 2,000 more inputs"]], "a full step is named with the page's grouping");
+  const second = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: { ...INSPECTOR, inputs: 4000 } });
+  assert.equal(second.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 4000, "4,000 input sections after one step");
+  assert.ok(second.includes("<strong>Input 3999</strong>") && !second.includes("<strong>Input 4000</strong>"));
+  assert.deepEqual(moreButtons(second), [["inputs", "Show 1,000 more inputs"]], "the last step names what is left");
+  const third = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: { ...INSPECTOR, inputs: 6000 } });
+  assert.equal(third.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 5000, "every input once the window covers them");
+  assert.deepEqual(moreButtons(third), [], "no button and no note once nothing is hidden");
+  assert.ok(!third.includes("more inputs not shown"));
+});
+
+test("only a caller that can grow the window gets a Show-more button", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const exact = render(inspectorDoc(2000, 2000), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
+  assert.deepEqual(moreButtons(exact), [], "exactly 2,000 of each: nothing hidden, no button");
+  const fixed = render(inspectorDoc(1200, 3), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.equal(fixed.match(/<strong>Input \d+<\/strong>/g)?.length ?? 0, 500, "without a window, the shared 500 cap");
+  assert.ok(fixed.includes("700 more inputs not shown, still included in this transaction."));
+  assert.deepEqual(moreButtons(fixed), [], "no step, no button");
+});
+
+test("an input with more warnings than the budget holds keeps its section, in a small PSBT (GLM 5.3 review of #1031)", () => {
+  // 3 inputs; input 1 carries 2,500 envelopes. Asking for its section and all
+  // its warnings at once hid input 1 entirely (and so its address and amount)
+  // although the PSBT is far under the cap.
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(3, 1);
+  const envelopes = Array.from({ length: 2500 }, (_, envelopeIndex) => ({ envelopeIndex, source: "witness", bodyBytes: 1, unrecognizedEven: false }));
+  doc.stubInscriptions = { inputs: [{ envelopes: [] }, { envelopes }, { envelopes: [] }], envelopes };
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  for (const n of [0, 1, 2]) assert.ok(html.includes(`<strong>Input ${n}</strong>`), `input ${n}'s section renders`);
+  assert.ok(!html.includes("more inputs not shown"), "no input is elided");
+  assert.ok(html.indexOf("<strong>Input 1</strong>") < html.indexOf("<strong>Inscription envelope</strong>"), "input 1's warnings follow its section");
+  assert.match(html, /…and \d+ more warnings \(not rendered\)\./, "the warnings past the budget are counted");
+});
+
+// A "Show more" click renders only the block it adds (Portland: up to ~21k
+// inputs and ~100k outputs per transaction). The page with the block inserted
+// above the list's tail must be exactly the page a full render of the grown
+// window gives.
+const appended = (render, doc, kind, from, limits) => {
+  const ts = ["2024-01-01T00:00:00Z", "inspect"];
+  const page = render(doc, new Uint8Array(), ...ts, { network: "mainnet", limits: { ...limits, [kind]: from } });
+  const before = render(doc, new Uint8Array(), ...ts, { network: "mainnet", limits: { ...limits, [kind]: from }, only: { kind, from } });
+  const part = render(doc, new Uint8Array(), ...ts, { network: "mainnet", limits, only: { kind, from } });
+  const open = "<div data-psbt-tail='" + kind + "'>";
+  const old = open + before.tail + "</div>";
+  assert.equal(before.chunk, "", "nothing new at the current window");
+  assert.equal(page.split(old).length, 2, "the page carries the list's tail exactly once");
+  return { page: page.replace(old, part.chunk + open + part.tail + "</div>"), part };
+};
+
+test("appending the next 2,000 inputs gives exactly the page a full render of the grown window gives", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(5000, 3);
+  const limits = { ...INSPECTOR, inputs: 4000 };
+  const { page, part } = appended(render, doc, "inputs", 2000, limits);
+  assert.equal((part.chunk.match(/<strong>Input \d+<\/strong>/g) || []).length, 2000, "the block holds only the new inputs");
+  assert.ok(part.chunk.includes("<strong>Input 2000</strong>") && !part.chunk.includes("<strong>Input 1999</strong>"));
+  assert.equal(page, render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits }));
+});
+
+test("appending the next 2,000 outputs gives exactly the page a full render of the grown window gives", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(2, 5000);
+  const limits = { ...INSPECTOR, outputs: 4000 };
+  const { page, part } = appended(render, doc, "outputs", 2000, limits);
+  assert.equal((part.chunk.match(/<strong>Output \d+<\/strong>/g) || []).length, 2000);
+  assert.equal(page, render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits }));
+});
+
+test("when an input already shown carries warnings, the block render declines and the click repaints", () => {
+  // How many of an input's warnings render inline depends on the window, so
+  // appending could leave some in neither place.
+  const { render } = hodlRenderPsbtForTest();
+  const part = render(inspectorDoc(3000, 1, 5), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: { ...INSPECTOR, inputs: 4000 }, only: { kind: "inputs", from: 2000 } });
+  assert.equal(part, null);
+});
+
+test("the note under a capped list says the hidden inputs and outputs are still in the transaction, one or many (TC's review of #1031)", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const one = render(inspectorDoc(501, 501), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  assert.ok(one.includes("<p class='psbt-warn'>1 more input not shown, still included in this transaction.</p>"), "one input, as a warning");
+  assert.ok(one.includes("<p class='psbt-warn'>1 more output not shown, still included in this transaction.</p>"), "one output, as a warning");
+  assert.ok(!/1 more (inputs|outputs)/.test(one), "never '1 more inputs'");
+  const step = render(inspectorDoc(2001, 1), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
+  assert.deepEqual(moreButtons(step), [["inputs", "Show 1 more input"]]);
+  const many = render(inspectorDoc(2003, 1), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
+  assert.ok(many.includes("3 more inputs not shown, still included in this transaction."));
 });

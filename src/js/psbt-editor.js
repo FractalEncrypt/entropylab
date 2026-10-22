@@ -912,8 +912,10 @@ export const initPsbtEditor = ({ networkDefault = () => "mainnet", copiedIcon = 
         </tr>`;
       })
       .join("");
-    const moreInputsNote = tx.inputs.length > inputIndices.length ? `<p class="muted">…and ${tx.inputs.length - inputIndices.length} more inputs (not rendered).</p>` : "";
-    const moreOutputsNote = tx.outputs.length > outputIndices.length ? `<p class="muted">…and ${tx.outputs.length - outputIndices.length} more outputs (not rendered).</p>` : "";
+    // Hidden inputs and outputs are still in the transaction (TC's review of
+    // #1031): the note says so, as a warning, one or many.
+    const moreInputsNote = tx.inputs.length > inputIndices.length ? `<p class="psbted-note-warn">${tx.inputs.length - inputIndices.length === 1 ? "1 more input not shown, still included in this transaction." : `${tx.inputs.length - inputIndices.length} more inputs not shown, still included in this transaction.`}</p>` : "";
+    const moreOutputsNote = tx.outputs.length > outputIndices.length ? `<p class="psbted-note-warn">${tx.outputs.length - outputIndices.length === 1 ? "1 more output not shown, still included in this transaction." : `${tx.outputs.length - outputIndices.length} more outputs not shown, still included in this transaction.`}</p>` : "";
 
     // One map section per PSBT part; a diagram box jumps to its own section.
     const mapSection = (kind, index) => {

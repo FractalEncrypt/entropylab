@@ -125,7 +125,7 @@ import { initSecurityLog } from "./security-log.js";
 import { initConcealOnLeave } from "./conceal-on-leave.js";
 // One cap for every PSBT view: a crafted PSBT passes the load gates with more
 // elements than the DOM survives (red-team F7).
-import { PSBT_RENDER_LIMIT, cappedHtml, renderBudget } from "./psbt-viz.js";
+import { PSBT_INSPECTOR_LIMIT, PSBT_RENDER_LIMIT, cappedHtml, renderBudget } from "./psbt-viz.js";
 const hodlBip39Wordlist = Object.freeze(bip39English);
 function hodlNote(key, vars) {
   return vars == null ? { key } : { key, vars };
@@ -9982,7 +9982,7 @@ function hodlRefreshPsbtLocale() {
   for (let [last, id, view] of [[hodlPsbtLast, "psbt-out", "inspect"], [hodlNonceLast, "nonce-out", "nonce"]]) {
     let output = document.getElementById(id);
     if (!last || !output) continue;
-    let options = { network: last.network, transcript: last.transcript, record: false };
+    let options = { network: last.network, transcript: last.transcript, record: false, ...(last.limits ? { limits: last.limits } : {}) };
     try {
       output.innerHTML = last.kind === "psbt" ? hodlRenderPsbt(last.parsed, last.sourceTag, last.checkedAt, view, options) : hodlRenderRawTx(last.parsed, last.sourceTag, last.checkedAt, view, options);
     } catch {
@@ -11007,6 +11007,41 @@ function hodlRunNonce() {
     hodlJournalLog("inspect-error", "", "psbt");
   }
 }
+// A count in the page language ("2,000", "2.000"), for the Inspector's
+// "Show more" buttons.
+function hodlFormatCount(n) {
+  let locale = "en";
+  try { locale = hodlGetLocale() || "en"; } catch {}
+  return new Intl.NumberFormat(locale).format(n);
+}
+// "Show 2,000 more inputs/outputs": grows the Inspector's window for the
+// last run by one step and adds that block; focus moves to the same list's
+// next button, or to the output when that list is complete.
+function hodlPsbtShowMore(event) {
+  let button = event.target?.closest?.("[data-psbt-more]"), last = hodlPsbtLast, output = document.getElementById("psbt-out");
+  if (!button || !last?.limits || !output) return;
+  let kind = button.dataset.psbtMore === "outputs" ? "outputs" : "inputs", from = last.limits[kind];
+  last.limits = { ...last.limits, [kind]: from + last.limits.step };
+  let render = (options) => last.kind === "psbt" ? hodlRenderPsbt(last.parsed, last.sourceTag, last.checkedAt, "inspect", options) : hodlRenderRawTx(last.parsed, last.sourceTag, last.checkedAt, "inspect", options);
+  let options = { network: last.network, record: false, limits: last.limits };
+  // Only the new block is rendered and inserted above the list's tail, so a
+  // click costs one block however much is already shown. When the render
+  // cannot give a block (see hodlRenderPsbt) the whole run is painted again.
+  let tail = output.querySelector("[data-psbt-tail='" + kind + "']");
+  let part = tail ? render({ ...options, only: { kind, from } }) : null;
+  if (part && typeof part === "object") {
+    tail.insertAdjacentHTML("beforebegin", part.chunk);
+    tail.innerHTML = part.tail;
+  } else {
+    output.innerHTML = render(options);
+  }
+  let next = output.querySelector("[data-psbt-more='" + kind + "']");
+  if (next) next.focus();
+  else {
+    if (!output.hasAttribute("tabindex")) output.setAttribute("tabindex", "-1");
+    output.focus();
+  }
+}
 function hodlInitPsbt() {
   let go = document.getElementById("psbt-go");
   if (!go) return;
@@ -11016,6 +11051,7 @@ function hodlInitPsbt() {
     hodlMarkPsbtInspected("psbt-go");
     hodlSyncPsbtControls();
   };
+  document.getElementById("psbt-out")?.addEventListener("click", hodlPsbtShowMore);
   document.getElementById("psbt-wipe").onclick = hodlEndPsbtSession;
   document.getElementById("nonce-wipe").onclick = hodlEndPsbtSession;
   document.getElementById("nonce-go").onclick = () => {
@@ -11624,8 +11660,9 @@ function hodlRunPsbt() {
     let kind = isPsbtMagic(bytes) ? "psbt" : "transaction";
     let sourceTag = hodlSha256(bytes), checkedAt = new Date().toISOString();
     let parsed = kind === "psbt" ? hodlParsePsbt(bytes) : parseRawTx(bytes), network = hodlInspectorNetwork();
-    output.innerHTML = kind === "psbt" ? hodlRenderPsbt(parsed, sourceTag, checkedAt, "inspect", { network }) : hodlRenderRawTx(parsed, sourceTag, checkedAt, "inspect", { network });
-    hodlPsbtLast = { kind, parsed, sourceTag, checkedAt, network };
+    let limits = { inputs: PSBT_INSPECTOR_LIMIT, outputs: PSBT_INSPECTOR_LIMIT, step: PSBT_INSPECTOR_LIMIT, format: hodlFormatCount };
+    output.innerHTML = kind === "psbt" ? hodlRenderPsbt(parsed, sourceTag, checkedAt, "inspect", { network, limits }) : hodlRenderRawTx(parsed, sourceTag, checkedAt, "inspect", { network, limits });
+    hodlPsbtLast = { kind, parsed, sourceTag, checkedAt, network, limits };
     hodlJournalLog("inspect", kind, "psbt");
   } catch (exception) {
     hodlPsbtLast = null;
@@ -12648,6 +12685,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     conflictedInputs = [],
     html = [],
     warnings = [],
+    splitShown = false,
     shownInputs = 0,
     rValues = [],
     rows = [],
@@ -12679,10 +12717,43 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // sections and warnings, so they must not spend its budget — a large PSBT
   // elided every nonce row for content the view never shows. The nonce
   // view's own lists (r-values, per-signature rows) stay bounded by their
-  // per-list caps; the inspector views keep the one shared budget.
+  // per-list caps; the inspector views keep the one shared budget, which
+  // scales with the window: two units per shown element, its section and one
+  // warning (2,000 at the default 500 + 500).
+  // The window of inputs and outputs this render may show. The Inspector
+  // passes its own (PSBT_INSPECTOR_LIMIT each, grown by its "Show more"
+  // buttons; `step` is the growth, `format` writes a count in the page
+  // language); every other caller gets the shared PSBT_RENDER_LIMIT.
+  const limits = { inputs: options?.limits?.inputs ?? PSBT_RENDER_LIMIT, outputs: options?.limits?.outputs ?? PSBT_RENDER_LIMIT, step: options?.limits?.step ?? 0, format: options?.limits?.format };
+  // A "Show more" click asks only for the block it adds: `only` names the
+  // list and where the shown part ends. The render then runs as a full render
+  // with the grown window would, emits that list's new sections and its tail
+  // (the note, the button and, for inputs, the collected warnings), and
+  // returns { chunk, tail } instead of the page. Each list's tail sits in its
+  // own data-psbt-tail wrapper, so the click can insert the chunk above it.
+  const only = options?.only && (options.only.kind === "inputs" || options.only.kind === "outputs") ? { kind: options.only.kind, from: Math.max(0, options.only.from | 0) } : null;
+  const chunk = [];
   const budget = view === "nonce"
     ? { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } }
-    : typeof renderBudget === "function" ? renderBudget() : { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } };
+    : typeof renderBudget === "function" ? renderBudget(2 * (limits.inputs + limits.outputs)) : { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } };
+  // "Show more" buttons go only where the caller can grow the window (the
+  // Inspector passes `step`); each names how many the next step adds.
+  const moreButton = (kind, remaining) => {
+    if (!limits.step || remaining <= 0) return "";
+    let n = Math.min(limits.step, remaining);
+    let label = kind === "inputs"
+      ? (n === 1 ? hodlT("Show 1 more input") : hodlT("Show {n} more inputs", { n: count(n) }))
+      : (n === 1 ? hodlT("Show 1 more output") : hodlT("Show {n} more outputs", { n: count(n) }));
+    return "<div class='row tool-actions'><button class='btn secondary' type='button' data-psbt-more='" + kind + "'>" + label + "</button></div>";
+  };
+  // The note under a capped input or output list. Those inputs and outputs
+  // are still in the transaction being signed (and in its fee and totals), so
+  // the note says so, as a warning: the person cannot review all of it here.
+  const count = (n) => (typeof limits.format === "function" ? limits.format(n) : String(n));
+  const elidedNote = (kind, n) => "<p class='psbt-warn'>" + (kind === "inputs"
+    ? (n === 1 ? hodlT("1 more input not shown, still included in this transaction.") : hodlT("{n} more inputs not shown, still included in this transaction.", { n: count(n) }))
+    : (n === 1 ? hodlT("1 more output not shown, still included in this transaction.") : hodlT("{n} more outputs not shown, still included in this transaction.", { n: count(n) }))) + "</p>";
+
   let inscriptionReport = { inputs: [], envelopes: [] }, inscriptionScanIncomplete = false;
   try {
     inscriptionReport = inspectPsbtInscriptions(psbt);
@@ -12710,13 +12781,16 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx outputs") + " <span class='label-value'>(" + tx.outputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction sends bitcoin") + "</p>");
   let ownershipMap = hodlSessionOwnership(network);
-  // Output blocks are capped at PSBT_RENDER_LIMIT and spend from the view's
-  // render budget; the ownership warning below still analyses every output.
-  const shownOutputs = budget.take(Math.min(tx.outputs.length, PSBT_RENDER_LIMIT));
-  tx.outputs.slice(0, shownOutputs).forEach((output, index) => {
-    html.push(hodlRenderOutputHtml(output, index, network, ownershipMap, psbt.outputs[index], derivationBudget));
-  });
-  if (tx.outputs.length > shownOutputs) html.push("<p class='muted'>" + hodlT("…and {n} more outputs (not rendered).", { n: tx.outputs.length - shownOutputs }) + "</p>");
+  // Output blocks are capped at the window and spend from the view's render
+  // budget; the ownership warning below still analyses every output.
+  const shownOutputs = budget.take(Math.min(tx.outputs.length, limits.outputs));
+  const outputsFrom = !only ? 0 : only.kind === "outputs" ? Math.min(only.from, shownOutputs) : shownOutputs;
+  for (let index = outputsFrom; index < shownOutputs; index++) {
+    (only ? chunk : html).push(hodlRenderOutputHtml(tx.outputs[index], index, network, ownershipMap, psbt.outputs[index], derivationBudget));
+  }
+  const outputsTail = tx.outputs.length > shownOutputs ? elidedNote("outputs", tx.outputs.length - shownOutputs) + moreButton("outputs", tx.outputs.length - shownOutputs) : "";
+  if (only?.kind === "outputs") return { chunk: chunk.join(""), tail: outputsTail };
+  html.push("<div data-psbt-tail='outputs'>" + outputsTail + "</div>");
   html.push(hodlOwnershipWarning(tx.outputs, network, ownershipMap));
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
@@ -12962,20 +13036,38 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     // collected list rendered capped after the loop, and the unrendered
     // section is counted in the inputs elision line below.
     const own = warnings.splice(warningsBefore);
-    if (index < PSBT_RENDER_LIMIT && budget.left >= 1 + own.length) {
-      budget.take(1 + own.length);
-      html.push(sectionHtml);
-      for (const warning of own) html.push(warning); // no spread here either: the nonce view's budget is unbounded
+    // The section needs one unit; as many of its own warnings as the budget
+    // then holds render inline under it, and the rest join the collected
+    // list. (Asking for the section and every warning at once hid the whole
+    // section of an input whose warnings outnumbered the budget left, even in
+    // a small PSBT: GLM 5.3's review of #1031.) Loops, not spreads: the nonce
+    // view's budget is unbounded and `own` can hold hundreds of thousands.
+    if (index < limits.inputs && budget.take(1) === 1) {
+      // In a chunk render, inputs already on screen emit nothing. How many
+      // of an input's warnings render inline depends on the window, so an
+      // earlier input that has any could have shown a different split: the
+      // click then repaints the whole run instead.
+      if (only && index < only.from && own.length) splitShown = true;
+      const sink = !only ? html : index >= only.from ? chunk : null;
+      if (sink) sink.push(sectionHtml);
+      // One unit stays reserved for every later section in the window, so
+      // one input's warnings can never starve the inputs after it.
+      const reserve = Math.max(0, Math.min(limits.inputs, psbt.inputs.length) - index - 1);
+      const inline = budget.take(Math.max(0, Math.min(own.length, budget.left - reserve)));
+      if (sink) for (let i = 0; i < inline; i++) sink.push(own[i]);
+      for (let i = inline; i < own.length; i++) warnings.push(own[i]);
       shownInputs++;
     } else {
       for (const warning of own) warnings.push(warning); // no spread: `own` can hold hundreds of thousands
     }
   });
-  if (psbt.inputs.length > shownInputs) html.push("<p class='muted'>" + hodlT("…and {n} more inputs (not rendered).", { n: psbt.inputs.length - shownInputs }) + "</p>");
   // The warnings collected past the cap or the budget render capped too: a
   // crafted PSBT triggers one per input (red-team F7). The policy/conflict
   // counts and the analysis summary still cover every input.
-  html.push(cappedHtml(warnings, (warning) => warning, "warnings", (n) => hodlT("…and {n} more warnings (not rendered).", { n }), budget));
+  const inputsTail = (psbt.inputs.length > shownInputs ? elidedNote("inputs", psbt.inputs.length - shownInputs) + moreButton("inputs", psbt.inputs.length - shownInputs) : "")
+    + cappedHtml(warnings, (warning) => warning, "warnings", (n) => hodlT("…and {n} more warnings (not rendered).", { n }), budget);
+  if (only?.kind === "inputs") return splitShown ? null : { chunk: chunk.join(""), tail: inputsTail };
+  html.push("<div data-psbt-tail='inputs'>" + inputsTail + "</div>");
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx fees") + "</p><p class='muted label-description'>" + hodlT("Remainder of total inputs after total outputs are accounted for") + "</p>");
   if (conflictedInputs.length) html.push("<p class='psbt-bad'><strong>" + hodlT("Fee unknown") + "</strong> — " + hodlT("input(s) {inputs} carry conflicting witness and non-witness UTXO amounts.", { inputs: conflictedInputs.join(", ") }) + "</p>");
@@ -13080,20 +13172,57 @@ function hodlRenderRawTx(tx, nonceSourceTag = new Uint8Array(), nonceCheckedAt =
     signatures = extractEcdsaSignatures(tx),
     rValues = [],
     uninspected = 0;
+  // The window of inputs and outputs this render may show. The Inspector
+  // passes its own (PSBT_INSPECTOR_LIMIT each, grown by its "Show more"
+  // buttons; `step` is the growth, `format` writes a count in the page
+  // language); every other caller gets the shared PSBT_RENDER_LIMIT.
+  const limits = { inputs: options?.limits?.inputs ?? PSBT_RENDER_LIMIT, outputs: options?.limits?.outputs ?? PSBT_RENDER_LIMIT, step: options?.limits?.step ?? 0, format: options?.limits?.format };
+  // A "Show more" click asks only for the block it adds: `only` names the
+  // list and where the shown part ends. The render then runs as a full render
+  // with the grown window would, emits that list's new sections and its tail
+  // (the note, the button and, for inputs, the collected warnings), and
+  // returns { chunk, tail } instead of the page. Each list's tail sits in its
+  // own data-psbt-tail wrapper, so the click can insert the chunk above it.
+  const only = options?.only && (options.only.kind === "inputs" || options.only.kind === "outputs") ? { kind: options.only.kind, from: Math.max(0, options.only.from | 0) } : null;
+  const chunk = [];
+  // "Show more" buttons go only where the caller can grow the window (the
+  // Inspector passes `step`); each names how many the next step adds.
+  const moreButton = (kind, remaining) => {
+    if (!limits.step || remaining <= 0) return "";
+    let n = Math.min(limits.step, remaining);
+    let label = kind === "inputs"
+      ? (n === 1 ? hodlT("Show 1 more input") : hodlT("Show {n} more inputs", { n: count(n) }))
+      : (n === 1 ? hodlT("Show 1 more output") : hodlT("Show {n} more outputs", { n: count(n) }));
+    return "<div class='row tool-actions'><button class='btn secondary' type='button' data-psbt-more='" + kind + "'>" + label + "</button></div>";
+  };
+  // The note under a capped input or output list. Those inputs and outputs
+  // are still in the transaction being signed (and in its fee and totals), so
+  // the note says so, as a warning: the person cannot review all of it here.
+  const count = (n) => (typeof limits.format === "function" ? limits.format(n) : String(n));
+  const elidedNote = (kind, n) => "<p class='psbt-warn'>" + (kind === "inputs"
+    ? (n === 1 ? hodlT("1 more input not shown, still included in this transaction.") : hodlT("{n} more inputs not shown, still included in this transaction.", { n: count(n) }))
+    : (n === 1 ? hodlT("1 more output not shown, still included in this transaction.") : hodlT("{n} more outputs not shown, still included in this transaction.", { n: count(n) }))) + "</p>";
   html.push("<p class='psbt-warn'><strong>" + hodlT("Raw Bitcoin transaction.") + "</strong> " + hodlT("Not a PSBT. Input amounts and fee are unknown without previous outputs. RFC 6979 cannot be checked here. This is the last look before broadcast.") + "</p>");
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx outputs") + " <span class='label-value'>(" + tx.outputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction sends bitcoin") + "</p>");
-  tx.outputs.slice(0, PSBT_RENDER_LIMIT).forEach((output, index) => {
-    html.push(hodlRenderOutputHtml(output, index, network, map, null));
-  });
-  if (tx.outputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more outputs (not rendered).", { n: tx.outputs.length - PSBT_RENDER_LIMIT }) + "</p>");
+  const shownOutputs = Math.min(tx.outputs.length, limits.outputs);
+  for (let index = !only ? 0 : only.kind === "outputs" ? Math.min(only.from, shownOutputs) : shownOutputs; index < shownOutputs; index++) {
+    (only ? chunk : html).push(hodlRenderOutputHtml(tx.outputs[index], index, network, map, null));
+  }
+  const outputsTail = tx.outputs.length > shownOutputs ? elidedNote("outputs", tx.outputs.length - shownOutputs) + moreButton("outputs", tx.outputs.length - shownOutputs) : "";
+  if (only?.kind === "outputs") return { chunk: chunk.join(""), tail: outputsTail };
+  html.push("<div data-psbt-tail='outputs'>" + outputsTail + "</div>");
   html.push(hodlOwnershipWarning(tx.outputs, network, map));
   html.push("<hr class='result-divider'>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
-  tx.inputs.slice(0, PSBT_RENDER_LIMIT).forEach((input, index) => {
-    html.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: index }) + "</strong> \xB7 " + hodlHexRev(input.txid) + " : " + input.vout + "<br>" + hodlT("sequence {sequence}", { sequence: "0x" + input.sequence.toString(16) }) + (input.sequence < 0xfffffffe ? " \xB7 " + hodlT("RBF-capable") : "") + "</p>");
+  const shownInputs = Math.min(tx.inputs.length, limits.inputs);
+  tx.inputs.slice(only ? Math.min(only.from, shownInputs) : 0, shownInputs).forEach((input, offset) => {
+    const index = (only ? Math.min(only.from, shownInputs) : 0) + offset;
+    (only ? chunk : html).push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: index }) + "</strong> \xB7 " + hodlHexRev(input.txid) + " : " + input.vout + "<br>" + hodlT("sequence {sequence}", { sequence: "0x" + input.sequence.toString(16) }) + (input.sequence < 0xfffffffe ? " \xB7 " + hodlT("RBF-capable") : "") + "</p>");
   });
-  if (tx.inputs.length > PSBT_RENDER_LIMIT) html.push("<p class='muted'>" + hodlT("…and {n} more inputs (not rendered).", { n: tx.inputs.length - PSBT_RENDER_LIMIT }) + "</p>");
+  const inputsTail = tx.inputs.length > shownInputs ? elidedNote("inputs", tx.inputs.length - shownInputs) + moreButton("inputs", tx.inputs.length - shownInputs) : "";
+  if (only?.kind === "inputs") return { chunk: chunk.join(""), tail: inputsTail };
+  html.push("<div data-psbt-tail='inputs'>" + inputsTail + "</div>");
   html.push(cappedHtml(inscriptionHints(tx), (hint) => "<p class='psbt-warn'><strong>" + hodlT("Inscription envelope") + "</strong> " + hodlT("in input {n} ({bytes} bytes of script/witness). This transaction reveals OP_FALSE OP_IF \"ord\" data.", { n: hint.input, bytes: hint.scriptBytes }) + "</p>", "warnings", (n) => hodlT("…and {n} more warnings (not rendered).", { n })));
   html.push("<p class='muted'>" + hodlT(tx.segwit ? "Version {version} · locktime {locktime} · segwit. Fee unknown — previous output amounts are not in a raw transaction." : "Version {version} · locktime {locktime}. Fee unknown — previous output amounts are not in a raw transaction.", { version: tx.version, locktime: tx.locktime }) + "</p>");
   let nonceHtml = [], verdictHtml = [];
