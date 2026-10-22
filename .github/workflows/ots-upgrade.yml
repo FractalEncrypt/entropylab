@@ -143,18 +143,15 @@ jobs:
             echo "::error::the committed proof covers $COMMITTED, but rock's entropylab.html is $EXPECTED"
             exit 1
           fi
-          # An upgrade only adds attestations. The client is untrusted, so a
-          # proof with fewer Bitcoin block-header attestations than the
-          # committed one, such as a complete proof swapped for a pending one,
-          # is refused instead of replacing the existing timestamp. The count
-          # walks the proof's structure (standard-library Python from rock's
-          # own checkout, no third-party code), so the tag's bytes inside an
-          # op argument or a URI are not counted, and a malformed proof fails
-          # the job.
-          NEW=$(python3 scripts/ots-attestations.py "$PROOF")
-          OLD=$(python3 scripts/ots-attestations.py entropylab.html.ots)
-          if [ "$NEW" -lt "$OLD" ]; then
-            echo "::error::the upgraded proof carries $NEW Bitcoin attestation(s), fewer than the $OLD in the committed proof"
+          # An upgrade may only add attestations. The client is untrusted, so
+          # every Bitcoin attestation of the committed proof (its exact op path
+          # and payload) must still be in the upload: a complete proof swapped
+          # for a pending one, or a real attestation swapped for a fake, is
+          # refused. The check walks the proof's structure (standard-library
+          # Python from rock's own checkout, no third-party code), and a
+          # malformed proof fails the job.
+          if ! python3 scripts/ots-attestations.py --preserves entropylab.html.ots "$PROOF"; then
+            echo "::error::the upgraded proof drops or changes a Bitcoin attestation of the committed proof"
             exit 1
           fi
       - name: Commit the proof

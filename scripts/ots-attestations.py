@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-# Counts the Bitcoin block-header attestations in an OpenTimestamps proof by
-# walking its structure, so attestation tags count only where the format puts
-# an attestation, never inside an op argument or a calendar URI that happens
-# to contain the same eight bytes. Standard library only: ots-upgrade.yml runs
-# it next to the push token on a proof the untrusted client produced. Prints
-# the count; exits 1 on anything that is not a well-formed v1 proof with a
+# Reads the Bitcoin block-header attestations of an OpenTimestamps proof by
+# walking its structure, so an attestation counts only where the format puts
+# one, never inside an op argument or a calendar URI that happens to contain
+# the same bytes. Standard library only: ots-upgrade.yml runs it next to the
+# push token on a proof the untrusted client produced.
+#
+#   python3 scripts/ots-attestations.py PROOF
+#     prints how many Bitcoin attestations PROOF carries.
+#   python3 scripts/ots-attestations.py --preserves COMMITTED UPGRADED
+#     exits 0 only if every Bitcoin attestation of COMMITTED (its exact op
+#     path from the file hash, and its payload) is still in UPGRADED: an
+#     upgrade may add attestations, never drop or swap one. Checking that an
+#     attestation names a real block needs Bitcoin headers, which CI does not
+#     fetch; a fabricated extra branch cannot remove the real ones, and
+#     `ots verify` rejects it.
+#
+# Either mode exits 1 on anything that is not a well-formed v1 proof with a
 # SHA-256 file hash (wrong header, unknown op, truncation, trailing bytes,
-# oversized fields, excessive nesting).
-#   python3 scripts/ots-attestations.py entropylab.html.ots
+# oversized fields, nesting past 256).
 import sys
 
 MAGIC = bytes.fromhex("004f70656e54696d657374616d7073000050726f6f6600bf89e2e884e892940108")
@@ -20,10 +30,12 @@ class Malformed(Exception):
     pass
 
 
-def count(data):
+def bitcoin_attestations(data):
+    """Every Bitcoin attestation as (op path from the file hash, payload)."""
     if len(data) < len(MAGIC) + 32 or not data.startswith(MAGIC):
         raise Malformed("not an OpenTimestamps v1 proof with a SHA-256 file hash")
     pos = len(MAGIC) + 32
+    path, found = [], []
 
     def byte():
         nonlocal pos
@@ -49,38 +61,55 @@ def count(data):
         if length > limit or pos + length > len(data):
             raise Malformed("field out of range")
         pos += length
+        return data[pos - length:pos]
 
     def item(tag, depth):
         if tag == 0x00:
             attestation = bytes(byte() for _ in range(8))
-            varbytes(8192)
-            return 1 if attestation == BITCOIN else 0
+            payload = varbytes(8192)
+            if attestation == BITCOIN:
+                found.append((tuple(path), payload))
+            return
         if tag in BINARY_OPS:
-            varbytes(4096)
-        elif tag not in UNARY_OPS:
+            path.append((tag, varbytes(4096)))
+        elif tag in UNARY_OPS:
+            path.append((tag, b""))
+        else:
             raise Malformed("unknown op 0x%02x" % tag)
-        return timestamp(depth + 1)
+        timestamp(depth + 1)
+        path.pop()
 
     def timestamp(depth):
         if depth > 256:
             raise Malformed("nested too deeply")
-        found = 0
         tag = byte()
         while tag == 0xFF:
-            found += item(byte(), depth)
+            item(byte(), depth)
             tag = byte()
-        return found + item(tag, depth)
+        item(tag, depth)
 
-    found = timestamp(0)
+    timestamp(0)
     if pos != len(data):
         raise Malformed("trailing bytes")
     return found
 
 
+def read(name):
+    with open(name, "rb") as proof:
+        return bitcoin_attestations(proof.read())
+
+
 if __name__ == "__main__":
     try:
-        with open(sys.argv[1], "rb") as proof:
-            print(count(proof.read()))
+        if sys.argv[1] == "--preserves":
+            committed, upgraded = read(sys.argv[2]), read(sys.argv[3])
+            missing = [entry for entry in committed if entry not in upgraded]
+            if missing:
+                print("ots-attestations: the upgraded proof drops or changes %d of the committed proof's %d Bitcoin attestation(s)" % (len(missing), len(committed)), file=sys.stderr)
+                sys.exit(1)
+            print(len(upgraded))
+        else:
+            print(len(read(sys.argv[1])))
     except (Malformed, OSError, IndexError) as error:
         print("ots-attestations: %s" % error, file=sys.stderr)
         sys.exit(1)

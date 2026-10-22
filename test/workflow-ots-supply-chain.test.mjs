@@ -188,16 +188,18 @@ test("the upgrade job binds the committed proof to rock's entropylab.html digest
   assert.match(upgrade, /if \[ "\$EXISTING" != "\$ACTUAL" \]/, "a digest mismatch must be refused before any upgrade");
 });
 
-test("the upgrade push refuses a proof with fewer Bitcoin attestations than the committed one", () => {
+test("the upgrade push refuses a proof that drops or changes a Bitcoin attestation of the committed one", () => {
   // DeepSeek's red-team of #1047 (OTS-2): the untrusted client could hand
   // back a fresh pending proof for the same digest, which passes the header
   // and digest checks and would replace a completed Bitcoin attestation.
   const block = jobBlock(read(".github/workflows/ots-upgrade.yml"), "upgrade-push");
   const all = steps(block);
   const validate = all.find((step) => step.includes("stat -c %s"));
-  assert.match(validate, /NEW=\$\(python3 scripts\/ots-attestations\.py "\$PROOF"\)/, "the uploaded proof's attestations are counted");
-  assert.match(validate, /OLD=\$\(python3 scripts\/ots-attestations\.py entropylab\.html\.ots\)/, "the committed proof's attestations are counted");
-  assert.match(validate, /if \[ "\$NEW" -lt "\$OLD" \]; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "fewer attestations fail the job");
+  assert.match(
+    validate,
+    /if ! python3 scripts\/ots-attestations\.py --preserves entropylab\.html\.ots "\$PROOF"; then\n\s+echo "::error::[^"]*"\n\s+exit 1/,
+    "the committed proof's attestations must all survive in the upload, or the job fails",
+  );
   assert.match(validate, /^ {10}set -euo pipefail$/m, "a malformed proof (the counter exits 1) fails the job");
   assert.ok(all.indexOf(validate) < all.findIndex((step) => step.includes("git commit")), "before the commit");
 });
@@ -210,14 +212,18 @@ test("the attestation counter walks the proof structure", (t) => {
   const script = join(root, "scripts", "ots-attestations.py");
   const python = ["python3", "python"].find((name) => !spawnSync(name, ["--version"]).error);
   if (!python) return t.skip("python is not available");
-  const count = (bytes) => {
+  const run = (...proofs) => {
     const dir = mkdtempSync(join(tmpdir(), "ots-"));
-    const file = join(dir, "p.ots");
-    writeFileSync(file, Buffer.from(bytes));
-    const run = spawnSync(python, [script, file]);
+    const files = proofs.map((bytes, index) => {
+      const file = join(dir, `p${index}.ots`);
+      writeFileSync(file, Buffer.from(bytes));
+      return file;
+    });
+    const result = spawnSync(python, [script, ...(files.length === 2 ? ["--preserves", ...files] : files)]);
     rmSync(dir, { recursive: true, force: true });
-    return run.status === 0 ? Number(String(run.stdout).trim()) : `exit ${run.status}`;
+    return result.status === 0 ? Number(String(result.stdout).trim()) : `exit ${result.status}`;
   };
+  const count = (bytes) => run(bytes);
   const varbytes = (bytes) => [bytes.length, ...bytes];
   const BTC = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
   const PENDING = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
@@ -231,4 +237,43 @@ test("the attestation counter walks the proof structure", (t) => {
   assert.equal(count([...header, ...pending, 0x00]), "exit 1", "trailing bytes are refused");
   assert.equal(count([...header.slice(0, 32), 0x09, ...header.slice(33), ...pending]), "exit 1", "a proof whose file hash is not SHA-256 is refused");
   assert.equal(count([...header, 0x99, ...pending]), "exit 1", "an unknown op is refused");
+});
+
+test("the preserve check passes an upgrade that adds and refuses one that drops or swaps an attestation", (t) => {
+  // DeepSeek's red-team of #1047 (7da47ea): a count cannot tell a real
+  // attestation from a fake, so the guard requires every attestation of the
+  // committed proof (op path and payload) to survive. The same rule on the
+  // repository's own upgraded proof (27362f2): unchanged passes, one height
+  // byte changed (still 3 attestations) fails, rock's pending proof as the
+  // upload fails.
+  const script = join(root, "scripts", "ots-attestations.py");
+  const python = ["python3", "python"].find((name) => !spawnSync(name, ["--version"]).error);
+  if (!python) return t.skip("python is not available");
+  const preserves = (committed, upgraded) => {
+    const dir = mkdtempSync(join(tmpdir(), "ots-"));
+    const [a, b] = [committed, upgraded].map((bytes, index) => {
+      const file = join(dir, `p${index}.ots`);
+      writeFileSync(file, Buffer.from(bytes));
+      return file;
+    });
+    const result = spawnSync(python, [script, "--preserves", a, b]);
+    rmSync(dir, { recursive: true, force: true });
+    return result.status;
+  };
+  const varbytes = (bytes) => [bytes.length, ...bytes];
+  const BTC = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
+  const PENDING = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
+  const header = [0x00, ...Buffer.from("OpenTimestamps"), 0x00, 0x00, ...Buffer.from("Proof"), 0x00, 0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01, 0x08, ...new Array(32).fill(0x11)];
+  const attest = (height) => [0x00, ...BTC, ...varbytes([height])];
+  const pending = [0x00, ...PENDING, ...varbytes([...Buffer.from("https://a.pool.opentimestamps.org")])];
+  // Two attestations on two branches: append 0xaa -> sha256 -> att(1); sha256 -> att(2).
+  const two = [...header, 0xff, 0xf0, ...varbytes([0xaa]), 0x08, ...attest(1), 0x08, ...attest(2)];
+  const three = [...header, 0xff, 0xf0, ...varbytes([0xaa]), 0x08, ...attest(1), 0xff, 0x08, ...attest(2), 0xf1, ...varbytes([0xbb]), 0x08, ...attest(3)];
+  assert.equal(preserves(two, two), 0, "unchanged");
+  assert.equal(preserves(two, three), 0, "an added attestation");
+  assert.equal(preserves([...header, ...pending], two), 0, "a pending proof upgraded");
+  assert.equal(preserves(two, [...header, ...pending]), 1, "a completed proof swapped for a pending one");
+  assert.equal(preserves(two, [...header, 0xff, 0xf0, ...varbytes([0xaa]), 0x08, ...attest(1), 0x08, ...attest(9)]), 1, "one attestation swapped, same count");
+  assert.equal(preserves(two, [...header, 0xff, 0xf0, ...varbytes([0xab]), 0x08, ...attest(1), 0x08, ...attest(2)]), 1, "an attestation moved to another op path");
+  assert.equal(preserves(two, [...header, 0x99]), 1, "a malformed upload");
 });
