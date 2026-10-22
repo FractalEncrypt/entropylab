@@ -143,6 +143,18 @@ jobs:
             echo "::error::the committed proof covers $COMMITTED, but rock's entropylab.html is $EXPECTED"
             exit 1
           fi
+          # An upgrade only adds attestations. The client is untrusted, so a
+          # proof with fewer Bitcoin block-header attestations (tag
+          # 0588960d73d71901, counted byte-aligned) than the committed one,
+          # such as a complete proof swapped for a pending one, is refused
+          # instead of replacing the existing timestamp.
+          attestations() { od -An -v -tx1 "$1" | tr -s ' \n' ' ' | { grep -o ' 05 88 96 0d 73 d7 19 01' || true; } | wc -l; }
+          NEW=$(attestations "$PROOF")
+          OLD=$(attestations entropylab.html.ots)
+          if [ "$NEW" -lt "$OLD" ]; then
+            echo "::error::the upgraded proof carries $NEW Bitcoin attestation(s), fewer than the $OLD in the committed proof"
+            exit 1
+          fi
       - name: Commit the proof
         id: proof
         run: |

@@ -185,3 +185,17 @@ test("the upgrade job binds the committed proof to rock's entropylab.html digest
   assert.match(upgrade, /"\$OTS" info entropylab\.html\.ots/, "the committed proof's digest must be read");
   assert.match(upgrade, /if \[ "\$EXISTING" != "\$ACTUAL" \]/, "a digest mismatch must be refused before any upgrade");
 });
+
+test("the upgrade push refuses a proof with fewer Bitcoin attestations than the committed one", () => {
+  // DeepSeek's red-team of #1047 (OTS-2): the untrusted client could hand
+  // back a fresh pending proof for the same digest, which passes the header
+  // and digest checks and would replace a completed Bitcoin attestation.
+  const block = jobBlock(read(".github/workflows/ots-upgrade.yml"), "upgrade-push");
+  const all = steps(block);
+  const validate = all.find((step) => step.includes("stat -c %s"));
+  assert.match(validate, /grep -o ' 05 88 96 0d 73 d7 19 01'/, "the BitcoinBlockHeaderAttestation tag is counted byte-aligned");
+  assert.match(validate, /NEW=\$\(attestations "\$PROOF"\)/, "the uploaded proof's attestations are counted");
+  assert.match(validate, /OLD=\$\(attestations entropylab\.html\.ots\)/, "the committed proof's attestations are counted");
+  assert.match(validate, /if \[ "\$NEW" -lt "\$OLD" \]; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "fewer attestations fail the job");
+  assert.ok(all.indexOf(validate) < all.findIndex((step) => step.includes("git commit")), "before the commit");
+});
