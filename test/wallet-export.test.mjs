@@ -642,6 +642,31 @@ test("msig cache parents match independent CKD of each co-signer", () => {
   assert.deepEqual(got, [...expected].sort());
 });
 
+test("a repeated co-signer key reads its own tail in each slot", () => {
+  // Deep sweep of cb18b09 (GLM 5.3, Kimi K3, Muse Spark, Nemotron 3 Ultra,
+  // DeepSeek V4.1): the tail of a repeated key was read from its first copy,
+  // so "xpubA/0/*,xpubA/5/0/*" passed as two "/0/*" slots and the second
+  // slot cached xpubA/0 as its parent instead of xpubA/5/0.
+  const { walletDatSupported, buildWalletRecords } = loadModule();
+  const body = (slots) => `wsh(sortedmulti(2,${slots.map(([account, tail]) => msigKey(account) + tail).join(",")}))`;
+  const desc = (slots) => `${body(slots)}#${descriptorChecksum(body(slots))}`;
+  const wallet = (receive, change) => ({ ...MSIG_WALLET, receiveDescriptor: desc(receive), changeDescriptor: desc(change) });
+  // The two-step copy is refused in either order, as it is on its own.
+  assert.equal(walletDatSupported(wallet([[0, "/0/*"], [0, "/5/0/*"], [2, "/0/*"]], [[0, "/1/*"], [0, "/5/1/*"], [2, "/1/*"]])), false);
+  assert.equal(walletDatSupported(wallet([[0, "/5/0/*"], [0, "/0/*"], [2, "/0/*"]], [[0, "/5/1/*"], [0, "/1/*"], [2, "/1/*"]])), false);
+  // Two one-step copies on different branches: each slot caches its own parent.
+  const repeated = wallet([[0, "/0/*"], [0, "/2/*"], [2, "/0/*"]], [[0, "/1/*"], [0, "/3/*"], [2, "/1/*"]]);
+  assert.equal(walletDatSupported(repeated), true);
+  const cachePrefix = "15" + "77616c6c657464657363726970746f726361636865";
+  const got = buildWalletRecords(repeated, false, msigDeps, 0)
+    .map(([key, value]) => [bytesToHex(key), bytesToHex(value)])
+    .filter(([key]) => key.startsWith(cachePrefix))
+    .map(([key, value]) => `${cacheKeyIndex(key)}:${value}`);
+  const parent = (account, branch) => "4a" + bytesToHex(deriveBranchBody(msigNode(account).publicExtendedKey, branch));
+  const expected = [[0, 0, 0], [1, 0, 2], [2, 2, 0], [0, 0, 1], [1, 0, 3], [2, 2, 1]].map(([slot, account, branch]) => `${slot}:${parent(account, branch)}`);
+  assert.deepEqual(got.sort(), expected.sort());
+});
+
 const cacheKeyIndex = (keyHex) => {
   const bytes = hexToBytes(keyHex);
   const offset = bytes.length - 4;
