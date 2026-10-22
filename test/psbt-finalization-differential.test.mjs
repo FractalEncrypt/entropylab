@@ -32,13 +32,12 @@
 // decoded output values, and doc.fee.sats — so two inputs with swapped
 // amounts, or a fee read from the wrong field, fail the run.
 //
-// If @scure/btc-signer refuses to build or finalize a shape — a documented
-// limitation of the oracle — the refusal is recognized by error message and
-// only that shape's kind is skipped, and named in the run's summary;
-// anything else buildCase throws (a bug in this generator, or a @scure
-// upgrade that rewords its errors) fails the run. The run requires both
-// taproot kinds, every p2tr script-path case, and at most one kind's worth
-// of skips, so a skip can never hollow the suite out. The p2tr script path
+// Every shape must run: @scure/btc-signer builds and finalizes all six
+// today, so any refusal fails the run and names the shape. (Round 4: a
+// skip allowance let a generator bug or a @scure upgrade that broke one
+// shape void that kind's coverage while the suite stayed green.) A refusal
+// recognized by message is reported as the oracle refusing that shape;
+// anything else buildCase throws fails as itself. The p2tr script path
 // is built with @scure's own p2tr payment (internal key + a two-leaf tree
 // in its TaprootScriptTree shape: { script, leafVersion } leaves, 0xc0
 // being BIP341's base tapscript leaf version), so the tweaked output key,
@@ -444,7 +443,7 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     ran += 1;
   }
   assert.ok(ran >= CASES / 2, `only ${ran} of ${CASES} cases ran; too many shapes were skipped: ${[...unsupported].join(", ") || "none"}`);
-  assert.ok(unsupported.size <= 1 && skipped <= CASES / KINDS.length, `@scure/btc-signer refused more than one shape (${skipped} cases skipped): ${[...unsupported].join(", ")}`);
+  assert.equal(unsupported.size, 0, `@scure/btc-signer refused a shape, so its coverage would be skipped (${skipped} cases): ${[...unsupported].join(", ")}`);
   for (const kind of ["p2tr key path", "p2tr script path"]) {
     assert.ok(!unsupported.has(kind), `@scure/btc-signer refused the taproot shape "${kind}"; its BIP341/BIP371 coverage would be skipped`);
   }
