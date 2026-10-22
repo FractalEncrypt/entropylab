@@ -228,7 +228,13 @@ const buildCase = (index) => {
     outAmounts.push(out);
     remaining -= out;
   }
-  for (let k = 0; k < outputs; k++) tx.addOutput({ script: p2wpkh(secp256k1.getPublicKey(randomKey(), true)), amount: outAmounts[k] });
+  // Kept per output so the check below can pin each decoded output, not only
+  // their sum (same draws, same order: the fuzz cases are unchanged).
+  const outScripts = [];
+  for (let k = 0; k < outputs; k++) {
+    outScripts.push(p2wpkh(secp256k1.getPublicKey(randomKey(), true)));
+    tx.addOutput({ script: outScripts[k], amount: outAmounts[k] });
+  }
   const sumOut = outAmounts.reduce((a, b) => a + b, 0n);
 
   // The signature payload for input j. `degraded` signs only one of the two
@@ -290,7 +296,7 @@ const buildCase = (index) => {
   return {
     label: `case ${index}: ${kind}, ${inputs} input${inputs === 1 ? "" : "s"}, ${outputs} outputs`,
     kind, inputs, finalizedPsbt: fin.toPSBT(), raw, txid: txidOf(raw),
-    fee: sumIn - sumOut, sumIn, sumOut, amounts, incompletePsbt, dropIdx,
+    fee: sumIn - sumOut, sumIn, sumOut, amounts, outAmounts, outScripts, incompletePsbt, dropIdx,
   };
 };
 
@@ -363,14 +369,21 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
 
     // (3) Fee = sum(inputs) − sum(outputs); the generator's amounts are the
     // independent source. Each input's amount is read from that input's own
-    // UTXO record, so swapped amounts fail; then the document's total input,
-    // its decoded output values and its fee must all match exactly.
+    // UTXO record, so swapped amounts fail; each decoded output is pinned to
+    // the generator's value and script by index, so swapped or misdecoded
+    // outputs fail even when the sum still matches; then the document's total
+    // input, its output sum and its fee must all match exactly.
     assert.ok(c.fee > 0n, `${where}: generated a non-paying transaction`);
     assert.equal(doc.inputs.length, c.inputs, `${where}: the inspect document has ${doc.inputs.length} input maps`);
     for (let j = 0; j < c.inputs; j++) {
       assert.equal(docInputAmount(doc, j), c.amounts[j], `${where}: the app's decoded amount for input ${j} is not the generator's ${c.amounts[j]} sats`);
     }
     assert.equal(BigInt(doc.totalIn), c.sumIn, `${where}: the app's totalIn is not sum(inputs)`);
+    assert.equal(doc.tx.outputs.length, c.outAmounts.length, `${where}: the inspect document has ${doc.tx.outputs.length} outputs`);
+    for (let k = 0; k < c.outAmounts.length; k++) {
+      assert.equal(BigInt(doc.tx.outputs[k].value), c.outAmounts[k], `${where}: the app's decoded value for output ${k} is not the generator's ${c.outAmounts[k]} sats`);
+      assert.equal(doc.tx.outputs[k].scriptPubKey, hex(c.outScripts[k]), `${where}: the app's decoded script for output ${k} is not the generator's`);
+    }
     const docSumOut = doc.tx.outputs.reduce((total, output) => total + BigInt(output.value), 0n);
     assert.equal(docSumOut, c.sumOut, `${where}: the app's decoded outputs do not sum to sum(outputs)`);
     assert.equal(doc.fee?.known, true, `${where}: the app reports the fee as unknown`);
