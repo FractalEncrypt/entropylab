@@ -12785,6 +12785,14 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // budget; the ownership warning below still analyses every output.
   const shownOutputs = budget.take(Math.min(tx.outputs.length, limits.outputs));
   const outputsFrom = !only ? 0 : only.kind === "outputs" ? Math.min(only.from, shownOutputs) : shownOutputs;
+  // A "Show more" block renders only the outputs it adds, but they must read
+  // exactly as in a full render of the grown window, which spends the
+  // per-render derivation budget (audit M3) on the outputs above them first:
+  // those are rendered again and discarded until the budget runs out (GLM
+  // 5.3's review of #1031). A spent budget stays spent, so the loop can stop.
+  for (let index = 0; only?.kind === "outputs" && index < outputsFrom && derivationBudget.remaining > 0; index++) {
+    hodlRenderOutputHtml(tx.outputs[index], index, network, ownershipMap, psbt.outputs[index], derivationBudget);
+  }
   for (let index = outputsFrom; index < shownOutputs; index++) {
     (only ? chunk : html).push(hodlRenderOutputHtml(tx.outputs[index], index, network, ownershipMap, psbt.outputs[index], derivationBudget));
   }

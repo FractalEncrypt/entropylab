@@ -587,7 +587,7 @@ const extractAppFunction = (name) => {
 // every input a 2,000-sat claim and every output 1,000 sats, so the fee over
 // ALL elements is arithmetic the test owns: 1,200 in / 700 out → 1,700,000
 // sats (0.017 BTC); 3 in / 2 out → 4,000 sats.
-const hodlRenderPsbtForTest = () => {
+const hodlRenderPsbtForTest = (overrides = {}) => {
   const captured = {};
   const stubs = {
     PSBT_RENDER_LIMIT: vizModule.PSBT_RENDER_LIMIT,
@@ -645,6 +645,7 @@ const hodlRenderPsbtForTest = () => {
       return "";
     },
   };
+  Object.assign(stubs, overrides);
   const names = Object.keys(stubs);
   const render = new Function(...names, `${extractAppFunction("hodlRenderPsbt")}; return hodlRenderPsbt;`)(...names.map((name) => stubs[name]));
   return { render, captured };
@@ -1534,4 +1535,26 @@ test("the note under a capped list says the hidden inputs and outputs are still 
   assert.deepEqual(moreButtons(step), [["inputs", "Show 1 more input"]]);
   const many = render(inspectorDoc(2003, 1), new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits: INSPECTOR });
   assert.ok(many.includes("3 more inputs not shown, still included in this transaction."));
+});
+
+test("an appended output block spends the derivation budget as a full render does (GLM 5.3's review of #1031)", () => {
+  // Each output's declared path costs 3 of the render's 4,096 derivation
+  // steps, so a full render runs out at output 1,365 and every later output
+  // reads as over budget. The block for outputs 2,000+ must read the same,
+  // not start from a fresh budget.
+  const { render } = hodlRenderPsbtForTest({
+    hodlRenderOutputHtml: (output, index, network, map, entries, derivationBudget) => {
+      const derived = derivationBudget.remaining >= 3;
+      derivationBudget.remaining = derived ? derivationBudget.remaining - 3 : 0;
+      return `<p class='psbt-kv'><strong>Output ${index}</strong> ${derived ? "derived" : "over budget"}</p>`;
+    },
+  });
+  const doc = inspectorDoc(2, 5000);
+  const limits = { ...INSPECTOR, outputs: 4000 };
+  const { page, part } = appended(render, doc, "outputs", 2000, limits);
+  assert.ok(part.chunk.includes("<strong>Output 2000</strong> over budget"), "the block reads over budget, as in the full render");
+  assert.ok(!part.chunk.includes("derived"));
+  const full = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet", limits });
+  assert.ok(full.includes("<strong>Output 1364</strong> derived") && full.includes("<strong>Output 1365</strong> over budget"));
+  assert.equal(page, full);
 });
