@@ -16,8 +16,8 @@
 #     `ots verify` rejects it.
 #
 # Either mode exits 1 on anything that is not a well-formed v1 proof with a
-# SHA-256 file hash (wrong header, unknown op, truncation, trailing bytes,
-# oversized fields, nesting past 256).
+# SHA-256 file hash (wrong header, unknown op, the same op twice at one node,
+# truncation, trailing bytes, oversized fields, nesting past 256).
 import sys
 
 MAGIC = bytes.fromhex("004f70656e54696d657374616d7073000050726f6f6600bf89e2e884e892940108")
@@ -63,7 +63,7 @@ def bitcoin_attestations(data):
         pos += length
         return data[pos - length:pos]
 
-    def item(tag, depth):
+    def item(tag, depth, seen):
         if tag == 0x00:
             attestation = bytes(byte() for _ in range(8))
             payload = varbytes(8192)
@@ -71,22 +71,29 @@ def bitcoin_attestations(data):
                 found.append((tuple(path), payload))
             return
         if tag in BINARY_OPS:
-            path.append((tag, varbytes(4096)))
+            op = (tag, varbytes(4096))
         elif tag in UNARY_OPS:
-            path.append((tag, b""))
+            op = (tag, b"")
         else:
             raise Malformed("unknown op 0x%02x" % tag)
+        # The OTS client keeps a node's ops in a map, so it never writes the
+        # same op twice at one node; such a proof is refused here too.
+        if op in seen:
+            raise Malformed("the same op twice at one node")
+        seen.add(op)
+        path.append(op)
         timestamp(depth + 1)
         path.pop()
 
     def timestamp(depth):
         if depth > 256:
             raise Malformed("nested too deeply")
+        seen = set()
         tag = byte()
         while tag == 0xFF:
-            item(byte(), depth)
+            item(byte(), depth, seen)
             tag = byte()
-        item(tag, depth)
+        item(tag, depth, seen)
 
     timestamp(0)
     if pos != len(data):

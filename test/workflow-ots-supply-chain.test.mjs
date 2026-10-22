@@ -277,3 +277,38 @@ test("the preserve check passes an upgrade that adds and refuses one that drops 
   assert.equal(preserves(two, [...header, 0xff, 0xf0, ...varbytes([0xab]), 0x08, ...attest(1), 0x08, ...attest(2)]), 1, "an attestation moved to another op path");
   assert.equal(preserves(two, [...header, 0x99]), 1, "a malformed upload");
 });
+
+test("timestamp-push walks the proof and never replaces a proof on rock that already covers this HTML", () => {
+  // Reviews of #1047 (a9ff8d7): Muse Spark and GLM 5.3 (no structural check
+  // after byte 65), Nemotron 3 Ultra (a delayed push could replace a proof
+  // that ots-upgrade had completed since).
+  const all = steps(jobBlock(read(".github/workflows/ci-cd.yml"), "timestamp-push"));
+  const validate = all.find((step) => step.includes("stat -c %s"));
+  assert.match(validate, /if ! python3 scripts\/ots-attestations\.py "\$PROOF" > \/dev\/null; then\n\s+echo "::error::[^"]*"\n\s+exit 1/, "the stamped proof is walked");
+  const commit = all.find((step) => step.includes("git commit"));
+  assert.match(commit, /^ {8}env:\n {10}EXPECTED: \$\{\{ needs\.build\.outputs\.sha256 \}\}$/m, "the commit step knows the tested digest");
+  const keep = commit.indexOf('= "$EXPECTED" ]; then'), copy = commit.indexOf('cp "$RUNNER_TEMP/entropylab.html.ots"');
+  assert.ok(keep > 0 && keep < copy, "a proof on rock covering the tested digest is kept, checked before the copy");
+  assert.match(commit.slice(keep, copy), /exit 0\n/, "and the step ends without committing (no committed=true, so no push)");
+});
+
+test("the attestation walker refuses the same op twice at one node", (t) => {
+  const script = join(root, "scripts", "ots-attestations.py");
+  const python = ["python3", "python"].find((name) => !spawnSync(name, ["--version"]).error);
+  if (!python) return t.skip("python is not available");
+  const header = [0x00, ...Buffer.from("OpenTimestamps"), 0x00, 0x00, ...Buffer.from("Proof"), 0x00, 0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01, 0x08, ...new Array(32).fill(0x11)];
+  const BTC = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
+  const status = (bytes) => {
+    const dir = mkdtempSync(join(tmpdir(), "ots-"));
+    const file = join(dir, "p.ots");
+    writeFileSync(file, Buffer.from(bytes));
+    const result = spawnSync(python, [script, file]);
+    rmSync(dir, { recursive: true, force: true });
+    return result.status;
+  };
+  const att = (height) => [0x00, ...BTC, 1, height];
+  assert.equal(status([...header, 0xff, 0x08, ...att(1), 0x08, ...att(2)]), 1, "sha256 twice at one node");
+  assert.equal(status([...header, 0xff, 0xf0, 1, 0xaa, ...att(1), 0xf0, 1, 0xaa, ...att(2)]), 1, "the same append twice at one node");
+  assert.equal(status([...header, 0xff, 0xf0, 1, 0xaa, ...att(1), 0xf0, 1, 0xbb, ...att(2)]), 0, "two different appends at one node");
+  assert.equal(status([...header, 0x08, 0x08, ...att(1)]), 0, "sha256 under sha256 (different nodes)");
+});

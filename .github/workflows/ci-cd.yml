@@ -790,10 +790,27 @@ jobs:
             echo "::error::rock's entropylab.html is $ON_ROCK, not the $EXPECTED this run stamped"
             exit 1
           fi
+          # The rest of the proof must be well formed too, walked the way the
+          # upgrade push walks it (standard-library Python from rock's own
+          # checkout, no third-party code).
+          if ! python3 scripts/ots-attestations.py "$PROOF" > /dev/null; then
+            echo "::error::the stamped proof is not a well-formed OpenTimestamps proof"
+            exit 1
+          fi
       - name: Commit the proof
         id: proof
+        env:
+          EXPECTED: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
+          # A proof on rock that already covers this HTML stays. Another run
+          # (a re-run, or one whose push waited for approval) may have pushed
+          # it and ots-upgrade completed it since, and a fresh pending proof
+          # must not replace a completed one.
+          if [ -f entropylab.html.ots ] && [ "$(head -c 65 entropylab.html.ots | tail -c 32 | od -An -v -tx1 | tr -d ' \n')" = "$EXPECTED" ]; then
+            echo "Rock already has a proof for $EXPECTED; not replacing it."
+            exit 0
+          fi
           cp "$RUNNER_TEMP/entropylab.html.ots" entropylab.html.ots
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
