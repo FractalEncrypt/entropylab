@@ -53,7 +53,7 @@ import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFr
 // The Lightning node key tool (its own workspace tab): aezeed deciphering
 // and the LND/LDK node identity derivations live in lightning.js/aezeed.js.
 import { hodlInitLn, hodlLnWipeMem } from "./lightning.js";
-import { hodlTapKeySigs, hodlTapScriptSigs, hodlTapSighashProblems } from "./psbt-schnorr.js";
+import { hodlCompareSchnorrNonces, hodlParseSchnorr, hodlTapKeySigs, hodlTapScriptSigs, hodlTapSighashProblems } from "./psbt-schnorr.js";
 import {
   buildImportDescriptorsJson,
   canonicalizeWatchDescriptor,
@@ -10357,6 +10357,29 @@ function hodlLooksSignature(item) {
   // DER sequence plus the appended sighash byte: 9 to 73 bytes.
   return item.length >= 9 && item.length <= 73 && item[0] === 48;
 }
+// A finalized P2TR key-path input carries no 0x13 record: its Schnorr
+// signature is the final scriptWitness stack — exactly one element, or two
+// with an annex (starting with 0x50) second, which the key-path message does
+// not commit to. The record's key is the previous output's P2TR output key
+// Q, exactly as for a 0x13 record. Any other finalized Taproot witness
+// (script path, odd stack shapes, an unparseable signature) is not a
+// key-path spend and stays uninspected.
+function hodlFinalTapKeySig(entries, witnessUtxo) {
+  if (!witnessUtxo || !isP2tr(witnessUtxo.script)) return null;
+  if (hodlTapKeySigs(entries, hodlFind).length) return null;
+  let finals = hodlFind(entries, 8);
+  if (finals.length !== 1 || finals[0].keydata.length) return null;
+  let stack;
+  try {
+    stack = hodlWitnessStackItems(finals[0].val);
+  } catch {
+    return null;
+  }
+  let sig = stack.length === 1 ? stack[0] : stack.length === 2 && stack[1].length && stack[1][0] === 0x50 ? stack[0] : null;
+  let parsed = sig && hodlParseSchnorr(sig);
+  if (!parsed) return null;
+  return { pubkey: witnessUtxo.script.slice(2), r: parsed.r, s: parsed.s, source: "tap-key" };
+}
 function hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks) {
   let items = [], candidates = [], malformed = false;
   for (let entry of hodlFind(entries, 7)) {
@@ -12618,9 +12641,10 @@ function hodlPsbtAnalysisSummary(checks) {
   }).join("");
   return "<section class='psbt-analysis-summary' aria-label='" + hodlTAttr("PSBT security analysis status") + "'><p class='label psbt-section-label'>" + hodlT("PSBT security analysis") + "</p><p class='" + overallClass + "'><strong>" + overall + "</strong></p><ul>" + rows + "</ul><p class='edge-note is-private'>" + hodlT("Completed means only that the named check ran on the information available here. It does not prove that the PSBT claims are true or that the transaction is safe to sign.") + "</p></section>";
 }
-function hodlPsbtNonceCheck(reused, possible, nonceIncomplete) {
+function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = []) {
   let label = hodlTText("Nonce analysis");
   if (reused.length) return { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
+  if (schnorrReused.length) return { label, state: "problem", detail: hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") };
   if (possible.length) return { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
   if (nonceIncomplete) return { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
   return { label, state: "complete", detail: hodlTText("All ECDSA signatures in this PSBT had comparable nonce values; no repeated r was found for the same key within this file.") };
@@ -12645,6 +12669,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     conflictedInputs = [],
     html = [],
     rValues = [],
+    schnorrRecords = [],
     rows = [],
     tapSignatureCount = 0,
     ecdsaIndex = 0,
@@ -12732,10 +12757,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // Finalized signatures moved into the final script fields must not
       // escape repeated-nonce analysis (issue #87).
       let finalMaterial = hodlFinalSigs(entries, witnessUtxo, tx, index, signatureChecks);
+      // A finalized P2TR key-path input carries its Schnorr signature in the
+      // final witness instead of a 0x13 field; it must not escape the BIP340
+      // nonce comparison either.
+      let finalTapKey = hodlFinalTapKeySig(entries, witnessUtxo);
+      if (finalTapKey) schnorrRecords.push(Object.assign({ input: index }, finalTapKey));
       // A finalized input whose fields yield no analyzable ECDSA signature
       // (for example a Taproot-only witness) never yields a clean or
       // no-signatures verdict.
-      if (!signatures.length && !finalMaterial.signatures.length && !finalMaterial.uninspected) finalMaterial.uninspected = 1;
+      if (!signatures.length && !finalMaterial.signatures.length && !finalMaterial.uninspected && !finalTapKey) finalMaterial.uninspected = 1;
       signatures = signatures.concat(finalMaterial.signatures);
       uninspected += finalMaterial.uninspected + (finalMaterial.malformed ? 1 : 0);
     }
@@ -12787,6 +12817,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         policyProblems++;
         html.push("<p class='psbt-bad'><strong>" + hodlT("Policy problem:") + "</strong> " + hodlT("input {n}: {problem} Do not sign until its policy is known.", { n: index, problem }) + "</p>");
       });
+    });
+    // BIP340 nonce inspection: one record per Taproot signature. A
+    // script-path record's key is the x-only key in its keydata; a key-path
+    // 0x13 record carries no key, so the key is the previous output's P2TR
+    // output key Q — without a P2TR witness UTXO the key is missing and the
+    // record cannot be compared.
+    tapSignatures.forEach((tapSig) => {
+      let schnorrKey = tapSig.source === "tap-script" ? tapSig.pubkey : witnessUtxo && isP2tr(witnessUtxo.script) ? witnessUtxo.script.slice(2) : new Uint8Array();
+      schnorrRecords.push({ input: index, source: tapSig.source, pubkey: schnorrKey, r: tapSig.r, s: tapSig.s, leafHash: tapSig.leafHash });
     });
     if (tapSignatures.length || (finalized && !signatures.length)) policyIncomplete++;
     signatures.forEach(signature => {
@@ -12945,6 +12984,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     possible,
     crossKey
   } = hodlCompareNonces(rValues);
+  // BIP340 reuse is a key leak whenever one R value appears under one x-only
+  // key: BIP341's signature message commits to the input index, the spend
+  // path (ext_flag) and the leaf hash, so two such signatures always sign
+  // different messages. One signature copied into two fields (same s) is
+  // not reuse.
+  let {
+    reused: schnorrReused,
+    incomplete: schnorrIncomplete
+  } = hodlCompareSchnorrNonces(schnorrRecords, hodlEq);
   if (reused.length) nonceHtml.push("<p class='psbt-bad'><strong>" + hodlT("Reused nonce detected for the same public key.") + "</strong> " + hodlT("The same r value appears on different message digests. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>");
   else if (possible.length) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT("Possible repeated nonce for the same public key.") + "</strong> " + hodlT("The message digests could not both be reconstructed, so verify these signatures independently before treating this as a key leak.") + "</p>");
   if (crossKey.length) nonceHtml.push("<p class='psbt-bad'><strong>" + hodlT("Same r value claimed under different public keys.") + "</strong> " + hodlT("{count} pair(s) share an r value but name different keys — a mislabeled signature field can hide real nonce reuse this way. Verify every signature against its input's key independently before signing or broadcasting.", { count: crossKey.length }) + "</p>");
@@ -12954,12 +13002,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   else if (rValues.length === 1) nonceHtml.push("<p class='muted'>" + hodlT("Only one ECDSA signature with a readable r is present. Nonce reuse cannot be judged from this file alone.") + "</p>");
   else nonceHtml.push("<p class='muted'>" + hodlT("No ECDSA signatures with a readable r value are present, so there is no nonce to compare yet.") + "</p>");
+  if (schnorrReused.length) nonceHtml.push("<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>");
   if (rValues.length) nonceHtml.push("<p class='psbt-kv'>" + hodlT("r values:") + "<br>" + rValues.map(value => hodlEscapeHtml(value.hex) + " " + hodlT("(input {n})", { n: value.input })).join("<br>") + "</p>");
   rows.forEach(row => nonceHtml.push("<p class='psbt-kv'><strong>" + hodlT("Input {n}", { n: row.input }) + "</strong><br>" + hodlPublicInlineHtml(row.pubkey, { label: hodlTText("Public key"), preview: row.pubkey.slice(0, 18) + "…", className: "psbt-address" }) + "<br><span class='" + row.className + "'>" + hodlEscapeHtml(row.message) + "</span></p>"));
-  if (tapSignatureCount) nonceHtml.push("<p class='edge-note is-muted'>" + hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above; their BIP340 nonces are not analyzed in this version.", { count: tapSignatureCount }) + "</p>");
+  if (schnorrRecords.length && !schnorrReused.length) nonceHtml.push("<p class='edge-note is-muted'>" + (schnorrIncomplete
+    ? hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above. Some could not be checked for a repeated nonce, because a signature was unreadable or its key is not in this file. This is not a clean result.", { count: schnorrRecords.length })
+    : hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above. No repeated BIP340 nonces were found among them.", { count: schnorrRecords.length })) + "</p>");
   nonceHtml.push("<p class='field-note'>" + hodlT("RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Jade anti-exfil is secp256k1-zkp sign-to-contract and needs the USB host nonce plus signer opening; QR / sign_psbt Jade does not run it yet. BitBox anti-klepto is a different construction. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.") + "</p>");
-  let nonceIncomplete = uninspected || tapSignatureCount || unsupportedNonceChecks || crossKey.length || rValues.length < 2;
-  let nonceVerdict = reused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
+  let nonceIncomplete = uninspected || schnorrIncomplete || unsupportedNonceChecks || crossKey.length || rValues.length + (schnorrRecords.length - schnorrIncomplete) < 2;
+  let nonceVerdict = reused.length || schnorrReused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
   if (view !== "inspect" && options?.record !== false) hodlPsbtRecordNonceInspection("psbt", rValues, nonceSourceTag, nonceVerdict, nonceCheckedAt);
   let checks = [
     {
@@ -12987,7 +13038,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         ? hodlTText("Compared with the loaded session key only within accounts 0–2, 50 receive and 50 change addresses, and four supported script types; outputs outside that range remain unclassified.")
         : hodlTText("No session key was loaded, so output ownership and change derivation were not checked."),
     },
-    hodlPsbtNonceCheck(reused, possible, nonceIncomplete),
+    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused),
     {
       label: hodlTText("BIP-174 / consensus cross-check"),
       state: referenceVerdict.state,

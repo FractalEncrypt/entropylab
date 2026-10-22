@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { loadAppFunctions } from "./app-slice-harness.mjs";
 
 const pubkey = Uint8Array.from(Buffer.from("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", "hex"));
@@ -158,4 +159,144 @@ test("every line the inspectors write goes through the translator", async () => 
       assert.deepEqual(english(pseudo.hodlRenderRawTx(tx, undefined, undefined, view)), [], `transaction ${view} view, r values ${nonces}`);
     }
   }
+});
+
+// --- BIP340 (Taproot/Schnorr) nonce reuse ----------------------------------
+// Genuine BIP340 signatures built with @noble/curves. The nonce is fixed to a
+// chosen k so two different messages are signed with the same R — the key
+// leak the inspector must catch (s1 - s2 = (e1 - e2)*d reveals the key).
+const curveN = secp256k1.Point.CURVE().n;
+const bytesToNum = (bytes) => BigInt("0x" + Buffer.from(bytes).toString("hex"));
+const numToBytes = (value) => Uint8Array.from(Buffer.from(value.toString(16).padStart(64, "0"), "hex"));
+const signWithNonce = (message, secret, k) => {
+  // BIP340 with a fixed nonce: R = k*G, e is the tagged challenge hash,
+  // s = k + e*d mod n. The key and the nonce are negated when P or R has an
+  // odd y; trying both parities and keeping the signature that verifies
+  // avoids depending on point decoding.
+  const px = schnorr.getPublicKey(numToBytes(secret));
+  const rx = schnorr.getPublicKey(numToBytes(k));
+  const e = bytesToNum(schnorr.utils.taggedHash("BIP0340/challenge", rx, px, message)) % curveN;
+  for (const d of [secret, curveN - secret]) {
+    for (const kEven of [k, curveN - k]) {
+      const sig = Uint8Array.from([...rx, ...numToBytes((kEven + e * d) % curveN)]);
+      if (schnorr.verify(sig, message, px)) return sig;
+    }
+  }
+  throw new Error("no parity combination produced a valid signature");
+};
+const tapSecret = bytesToNum(new Uint8Array(32).fill(0x42));
+const tapKey = schnorr.getPublicKey(numToBytes(tapSecret)); // x-only output key Q
+const tapMsgA = new Uint8Array(32).fill(0x01);
+const tapMsgB = new Uint8Array(32).fill(0x02);
+const tapSigA = signWithNonce(tapMsgA, tapSecret, bytesToNum(new Uint8Array(32).fill(0xaa)));
+const tapSigB = signWithNonce(tapMsgB, tapSecret, bytesToNum(new Uint8Array(32).fill(0xaa))); // same k as A: same R
+const tapSigC = signWithNonce(tapMsgA, tapSecret, bytesToNum(new Uint8Array(32).fill(0xbb))); // different k: different R
+const p2trScript = Uint8Array.from([0x51, 0x20, ...tapKey]); // OP_1 PUSH32 <Q>
+const witnessUtxoEntry = () => {
+  // PSBT_IN_WITNESS_UTXO: the previous output, amount then script (BIP-174).
+  const val = new Uint8Array(8 + 1 + p2trScript.length);
+  new DataView(val.buffer).setBigUint64(0, 1000n, true);
+  val[8] = p2trScript.length;
+  val.set(p2trScript, 9);
+  return { type: 1, keydata: new Uint8Array(), val };
+};
+const tapKeySigEntry = (val) => ({ type: 19, keydata: new Uint8Array(), val });
+const witnessStack = (items) => Uint8Array.from([items.length, ...items.flatMap((item) => [item.length, ...item])]);
+const tapPsbt = (inputEntries) => ({
+  tx: {
+    version: 2, locktime: 0, segwit: false,
+    inputs: inputEntries.map((_, vout) => ({ txid: new Uint8Array(32).fill(0x11), vout, sequence: 0xffffffff, scriptSig: new Uint8Array() })),
+    outputs: [{ amount: 1000n, script: Uint8Array.of(0x51) }],
+  },
+  inputs: inputEntries,
+  outputs: [[]],
+});
+
+test("two key-path signatures sharing R under one key are a key leak: warning, summary problem, reuse verdict", () => {
+  // The fixtures are genuine: both signatures verify, and the forced shared
+  // nonce makes them share R while signing different messages.
+  assert.ok(schnorr.verify(tapSigA, tapMsgA, tapKey) && schnorr.verify(tapSigB, tapMsgB, tapKey), "fixtures are genuine BIP340 signatures");
+  assert.deepEqual(tapSigA.slice(0, 32), tapSigB.slice(0, 32), "forced nonce reuse: both signatures share R");
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigB)],
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce detected for the same key/);
+  assert.match(html, /Two Taproot signatures reuse a nonce under the same key/);
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/, "a reuse warning must never come with a clean line");
+  assert.equal(recorded.at(-1).verdict, "reuse");
+});
+
+test("two key-path signatures with different R are a clean result", () => {
+  assert.notDeepEqual(tapSigA.slice(0, 32), tapSigC.slice(0, 32));
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigC)],
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /No repeated BIP340 nonces were found among them/);
+  assert.doesNotMatch(html, /Reused Schnorr nonce/);
+  assert.equal(recorded.at(-1).verdict, "clean");
+});
+
+test("a key-path signature whose previous output is not in the file is incomplete, never clean", () => {
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
+    [tapKeySigEntry(tapSigB)], // no witness UTXO: the key Q is missing
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /Some could not be checked for a repeated nonce/);
+  assert.doesNotMatch(html, /No repeated BIP340 nonces/);
+  assert.equal(recorded.at(-1).verdict, "incomplete");
+});
+
+test("key path and script path signatures on one input under one key with one R are reuse", () => {
+  const leafHash = new Uint8Array(32).fill(0x77);
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA), { type: 20, keydata: Uint8Array.from([...tapKey, ...leafHash]), val: tapSigB }],
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+});
+
+test("a finalized P2TR key-path input joins the nonce comparison", () => {
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), { type: 8, keydata: new Uint8Array(), val: witnessStack([tapSigA]) }],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigB)],
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.match(html, /Reused Schnorr nonce detected for the same key/);
+  assert.equal(recorded.at(-1).verdict, "reuse");
+});
+
+test("a crafted PSBT with 20,000 same-R Taproot signatures is refused by the comparison cap", () => {
+  const entries = [witnessUtxoEntry()];
+  for (let count = 0; count < 20000; count++) entries.push(tapKeySigEntry(tapSigA));
+  const before = recorded.length;
+  assert.throws(() => app.hodlRenderPsbt(tapPsbt([entries]), undefined, undefined, "all"), /Nonce comparison limit exceeded/);
+  assert.equal(recorded.length, before, "a refused inspection records no verdict");
+});
+
+test("the analysis summary row reports Schnorr reuse as a problem, ECDSA reuse text first", async () => {
+  const { hodlPsbtNonceCheck } = await loadAppFunctions(["hodlPsbtNonceCheck"]);
+  const schnorrOnly = hodlPsbtNonceCheck([], [], false, [[{}, {}]]);
+  assert.equal(schnorrOnly.state, "problem");
+  assert.match(schnorrOnly.detail, /Two Taproot signatures reuse a nonce under the same key/);
+  const both = hodlPsbtNonceCheck([{}], [], false, [[{}, {}]]);
+  assert.equal(both.state, "problem");
+  assert.match(both.detail, /repeated ECDSA nonce/, "ECDSA reuse text wins when both exist");
+  assert.equal(hodlPsbtNonceCheck([], [], false, []).state, "complete", "no Schnorr records, no change");
+});
+
+test("the same Taproot signature copied onto two inputs is not reported as a key leak", () => {
+  const psbt = tapPsbt([
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
+    [witnessUtxoEntry(), tapKeySigEntry(tapSigA)],
+  ]);
+  const html = app.hodlRenderPsbt(psbt, undefined, undefined, "all");
+  assert.doesNotMatch(html, /Reused Schnorr nonce/);
+  assert.match(html, /No repeated BIP340 nonces were found among them/);
+  assert.notEqual(recorded.at(-1).verdict, "reuse");
 });

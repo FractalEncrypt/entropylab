@@ -61,24 +61,67 @@ export function hodlTapScriptSigs(entries, hodlFind) {
   return hodlFind(entries, 20).filter((entry) => entry.keydata.length === 64).map((entry) => {
     const parsed = hodlParseSchnorr(entry.val);
     const pubkey = entry.keydata.slice(0, 32);
+    const leafHash = entry.keydata.slice(32, 64);
     return parsed
-      ? Object.assign({ pubkey, source: "tap-script" }, parsed)
-      : { pubkey, r: null, s: null, sighash: null, raw: entry.val, source: "tap-script" };
+      ? Object.assign({ pubkey, leafHash, source: "tap-script" }, parsed)
+      : { pubkey, leafHash, r: null, s: null, sighash: null, raw: entry.val, source: "tap-script" };
   });
 }
 
-export function hodlCompareSchnorrNonces(rValues, hodlEq) {
-  const possible = [];
-  for (let first = 0; first < rValues.length; first++) {
-    for (let second = first + 1; second < rValues.length; second++) {
-      const a = rValues[first], b = rValues[second];
-      if (!a.r || !b.r || !hodlEq(a.r, b.r)) continue;
-      if (a.pubkey && b.pubkey && a.pubkey.length && b.pubkey.length && !hodlEq(a.pubkey, b.pubkey)) continue;
-      if (a.input !== b.input) possible.push([a, b]);
+// R values group by their hex encoding, exactly like hodlCompareNonces in
+// app.js groups ECDSA r values.
+function hodlSchnorrRHex(bytes) {
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
+}
+
+// BIP340 nonce reuse. Every same-key same-R pair is a key leak: BIP341's
+// signature message commits to the input index and, for script path, to the
+// leaf hash, and key path and script path sign different messages
+// (ext_flag) — so two valid signatures with one R under one x-only key are
+// always on different messages, and s1 - s2 = (e1 - e2)*d reveals the key.
+// One R and one key with the same s is one signature copied into two fields
+// (same e, so the same message): it leaks nothing and is not reported. A
+// pair whose s is missing is reported (fail closed). Same R under different
+// keys is not reuse and is not reported. A record without a parsed R or without a
+// 32-byte x-only key cannot be compared: it counts in `incomplete`, never
+// silently skipped.
+export function hodlCompareSchnorrNonces(records, hodlEq) {
+  const reused = [];
+  let incomplete = 0;
+  const comparable = [];
+  for (const record of records) {
+    if (!record.r || record.r.length !== 32 || !record.pubkey || record.pubkey.length !== 32) {
+      incomplete++;
+      continue;
     }
+    comparable.push(record);
   }
-  // `reused` stays empty: definite nonce reuse needs EC point math, which the
-  // ECDSA comparison (hodlCompareNonces) already performs; here we only flag
-  // possible cross-input R-value sharing.
-  return { reused: [], possible };
+  // Group by R and compare only within a group, like hodlCompareNonces:
+  // identical attacker-supplied R values collapse into one quadratic bucket,
+  // so total candidate pairs are bounded before any result pair is allocated.
+  const byR = new Map();
+  for (const record of comparable) {
+    const tag = hodlSchnorrRHex(record.r);
+    let group = byR.get(tag);
+    if (!group) byR.set(tag, (group = []));
+    group.push(record);
+  }
+  let comparisons = 0;
+  for (const group of byR.values()) {
+    comparisons += group.length * (group.length - 1) / 2;
+    if (comparisons > 32768) throw new Error("Nonce comparison limit exceeded: too many signatures share the same r value.");
+  }
+  for (const group of byR.values()) {
+    if (group.length < 2) continue;
+    for (let first = 0; first < group.length; first++)
+      for (let second = first + 1; second < group.length; second++) {
+        const a = group[first], b = group[second];
+        if (!hodlEq(a.pubkey, b.pubkey)) continue;
+        if (a.s && b.s && hodlEq(a.s, b.s)) continue; // the same signature twice
+        reused.push([a, b]);
+      }
+  }
+  return { reused, incomplete };
 }

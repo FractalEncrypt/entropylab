@@ -41,12 +41,38 @@ test("ANYONECANPAY|ALL drops input commitment while NONE/SINGLE drop outputs (is
   assert.ok(undefinedByte[0].includes("not a defined Taproot sighash"), undefinedByte[0]);
 });
 
-test("same R on two inputs is flagged", () => {
-  const scan = hodlCompareSchnorrNonces([
-    { input: 0, r: rA, pubkey: key },
-    { input: 1, r: rA, pubkey: key },
+test("same R under the same key is reuse, across inputs or on one input (BIP341 commits to index, path and leaf)", () => {
+  const leafA = new Uint8Array(32).fill(0x44);
+  const leafB = new Uint8Array(32).fill(0x55);
+  const cases = [
+    ["two inputs", [
+      { input: 0, source: "tap-key", r: rA, pubkey: key },
+      { input: 1, source: "tap-key", r: rA, pubkey: key },
+    ]],
+    ["key path and script path on one input", [
+      { input: 0, source: "tap-key", r: rA, pubkey: key },
+      { input: 0, source: "tap-script", r: rA, pubkey: key, leafHash: leafA },
+    ]],
+    ["two different leaves on one input", [
+      { input: 0, source: "tap-script", r: rA, pubkey: key, leafHash: leafA },
+      { input: 0, source: "tap-script", r: rA, pubkey: key, leafHash: leafB },
+    ]],
+    ["identical records (an invalid PSBT map fails closed)", [
+      { input: 0, source: "tap-script", r: rA, pubkey: key, leafHash: leafA },
+      { input: 0, source: "tap-script", r: rA, pubkey: key, leafHash: leafA },
+    ]],
+  ];
+  for (const [name, records] of cases) {
+    const scan = hodlCompareSchnorrNonces(records, eq);
+    assert.equal(scan.reused.length, 1, name);
+    assert.equal(scan.incomplete, 0, name);
+  }
+  const spread = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, pubkey: key },
+    { input: 2, source: "tap-key", r: rA, pubkey: key },
   ], eq);
-  assert.equal(scan.possible.length, 1);
+  assert.equal(spread.reused.length, 3, "every pair of the shared R is reported");
 });
 
 test("tap key sig records are collected", () => {
@@ -105,6 +131,7 @@ test("tap script sig records slice the x-only pubkey out of the keydata", () => 
   const withLeaf = hodlTapScriptSigs([{ type: 20, keydata: Uint8Array.from([...key, ...leafHash]), val: raw }], (e, t) => e.filter((x) => x.type === t));
   assert.equal(withLeaf.length, 1);
   assert.deepEqual(withLeaf[0].pubkey, key);
+  assert.deepEqual(withLeaf[0].leafHash, leafHash, "the record carries the leaf hash from keydata bytes 32..64");
   assert.deepEqual(withLeaf[0].r, rA);
   assert.equal(withLeaf[0].source, "tap-script");
   const shortKeydata = hodlTapScriptSigs([{ type: 20, keydata: new Uint8Array(31), val: raw }], (e, t) => e.filter((x) => x.type === t));
@@ -112,31 +139,56 @@ test("tap script sig records slice the x-only pubkey out of the keydata", () => 
   const unparseable = hodlTapScriptSigs([{ type: 20, keydata: Uint8Array.from([...key, ...leafHash]), val: new Uint8Array(10) }], (e, t) => e.filter((x) => x.type === t));
   assert.equal(unparseable[0].r, null, "an unparseable value still records the pubkey");
   assert.deepEqual(unparseable[0].pubkey, key);
+  assert.deepEqual(unparseable[0].leafHash, leafHash);
 });
 
-test("nonce compare ignores same-input pairs, key mismatches, and missing r values", () => {
-  const sameInput = hodlCompareSchnorrNonces([
-    { input: 0, r: rA, pubkey: key },
-    { input: 0, r: rA, pubkey: key },
-  ], eq);
-  assert.equal(sameInput.possible.length, 0, "two signatures on the same input are not cross-input reuse");
+test("same R under different keys is not reported, and different R is not reuse", () => {
   const differentKeys = hodlCompareSchnorrNonces([
-    { input: 0, r: rA, pubkey: key },
-    { input: 1, r: rA, pubkey: new Uint8Array(32).fill(0x55) },
+    { input: 0, source: "tap-key", r: rA, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, pubkey: new Uint8Array(32).fill(0x55) },
   ], eq);
-  assert.equal(differentKeys.possible.length, 0, "same R under different keys is not reuse");
+  assert.equal(differentKeys.reused.length, 0, "same R under different keys is not reuse");
+  assert.equal(differentKeys.incomplete, 0);
+  const differentR = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, pubkey: key },
+    { input: 1, source: "tap-key", r: new Uint8Array(32).fill(0x22), pubkey: key },
+  ], eq);
+  assert.equal(differentR.reused.length, 0, "different R values never flag");
+  assert.equal(differentR.incomplete, 0);
+});
+
+test("records without a parsed R or a 32-byte key count as incomplete, never skipped", () => {
   const missingR = hodlCompareSchnorrNonces([
-    { input: 0, r: null, pubkey: key },
-    { input: 1, r: rA, pubkey: key },
+    { input: 0, source: "tap-key", r: null, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, pubkey: key },
   ], eq);
-  assert.equal(missingR.possible.length, 0, "unparseable records never flag");
-  const flagged = hodlCompareSchnorrNonces([
-    { input: 0, r: rA, pubkey: key },
-    { input: 1, r: rA, pubkey: key },
-    { input: 2, r: rA, pubkey: key },
+  assert.equal(missingR.reused.length, 0, "unparseable records never flag");
+  assert.equal(missingR.incomplete, 1, "the unparseable record is counted");
+  const missingKey = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, pubkey: new Uint8Array() },
+    { input: 1, source: "tap-key", r: rA, pubkey: key },
   ], eq);
-  assert.equal(flagged.possible.length, 3, "every cross-input pair of the shared R is reported");
-  assert.deepEqual(flagged.reused, [], "definite proof is left to the ECDSA comparison");
+  assert.equal(missingKey.reused.length, 0, "a keyless record cannot be compared");
+  assert.equal(missingKey.incomplete, 1);
+  const shortKey = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, pubkey: new Uint8Array(31) },
+    { input: 1, source: "tap-key", r: rA, pubkey: key },
+  ], eq);
+  assert.equal(shortKey.reused.length, 0);
+  assert.equal(shortKey.incomplete, 1, "a non-32-byte key is not a key");
+});
+
+test("the comparison budget refuses a flood of identical R values, like the ECDSA cap", () => {
+  const flood = Array.from({ length: 257 }, (_, input) => ({ input, source: "tap-key", r: rA, pubkey: key }));
+  assert.throws(() => hodlCompareSchnorrNonces(flood, eq), /Nonce comparison limit exceeded: too many signatures share the same r value\./);
+  const atBudget = Array.from({ length: 256 }, (_, input) => ({ input, source: "tap-key", r: rA, pubkey: key }));
+  const scan = hodlCompareSchnorrNonces(atBudget, eq);
+  assert.equal(scan.reused.length, 256 * 255 / 2, "256 records stay under the 32768-pair cap");
+  const twoGroups = [
+    ...Array.from({ length: 200 }, (_, input) => ({ input, source: "tap-key", r: rA, pubkey: key })),
+    ...Array.from({ length: 200 }, (_, input) => ({ input: input + 200, source: "tap-key", r: new Uint8Array(32).fill(0x22), pubkey: key })),
+  ];
+  assert.throws(() => hodlCompareSchnorrNonces(twoGroups, eq), /Nonce comparison limit exceeded/, "the cap is on total candidate pairs across groups");
 });
 
 test("the report counts only parseable Schnorr signatures as present (issue #333)", () => {
@@ -158,4 +210,27 @@ test("the report counts only parseable Schnorr signatures as present (issue #333
   // signatures; the wrapping span is presentation and may change.
   assert.match(app, /signatures\.length \+ parsedTapSignatures \? "<span class='[^']*'>" \+ hodlT\("\{count\} signature\(s\) present", \{ count: signatures\.length \+ parsedTapSignatures \}\)/);
   assert.doesNotMatch(app, /tapSignatureCount \+= tapSignatures\.length/);
+});
+
+test("one signature copied into two fields is not reuse; the same R with a different s is", () => {
+  // Same R and key with the same s means the same challenge e, so the same
+  // message: a copy leaks nothing. A different s under the same R and key is
+  // a second message, and s1 - s2 = (e1 - e2)*d reveals the key.
+  const sA = new Uint8Array(32).fill(0x61), sB = new Uint8Array(32).fill(0x62);
+  const copied = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, s: sA, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, s: sA, pubkey: key },
+  ], eq);
+  assert.equal(copied.reused.length, 0, "an identical copy is not a key leak");
+  assert.equal(copied.incomplete, 0, "and it was compared, not skipped");
+  const second = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, s: sA, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, s: sB, pubkey: key },
+  ], eq);
+  assert.equal(second.reused.length, 1, "same R, same key, different s is reuse");
+  const oneMissing = hodlCompareSchnorrNonces([
+    { input: 0, source: "tap-key", r: rA, s: sA, pubkey: key },
+    { input: 1, source: "tap-key", r: rA, pubkey: key },
+  ], eq);
+  assert.equal(oneMissing.reused.length, 1, "a missing s fails closed");
 });
