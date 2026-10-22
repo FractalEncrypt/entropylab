@@ -627,6 +627,34 @@ test("a composition-type edit while the browser's composition is still open is n
   masked(field, vault);
 });
 
+// GLM 5.3 review of 901a522: the composition caret slot outlived a no-op
+// composition beforeinput (and api vault changes), so a later input-only
+// edit reported with a composition inputType was spliced at it.
+for (const inputType of ["insertCompositionText", "insertFromComposition"]) {
+  test(`a composition-typed ${inputType} fill after a no-op composition beforeinput replaces the vault`, () => {
+    const { field, vault } = bound();
+    field.type("ab");
+    field.select(1);
+    field.dispatchEvent({ type: "beforeinput", inputType, data: "x", cancelable: true, isComposing: false });
+    field.value = "secret";
+    field.dispatchEvent({ type: "input", inputType, isComposing: false });
+    assert.equal(vault.text(), "secret");
+    masked(field, vault);
+  });
+}
+
+test("a stored passphrase loaded after a composition beforeinput leaves no caret for the next fill", () => {
+  const { field, vault, api } = bound();
+  field.type("ab");
+  field.select(1);
+  field.dispatchEvent({ type: "beforeinput", inputType: "insertFromComposition", data: "x", cancelable: true, isComposing: false });
+  api.setBytes(new TextEncoder().encode("newpass"));
+  field.value = "secret";
+  field.dispatchEvent({ type: "input", inputType: "insertFromComposition", isComposing: false });
+  assert.equal(vault.text(), "secret");
+  masked(field, vault);
+});
+
 test("with no caret saved, a value holding the mask over a non-empty vault is not taken as the passphrase", () => {
   const { field, vault } = bound();
   field.type("ab");

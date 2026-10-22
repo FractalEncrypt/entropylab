@@ -173,8 +173,8 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // compositionend), which an abandonment does not end. A composition-type
   // edit outside any browser composition (WebKit dictation and autocorrect
   // send these) is an ordinary edit: its caret goes in its own slot, which
-  // only the matching composition-type input reads, so an unrelated autofill
-  // can never be spliced at it.
+  // only a composition-type input reads, and only while the field confirms
+  // it. Every path that drops `pending` drops this slot too.
   let browserComposing = false, compositionPending = null;
   const caret = () => [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
   const render = (at, end = at) => {
@@ -188,6 +188,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     const open = composing;
     composing = null;
     pending = null;
+    compositionPending = null;
     if (open && active()) render(open.start, open.end);
   };
   // A change made to the vault from outside the field ends any open
@@ -197,6 +198,15 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   const endComposition = () => {
     composing = null;
     pending = null;
+    compositionPending = null;
+  };
+  // A saved caret still describes the field only while everything outside
+  // the edited span is the mask the field held before the edit.
+  const confirmsCaret = (saved, value) => {
+    if (!saved) return false;
+    const { start, end } = saved, mask = vault.mask(), added = value.length - (vault.length - (end - start));
+    if (added < 0) return value === VAULT_MASK.repeat(value.length);
+    return value.slice(0, start) === mask.slice(0, start) && value.slice(start + added) === mask.slice(end);
   };
   const echo = (inputType) => {
     echoing = true;
@@ -319,24 +329,28 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   // An edit the browser made itself, or a value set by script. Runs on the
   // field before the page's listeners on its ancestors, so they see the mask.
   field.addEventListener("input", (event) => {
-    if (!active() || echoing) return;
-    const compositionInput = Boolean(event?.isComposing) || isCompositionInputType(event?.inputType);
-    // Composition text is only ever taken at compositionend. After an outside
-    // edit abandoned a composition the IME can keep composing: that text is
-    // never stored (it would otherwise reach the "set by script" path below
-    // with mask bullets in it); the field is kept masked instead.
-    if (compositionInput && !composing) {
-      // A composition-type edit with no browser composition open, whose own
-      // beforeinput saved the caret: splice it like any other browser edit.
-      const sessionless = !event?.isComposing && !browserComposing ? compositionPending : null;
+    if (!active() || echoing) {
       compositionPending = null;
-      if (sessionless) {
-        pending = sessionless;
-      } else {
+      return;
+    }
+    const compositionInput = Boolean(event?.isComposing) || isCompositionInputType(event?.inputType);
+    if (compositionInput && !composing) {
+      // Composition text is only ever taken at compositionend. After an
+      // outside edit abandoned a composition the browser's own session runs
+      // on, and what the IME composes in it is never stored; the field is
+      // kept masked instead.
+      if (event?.isComposing || browserComposing) {
         pending = null;
+        compositionPending = null;
         render(Math.min(field.selectionStart ?? vault.length, vault.length));
         return;
       }
+      // Outside any composition it is an ordinary browser edit (WebKit
+      // dictation, autocorrect). Its caret is the one its own beforeinput
+      // saved, and only if the field confirms it; otherwise no caret is used,
+      // and the guarded paths below decide.
+      pending = confirmsCaret(compositionPending, field.value) ? compositionPending : null;
+      compositionPending = null;
     } else {
       compositionPending = null;
     }
