@@ -29,7 +29,8 @@ const jobsOf = (text) => {
   );
 };
 
-// The two workflows that install and run the OpenTimestamps client.
+// The two workflows that push a proof (the OTS client runs in a third,
+// release-assets.yml, whose job holds no secret; see the guard below).
 const otsWorkflows = ["ci-cd.yml", "ots-upgrade.yml"].map((name) => ({
   name,
   text: read(`.github/workflows/${name}`),
@@ -89,16 +90,23 @@ test("every pip install in CI takes only the hash-locked OTS wheels", () => {
 // step boundary is not isolation: the client can write .git/hooks/pre-push or
 // leave a background process in the workspace the push token later enters.
 // The client and the token must live in different jobs on different runners.
+// Every workflow, not only the two that push a proof: release-assets.yml runs
+// the client too, and so would any workflow added later.
 test("no job that installs or runs the OTS client can reach a secret or the release environment", () => {
-  for (const { name, text } of otsWorkflows) {
-    const jobs = jobsOf(text).filter(({ block }) => runsOtsClient(block));
-    assert.ok(jobs.length > 0, `${name} has a job that installs and runs the OTS client`);
-    for (const { job, block } of jobs) {
+  const clientJobs = [];
+  for (const { name, text } of workflows) {
+    for (const { job, block } of jobsOf(text).filter(({ block }) => runsOtsClient(block))) {
+      clientJobs.push(`${name}:${job}`);
       assert.doesNotMatch(block, /^ {4}environment:/m, `${name}:${job} runs the OTS client and must not hold an environment`);
       assert.doesNotMatch(block, /secrets\./, `${name}:${job} runs the OTS client and must not read a secret`);
       assert.doesNotMatch(block, /PUSH_TOKEN/, `${name}:${job} runs the OTS client and must not hold the push token`);
     }
   }
+  assert.deepEqual(
+    clientJobs.sort(),
+    ["ci-cd.yml:timestamp", "ots-upgrade.yml:upgrade", "release-assets.yml:check"],
+    "the timestamp, upgrade and release-asset jobs are the only ones that run the client",
+  );
 });
 
 test("no job that holds the push token or the release environment runs the OTS client", () => {
