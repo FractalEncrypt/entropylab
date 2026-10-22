@@ -349,6 +349,11 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     const doc = psbtInspectDoc(c.finalizedPsbt);
     assert.equal(doc.rustBitcoinError, null, `${where}: rust-bitcoin rejected the finalized PSBT: ${doc.rustBitcoinError}`);
     const appBytes = psbtBuildBytes(doc);
+    // Every map and every field survives, not only what extraction reads: a
+    // rebuild that dropped PSBT_IN_TAP_LEAF_SCRIPT or a BIP32 derivation would
+    // still extract the same transaction. (So the amounts read from `doc`
+    // below are also the amounts of the app's own bytes.)
+    assert.deepEqual(appBytes, c.finalizedPsbt, `${where}: the app's round-trip changed the finalized PSBT's bytes`);
     const rawApp = Transaction.fromPSBT(appBytes, SCURE_OPTS).extract();
     assert.deepEqual(rawApp, c.raw, `${where}: the app's round-trip changed the extracted transaction (full serialization, witness included)`);
     assert.equal(txidOf(rawApp), c.txid, `${where}: the app's round-trip changed the txid (witness-stripped serialization)`);
@@ -410,6 +415,7 @@ test(`the app round-trips @scure-finalized PSBTs byte-identically, without stale
     const incompleteDoc = psbtInspectDoc(c.incompletePsbt);
     assert.equal(incompleteDoc.rustBitcoinError, null, `${where}: the app refused to inspect a partially signed PSBT (the cosigner workflow's normal input)`);
     const incompleteBytes = psbtBuildBytes(incompleteDoc);
+    assert.deepEqual(incompleteBytes, c.incompletePsbt, `${where}: the app's round-trip changed the one-signature-short PSBT's bytes`);
     // (A one-input PSBT whose only signature was dropped has none left; the
     // run counts the cases where there was something to keep.)
     const contributed = sigRecordsPerInput(c.incompletePsbt, c.inputs);
