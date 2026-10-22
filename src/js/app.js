@@ -12674,7 +12674,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // with stubs for the helpers it closes over; a harness predating the
   // budget gets an unbounded one, which renders exactly like the pre-budget
   // source.)
-  const budget = typeof renderBudget === "function" ? renderBudget() : { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } };
+  // A view spends budget only on what it actually renders (red-team F7,
+  // round 6): the nonce view discards the inspector's output blocks, input
+  // sections and warnings, so they must not spend its budget — a large PSBT
+  // elided every nonce row for content the view never shows. The nonce
+  // view's own lists (r-values, per-signature rows) stay bounded by their
+  // per-list caps; the inspector views keep the one shared budget.
+  const budget = view === "nonce"
+    ? { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } }
+    : typeof renderBudget === "function" ? renderBudget() : { take: (count = 1) => count, get left() { return Infinity; }, get spent() { return false; } };
   let inscriptionReport = { inputs: [], envelopes: [] }, inscriptionScanIncomplete = false;
   try {
     inscriptionReport = inspectPsbtInscriptions(psbt);

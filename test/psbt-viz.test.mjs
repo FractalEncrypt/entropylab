@@ -1054,7 +1054,10 @@ const editorRenderForTest = (doc) => {
     describePair: () => ({ text: "", tone: "" }),
     pairNoteHtml: () => "",
     expandableHtml: (text) => String(text),
-    psbtOutputNotesHtml: () => "",
+    // The real notes renderer, so the render-level budget test below
+    // exercises the actual psbtOutputNotesHtml path (the head ignores the
+    // budget argument, which is the defect).
+    psbtOutputNotesHtml: (doc, budget) => vizModule.psbtOutputNotesHtml(doc, budget),
     psbtVizHtml: () => "",
     psbtProblemsHtml: () => "",
     psbtSanitizeHtml: () => "",
@@ -1211,7 +1214,185 @@ test("the compare view bounds the whole report to the render budget: 500 maps ×
   assert.equal(rows, 1990, "rows render in document order up to the budget");
   assert.ok(rows <= (vizModule.PSBT_RENDER_BUDGET ?? 2000), "never over the budget");
   assert.equal((html.match(/key-value map<\/h3>/g) || []).length, 10, "sections render until the budget is spent");
-  // 500 sections × (1 + 200 rows) = 100,500 units of demand; 2,000 render,
-  // so the single budget line counts 98,500 elided sections and changes.
-  assert.ok(html.includes("98500"), "the budget line counts every elided section and change");
+  // 100,000 changes in all; 1,990 render inside 10 sections, and the 10 rows
+  // the budget cut mid-table join them: 98,010 elided changes. The 490 map
+  // sections the budget also cut are sections, not changes, and a line that
+  // says "changes" must not count them (red-team F7 round 6).
+  assert.ok(html.includes("98010"), "the budget line counts every elided change");
+  assert.ok(!html.includes("98500"), "elided sections are not miscounted as changes");
+});
+
+// --- F7 round 6 ------------------------------------------------------------
+
+test("the nonce view does not spend its render budget on inspector sections it discards (F7 round 6)", () => {
+  const { render } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(500, 500);
+  // Every input carries a SIGHASH_SINGLE policy warning and a partial
+  // signature: on the head, the output blocks, input sections and inline
+  // warnings the nonce view discards spend the whole budget (500 + 500 +
+  // 500 = 1,500, then 500 r-value lines), and the per-signature rows get 0.
+  doc.inputs.forEach((map) => map.push({ type: 0x03, sighash: 3 }));
+  const pubkey = new Uint8Array(33).fill(2);
+  doc.inputs.forEach((map) => map.push({ type: 0x02, pubkey, der: new Uint8Array(72).fill(0x30) }));
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "nonce", { network: "mainnet", transcript: "", record: false });
+  assert.equal((html.match(/<strong>Input \d+<\/strong>/g) || []).length, 500, "nonce rows render up to their cap");
+  assert.equal((html.match(/\(input \d+\)/g) || []).length, 500, "r-value lines render up to their cap");
+});
+
+test("an input added past the render cap renders its table row and map section (F7 round 6)", () => {
+  const doc = editorDoc(500, 0);
+  const { render, out, addedPairs } = editorRenderForTest(doc);
+  render();
+  assert.ok(!out.innerHTML.includes('data-txin="500"'), "input 500 is past the cap before the add");
+  // What an accepted Add Input does: append the transaction input and its
+  // (empty) map, count the add like an added pair, and re-render.
+  doc.tx.inputs.push({ txid: "0".repeat(64), vout: 0, scriptSig: "", sequence: 4294967295 });
+  doc.inputs.push([]);
+  addedPairs.set("tx:input", 1);
+  render();
+  const html = out.innerHTML;
+  assert.ok(html.includes('data-txin="500"'), "the added input's row renders after the capped rows");
+  assert.ok(html.includes('data-psbted-section="input:500"'), "the added input's map section renders");
+});
+
+test("an output added past the render cap renders its table row and map section (F7 round 6)", () => {
+  const doc = editorDoc(1, 0, 500);
+  const { render, out, addedPairs } = editorRenderForTest(doc);
+  render();
+  doc.tx.outputs.push({ value: "0", scriptPubKey: "" });
+  doc.outputs.push([]);
+  addedPairs.set("tx:output", 1);
+  render();
+  const html = out.innerHTML;
+  assert.ok(html.includes('data-txout-val="500"'), "the added output's row renders after the capped rows");
+  assert.ok(html.includes('data-psbted-section="output:500"'), "the added output's map section renders");
+});
+
+test("shiftAddedPairs re-keys from a snapshot, so a lower key is never overwritten (F7 round 6)", () => {
+  const doc = editorDoc(3, 0);
+  const { shiftAddedPairs, addedPairs } = editorRenderForTest(doc);
+  // Insertion order "input:2" before "input:1": re-keying in place lands
+  // "input:2" on "input:1" before that entry moves, losing its count.
+  addedPairs.set("input:2", 2);
+  addedPairs.set("input:1", 1);
+  shiftAddedPairs("input", 0);
+  assert.deepEqual(Object.fromEntries(addedPairs), { "input:0": 1, "input:1": 2 }, "both counts survive the re-key");
+  // The reverse insertion order must reach the same map.
+  addedPairs.clear();
+  addedPairs.set("input:1", 1);
+  addedPairs.set("input:2", 2);
+  shiftAddedPairs("input", 0);
+  assert.deepEqual(Object.fromEntries(addedPairs), { "input:0": 1, "input:1": 2 }, "insertion order cannot change the answer");
+});
+
+test("the editor summary's per-output notes spend from the view budget (F7 round 6)", () => {
+  const doc = editorDoc(500, 200, 700);
+  doc.tx.outputs = Array.from({ length: 700 }, () => ({ value: "1", scriptPubKey: program(2, 32), asm: "" }));
+  const { render, out } = editorRenderForTest(doc);
+  render();
+  const html = out.innerHTML;
+  const notes = (html.match(/Output #\d+/g) || []).length;
+  // The notes render above the tables, so they spend from the budget first:
+  // 500 notes (their own cap), then the tables render within what remains.
+  // On the head the notes rendered outside the budget and the view totalled
+  // 2,495 rendered elements — 500 notes plus 1,995 rows.
+  assert.equal(notes, 500, "notes capped at 500");
+  assert.ok(notes + dataRows(html) <= (vizModule.PSBT_RENDER_BUDGET ?? 2000), "the notes count against the view budget");
+  assert.ok(html.includes("200 more notes"), "the notes' elision line appears");
+});
+
+test("a capped view counts every input's warnings through the collected list, with no extra per-input line (F7 round 7)", () => {
+  const { render, captured } = hodlRenderPsbtForTest();
+  const doc = inspectorDoc(2000, 1);
+  doc.inputs.forEach((map) => map.push({ type: 0x03, sighash: 3 }));
+  const html = render(doc, new Uint8Array(), "2024-01-01T00:00:00Z", "inspect", { network: "mainnet" });
+  // Every input's warning is collected: the first 500 render inline under
+  // their own sections (1,001 budget units with the output block), then the
+  // collected list renders 500 of the remaining 1,500 — 1,000 paragraphs
+  // shown, 1,000 elided. The analysis summary reports the policy problem
+  // for every input, and the round-6 per-input hidden-warnings line (whose
+  // helper re-scanned every warning, O(W²) at the load gates, and was
+  // visible text the owner never approved) must not reappear.
+  assert.equal((html.match(/<p class='psbt-bad'>/g) || []).length, 1000, "500 inline + 500 collected warning paragraphs");
+  assert.ok(html.includes("1000 more warnings (not rendered)"), "the collected list counts the warnings the budget cut");
+  assert.ok(!html.includes("more inputs have warnings"), "no per-input hidden-warnings line is rendered");
+  assert.equal(captured.checks.find((check) => check.label === "SIGHASH policy").state, "problem", "the analysis still covers every input");
+});
+
+test("the budget line counts the maps the overflow sections skipped, not the ones they rendered (F7 round 7)", () => {
+  // 600 input maps: 0–499 empty, 500–597 with 10 pairs each, and the two
+  // empty maps two Add Input clicks appended at 598/599. All 496 outputs
+  // carry an undefined-witness-program note, so notes (496) + input rows
+  // (502) + output rows (496) + the global section and its 3 pairs (4)
+  // land the budget at 502 before the input map sections; the 500 empty
+  // capped sections and the 2 overflow sections spend it exactly. Maps
+  // 500–597 and every output map section never render: 98 × (1 section +
+  // 10 pairs) + 496 × 1 = 1,574 elided items. Round 6 printed 1,554 by
+  // counting the two rendered overflow maps again and skipping the two
+  // unrendered middle ones.
+  const doc = editorDoc(600, 0, 496);
+  doc.tx.outputs.forEach((output) => (output.scriptPubKey = program(2, 32)));
+  doc.globals = Array.from({ length: 3 }, (_, index) => ({ key: "fc00", value: "0" + index, name: "PSBT_GLOBAL_PROPRIETARY", decoded: null }));
+  for (let index = 500; index < 598; index++) doc.inputs[index] = Array.from({ length: 10 }, (_, pair) => ({ key: "fc00", value: `${index}-${pair}`, name: "PSBT_IN_PROPRIETARY", decoded: null }));
+  const { render, out, addedPairs } = editorRenderForTest(doc);
+  addedPairs.set("tx:input", 2); // what two accepted Add Input clicks record
+  render();
+  const html = out.innerHTML;
+  assert.equal((html.match(/Output #/g) || []).length, 496, "every output's note renders and spends from the budget");
+  assert.ok(html.includes('data-psbted-section="input:499"'), "the capped sections render");
+  assert.ok(html.includes('data-psbted-section="input:599"'), "the added inputs' overflow sections render");
+  assert.ok(!html.includes('data-psbted-section="input:500"'), "the middle maps the budget cut do not render");
+  assert.ok(html.includes("1574 more items (not rendered)"), "the budget line counts every unrendered map exactly once");
+  assert.ok(!html.includes("1554 more items"), "the rendered overflow maps are not counted again");
+});
+
+test("Add/Delete Input, Add/Delete Output and Add Pair repaint the result panel after their re-render (F7 round 7)", () => {
+  // The add handlers re-render after recording the add (it may land past
+  // the rendered rows), and the delete handlers re-render after re-keying
+  // the added-pair counts; render() recreates an empty #psbted-result —
+  // without a renderResult() call the export panel stays blank until the
+  // next keystroke or network flip. The handlers are bound to the DOM
+  // inside initPsbtEditor, so this checks the source: every click handler
+  // that records or re-keys an added pair must repaint the result panel
+  // right after its re-render.
+  const source = readFileSync(join(repoRoot, "src/js/psbt-editor.js"), "utf8");
+  const handlers = [];
+  const click = /addEventListener\("click", \(\) => \{/g;
+  for (let match; (match = click.exec(source)); ) {
+    // Brace-match the handler body; strings and comments are skipped so
+    // template placeholders like `${kind}` cannot fool the counter.
+    let depth = 1, state = "code", quote = "";
+    let i = match.index + match[0].length;
+    const start = i;
+    while (i < source.length && depth > 0) {
+      const char = source[i], next = source[i + 1];
+      if (state === "line") { if (char === "\n") state = "code"; i++; continue; }
+      if (state === "block") { if (char === "*" && next === "/") { state = "code"; i += 2; continue; } i++; continue; }
+      if (state === "string") {
+        if (char === "\\") { i += 2; continue; }
+        if (char === quote) state = "code";
+        i++;
+        continue;
+      }
+      if (char === "/" && next === "/") { state = "line"; i += 2; continue; }
+      if (char === "/" && next === "*") { state = "block"; i += 2; continue; }
+      if (char === "'" || char === '"' || char === "`") { state = "string"; quote = char; i++; continue; }
+      if (char === "{") depth++;
+      else if (char === "}") depth--;
+      i++;
+    }
+    handlers.push(source.slice(start, i - 1));
+  }
+  assert.ok(handlers.length >= 2, "the editor's click handlers were found");
+  let checked = 0;
+  for (const body of handlers) {
+    for (const { index: at } of body.matchAll(/\baddedPairs\.set\(|\bshiftAddedPairs\(/g)) {
+      const rest = body.slice(at);
+      const renderAt = rest.indexOf("render();");
+      assert.notEqual(renderAt, -1, "the handler re-renders after recording or re-keying the added pairs");
+      assert.match(rest.slice(renderAt), /^render\(\);\s*renderResult\(\);/, "renderResult() repaints the result panel right after the re-render");
+      checked++;
+    }
+  }
+  assert.ok(checked >= 4, "the tx-add, Add Pair and both delete handlers were checked");
 });

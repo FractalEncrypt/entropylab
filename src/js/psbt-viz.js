@@ -142,7 +142,7 @@ export const witnessProgramNote = (scriptHex) => {
 // The editor summary's notes for those outputs, one per output, each on its
 // own line after the transaction's validity line.
 const NOTE_STYLE = { warn: ["psbted-note-warn", "⚠ "], bad: ["psbted-note-bad", "✕ "], info: ["muted", ""] };
-export const psbtOutputNotesHtml = (doc) => {
+export const psbtOutputNotesHtml = (doc, budget) => {
   // Every output is classified (the analysis covers all of them); only the
   // rendered notes are capped — a crafted PSBT can carry an undefined
   // witness program on tens of thousands of outputs (red-team F7).
@@ -154,7 +154,10 @@ export const psbtOutputNotesHtml = (doc) => {
       return `<br><span class="${className}">${mark}${escapeHtml(found.note(index))}</span>`;
     })
     .filter((note) => note !== null);
-  return cappedHtml(notes, (note) => note, "notes");
+  // The caller passes the view's render budget when the notes render inside
+  // one (the editor's summary): the notes spend from it like every other
+  // list, so they cannot push the view past the budget (red-team F7 round 6).
+  return cappedHtml(notes, (note) => note, "notes", undefined, budget);
 };
 
 // Well-known script templates, tagged like a block explorer would, then the
