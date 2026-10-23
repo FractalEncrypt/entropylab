@@ -117,7 +117,7 @@ test("the Lightning card ships in the shell with its controls", () => {
 });
 
 test("the workspace switcher retains the held-back Lightning implementation", () => {
-  for (const entry of [/\["psbt", "PSBT", "PSBT"\]/, /\["journal", "Journal", "Journal"\]/]) {
+  for (const entry of [/\["psbt", "Transactions", "Txns"\]/, /\["journal", "Journal", "Journal"\]/]) {
     assert.match(appSource, entry);
   }
   assert.match(appSource, /getElementById\("ln-card"\)\.hidden = id !== "ln"/);
