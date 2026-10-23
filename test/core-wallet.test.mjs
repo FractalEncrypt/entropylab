@@ -558,6 +558,47 @@ test("an encrypted Core wallet is refused, not guessed at", () => {
   assert.deepEqual(result.imports, []);
 });
 
+test("a master key with a short path (not the standard account path) is refused", () => {
+  const { core } = loadModule();
+  const doc = parseHex(GENERATED_ROWS);
+  // Core would watch m/0/i; Key Station derives m/84'/1'/0'/0/i.
+  for (const entry of doc.descriptors) entry.descriptor = entry.descriptor.replace(/\/(?:44|84|86)h\/1h\/0h\/([01])\/\*\)/, "/$1/*)");
+  const result = core.stationImports(doc, importDeps);
+  assert.equal(result.reason, "unsupported-key-records");
+  assert.deepEqual(result.imports, []);
+  assert.equal(result.skipped, 6);
+});
+
+test("a master key on a non-zero account is refused", () => {
+  const { core } = loadModule();
+  const doc = parseHex(GENERATED_ROWS);
+  // Key Station always derives account 0'; this watches m/…/5h/….
+  for (const entry of doc.descriptors) entry.descriptor = entry.descriptor.replace("/1h/0h/", "/1h/5h/");
+  const result = core.stationImports(doc, importDeps);
+  assert.equal(result.imports.length, 0);
+  assert.equal(result.skipped, 6);
+});
+
+test("an account key with an extra path step is refused", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  // account/7/0/i; Key Station would derive account/0/i.
+  for (const entry of doc.descriptors) entry.descriptor = entry.descriptor.replace(/\/([01])\/\*\)/, "/7/$1/*)");
+  const result = core.stationImports(doc, importDeps);
+  assert.equal(result.imports.length, 0);
+  assert.equal(result.skipped, 8);
+});
+
+test("an account key origin whose purpose disagrees with the script is refused", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  for (const entry of doc.descriptors) entry.descriptor = entry.descriptor.replace("/44h/1h/0h", "/84h/1h/0h");
+  const result = core.stationImports(doc, importDeps);
+  // The two bip44 descriptors are refused; the other three scripts still import.
+  assert.equal(result.imports.length, 3);
+  assert.equal(result.skipped, 2);
+});
+
 test("key records whose secrets do not match their own pubkeys are refused", () => {
   const { core } = loadModule();
   const rows = GENERATED_ROWS.map(([key, value]) => [key, value]);

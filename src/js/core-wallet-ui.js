@@ -185,7 +185,7 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
   const IMPORT_REASONS = {
     "encrypted": () => t("This wallet is encrypted in Bitcoin Core; its key records are not usable here. Export its descriptors with listdescriptors to inspect elsewhere."),
     "no-private-keys": () => t("Watch-only wallet — it holds no private keys, so there is nothing to import."),
-    "unsupported-key-records": () => t("No private key record in this wallet reassembles into a root or account key of a supported single-signature descriptor."),
+    "unsupported-key-records": () => t("No private key record in this wallet reassembles into a root or account key of a supported single-signature descriptor at the path the Key Station derives."),
     "unknown-network": () => t("The wallet’s chain is unknown, so a key encoding cannot be chosen safely."),
   };
 
@@ -206,12 +206,12 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
         })
         .join("");
       body = `<table class="psbted-pairs"><tbody>${items}</tbody></table>`
-        + `<p class="muted">${tHtml("The Key Station opens with the key filled in, nothing derived yet — press Derive Key there and compare the fingerprint before trusting any address. Nothing is saved or sent.")}</p>`;
+        + `<p class="muted">${tHtml("The Key Station opens with the key filled in, nothing derived yet — press Derive Key there and compare the fingerprint before trusting any address. Only the standard path the Key Station derives is offered; other paths are skipped. Nothing is saved or sent.")}</p>`;
       if (failed) body += `<p class="psbt-warn">${tHtml("Import unlocks when every check above passes or warns.")}</p>`;
-      if (result.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape is not an importable key.", { count: result.skipped })}</p>`;
+      if (result.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape or path is not importable.", { count: result.skipped })}</p>`;
     } else {
       body = `<p class="muted">${escapeHtml((IMPORT_REASONS[result?.reason] ?? IMPORT_REASONS["unsupported-key-records"])())}</p>`;
-      if (result?.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape is not an importable key.", { count: result.skipped })}</p>`;
+      if (result?.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape or path is not importable.", { count: result.skipped })}</p>`;
     }
     return `${sectionHeadHtml(tHtml("Import into Key Station"), result?.imports?.length || undefined, tHtml("Move this wallet’s proven key material into the Key Station to review and derive there"))}${body}`;
   };

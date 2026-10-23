@@ -217,7 +217,11 @@ an explicit error before those pairs are allocated.
   descriptor's own public bookkeeping) — only when the secret provably matches
   the record's pubkey and the embedded extended key — and the Key Station
   opens with the key filled in for the user to derive and compare by hand.
-  Watch-only and Core-encrypted wallets are refused outright.
+  Only the standard path the Key Station derives is accepted (a master key
+  with its purpose/coin/account-0 tail, or an account key on `/0/*` or
+  `/1/*`); a non-standard path is skipped, because the fingerprint would
+  still match while every address would not. Watch-only and Core-encrypted
+  wallets are refused outright.
 - Derives BIP-85 child entropy from the active key's BIP32 root (or a pasted
   root xprv): English BIP-39 mnemonics (12–24 words), HD-seed WIF, XPRV, HEX,
   and Base64/Base85 passwords. Same parent, application, and index always

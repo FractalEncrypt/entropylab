@@ -637,6 +637,41 @@ var hodlCoreWallet = (() => {
 
   const isEncrypted = (doc) => doc.records.some((record) => record.name === "walletdescriptorcryptedkey");
 
+  const IMPORT_PURPOSE = { bip44: 44, bip49: 49, bip84: 84, bip86: 86 };
+
+  // Key Station derives at its own standard path. Import only when that path
+  // is exactly the one the descriptor watches, otherwise the fingerprint
+  // would still match while every derived address differs.
+  //   depth 0 (key is the master): /<purpose>h/<coin>h/0h/<0|1>/* and, if
+  //     an origin is present, [<8-hex master fingerprint>] only.
+  //   depth 3 (key is an account): /<0|1>/* and, if an origin is present,
+  //     [<8-hex>/<purpose>h/<coin>h/<account>h] with purpose and coin matching.
+  // Returns the branch digit, or null when the path is not importable.
+  const importBranch = (entry, pub, script, depth, family) => {
+    const body = entry.descriptor.split("#")[0];
+    const at = body.indexOf(pub);
+    if (at < 0) return null;
+    const prefix = body.slice(0, at), tail = body.slice(at + pub.length);
+    const coin = family === "mainnet" ? "0" : "1";
+    const origin = /\[([^\]]*)\]$/.exec(prefix)?.[1] ?? null;
+    if (origin !== null) {
+      const parts = origin.split("/");
+      if (!/^[0-9a-fA-F]{8}$/.test(parts[0])) return null;
+      if (depth === 0 && parts.length !== 1) return null;
+      if (depth === 3) {
+        if (parts.length !== 4 || !parts.slice(1).every((step) => /^\d+['hH]$/.test(step))) return null;
+        if (Number(parts[1].slice(0, -1)) !== IMPORT_PURPOSE[script]) return null;
+        if (Number(parts[2].slice(0, -1)) !== Number(coin)) return null;
+      }
+    }
+    if (depth === 0) {
+      const match = new RegExp(`^/${IMPORT_PURPOSE[script]}['hH]/${coin}['hH]/0['hH]/([01])/\\*\\)`).exec(tail);
+      return match ? match[1] : null;
+    }
+    const match = /^\/([01])\/\*\)/.exec(tail);
+    return match ? match[1] : null;
+  };
+
   const stationImports = (doc, deps) => {
     const none = (reason) => ({ reason, skipped: 0, imports: [] });
     if (isEncrypted(doc)) return none("encrypted");
@@ -679,8 +714,9 @@ var hodlCoreWallet = (() => {
         skipped += entry.keys.length;
         continue;
       }
-      // The branch this descriptor watches: "/0/*" receive, "/1/*" change.
-      const branch = entry.descriptor.match(/\/([01])['hH]?\/\*(?=\))/);
+      // The branch, and that the descriptor's path is the one Key Station
+      // derives (the node is proven above, the path is not).
+      const branch = importBranch(entry, pubs[0], script, depth, family);
       if (!branch) {
         skipped += entry.keys.length;
         continue;
@@ -719,7 +755,7 @@ var hodlCoreWallet = (() => {
           internal: false,
           external: false,
         };
-        if (branch[1] === "1") item.internal = true;
+        if (branch === "1") item.internal = true;
         else item.external = true;
         if (!items.has(key)) items.set(key, item);
       }
