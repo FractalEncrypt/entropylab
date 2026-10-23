@@ -187,6 +187,233 @@ test("a missing model response key is dropped, not invented", async () => {
   }
 });
 
+// --- a failing batch splits into per-key retries (run 39891870190) ----------
+//
+// One cut-off Spanish batch ("Unexpected end of JSON input" on every attempt)
+// threw out of translateLanguage, and the workflow skipped the publish job
+// for every language — including the 33 strings German, French and Portuguese
+// had translated fine. A failure that can be specific to one input — a
+// content failure (a cut-off or unparseable body) or an HTTP 400 — degrades
+// to per-key drops; an auth/credit failure or a sustained outage still fails
+// the language outright, as do validation and file errors.
+
+// The failures chat() throws after its own retries, classified the way it
+// classifies them: a content failure, and an HTTP failure carrying its
+// status.
+const contentError = () => Object.assign(new Error("Unexpected end of JSON input"), { kind: "content" });
+const httpError = (status, detail) => Object.assign(new Error(`LLM request failed: HTTP ${status} ${detail}`), { status });
+
+test("a translate batch that throws is retried key by key; only a key that keeps failing is dropped", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(3);
+  try {
+    const { missing } = await languageWorkload(tree, "es", 3);
+    assert.ok(missing.length >= 3, "fixture needs at least 3 missing keys");
+    const [first, second, third] = missing;
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        if (request.name === "translate") {
+          const keys = JSON.parse(request.messages[1].content).strings;
+          if (keys.length > 1 || keys[0] === second) throw contentError();
+          return { translations: keys.map((key) => ({ key, translation: `${key} [translated]` })) };
+        }
+        const pairs = JSON.parse(request.messages[1].content).pairs;
+        return { verdicts: pairs.map(({ key }) => ({ key, ok: true, problem: "" })) };
+      },
+    };
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, limit: 3, log: quiet });
+
+    // The batch call was tried once, then each key on its own.
+    const translateCalls = calls.filter((c) => c.name === "translate");
+    assert.deepEqual(translateCalls.map((c) => JSON.parse(c.messages[1].content).strings), [[first, second, third], [first], [second], [third]]);
+
+    assert.equal(report.translated, 2);
+    assert.deepEqual(report.dropped, [{ key: second, problem: "the model returned no usable response: Unexpected end of JSON input" }]);
+    assert.equal(report.stillMissing, 1);
+
+    // The language still writes its catalog: the publish job is not blocked.
+    assert.ok(existsSync(join(outDir, "es.json")), "the language result is written");
+    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
+    assert.equal(catalog[first], `${first} [translated]`);
+    assert.equal(catalog[third], `${third} [translated]`);
+    assert.ok(!(second in catalog), "the failed key stays missing — the safe English fallback");
+    assert.deepEqual(catalogProblems(catalog), []);
+    const sidecar = JSON.parse(readFileSync(join(outDir, ".sources", "es.json"), "utf8"));
+    assert.deepEqual(sidecarProblems(catalog, sidecar), { invalid: [], drift: [] });
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("an audit call that throws for the batch is retried key by key", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(2);
+  try {
+    const { missing } = await languageWorkload(tree, "es", 2);
+    assert.ok(missing.length >= 2, "fixture needs at least 2 missing keys");
+    const [first, second] = missing;
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        if (request.name === "translate") {
+          const keys = JSON.parse(request.messages[1].content).strings;
+          return { translations: keys.map((key) => ({ key, translation: `${key} [translated]` })) };
+        }
+        const pairs = JSON.parse(request.messages[1].content).pairs;
+        if (pairs.length > 1) throw contentError();
+        return { verdicts: pairs.map(({ key }) => ({ key, ok: true, problem: "" })) };
+      },
+    };
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, limit: 2, log: quiet });
+
+    const auditCalls = calls.filter((c) => c.name === "audit");
+    assert.deepEqual(auditCalls.map((c) => JSON.parse(c.messages[1].content).pairs.map((p) => p.key)), [[first, second], [first], [second]]);
+    assert.equal(report.translated, 2);
+    assert.deepEqual(report.dropped, []);
+    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
+    assert.equal(catalog[first], `${first} [translated]`);
+    assert.equal(catalog[second], `${second} [translated]`);
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a key whose audit call keeps throwing is dropped, never accepted unaudited", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(2);
+  try {
+    const { missing } = await languageWorkload(tree, "es", 2);
+    assert.ok(missing.length >= 2, "fixture needs at least 2 missing keys");
+    const [first, second] = missing;
+    const client = {
+      async chat(request) {
+        if (request.name === "translate") {
+          const keys = JSON.parse(request.messages[1].content).strings;
+          return { translations: keys.map((key) => ({ key, translation: `${key} [translated]` })) };
+        }
+        const pairs = JSON.parse(request.messages[1].content).pairs;
+        if (pairs.length > 1 || pairs[0].key === second) throw contentError();
+        return { verdicts: pairs.map(({ key }) => ({ key, ok: true, problem: "" })) };
+      },
+    };
+    const report = await translateLanguage({ root: tree, lang: "es", outDir, client, limit: 2, log: quiet });
+    assert.equal(report.translated, 1);
+    assert.deepEqual(report.dropped, [{ key: second, problem: "semantic audit: the model returned no usable response: Unexpected end of JSON input" }]);
+    const catalog = JSON.parse(readFileSync(join(outDir, "es.json"), "utf8"));
+    assert.equal(catalog[first], `${first} [translated]`);
+    assert.ok(!(second in catalog), "an unaudited key is never written");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a batch that fails with HTTP 401 fails the language, with no per-key retries", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(3);
+  try {
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        throw httpError(401, "unauthorized");
+      },
+    };
+    // An expired or revoked TRANSLATE_API_KEY must fail the run loudly, not
+    // drop every key and go green while translating nothing.
+    await assert.rejects(translateLanguage({ root: tree, lang: "es", outDir, client, limit: 3, log: quiet }), /HTTP 401/);
+    assert.equal(calls.length, 1, "an auth failure is never split into per-key retries");
+    assert.equal(existsSync(join(outDir, "es.json")), false, "nothing is written");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a batch that fails with an exhausted 429 fails the language, with no per-key retries", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(3);
+  try {
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        throw httpError(429, "temporarily rate-limited upstream. Please retry shortly");
+      },
+    };
+    // A sustained outage must not be split either: 1 + batch.length calls
+    // would multiply chat()'s backoff and can push the job past its timeout.
+    await assert.rejects(translateLanguage({ root: tree, lang: "es", outDir, client, limit: 3, log: quiet }), /HTTP 429/);
+    assert.equal(calls.length, 1, "a sustained outage is never split into per-key retries");
+    assert.equal(existsSync(join(outDir, "es.json")), false, "nothing is written");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a provider-wide HTTP 400 that fails every key alone fails the language", async () => {
+  // GLM 5.3 on round 2: a mistyped model or an endpoint without json_schema
+  // answers 400 to every call. Splitting it dropped every key and went green.
+  const outDir = tmp();
+  const tree = await gappedRoot(3);
+  try {
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        throw httpError(400, "response_format json_schema is not supported");
+      },
+    };
+    await assert.rejects(translateLanguage({ root: tree, lang: "es", outDir, client, limit: 3, log: quiet }), /HTTP 400/);
+    assert.equal(calls.length, 4, "the batch, then each of its 3 keys");
+    assert.equal(existsSync(join(outDir, "es.json")), false, "nothing is written");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a per-key auth failure during a split fails the language", async () => {
+  const outDir = tmp();
+  const tree = await gappedRoot(3);
+  try {
+    const { missing } = await languageWorkload(tree, "es", 3);
+    assert.ok(missing.length >= 3, "fixture needs at least 3 missing keys");
+    const [first, second, third] = missing;
+    const calls = [];
+    const client = {
+      calls,
+      async chat(request) {
+        calls.push(request);
+        const keys = JSON.parse(request.messages[1].content).strings;
+        if (keys.length > 1) throw contentError();
+        if (keys[0] === second) throw httpError(401, "unauthorized");
+        return { translations: keys.map((key) => ({ key, translation: `${key} [translated]` })) };
+      },
+    };
+    await assert.rejects(translateLanguage({ root: tree, lang: "es", outDir, client, limit: 3, log: quiet }), /HTTP 401/);
+    // The batch split on its content failure, then the per-key 401 stopped
+    // the run instead of being dropped like a content failure.
+    const translateCalls = calls.filter((c) => c.name === "translate");
+    assert.deepEqual(translateCalls.map((c) => JSON.parse(c.messages[1].content).strings), [[first, second, third], [first], [second]]);
+    assert.equal(existsSync(join(outDir, "es.json")), false, "nothing is written");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
 // --- committed per-string context (issue #862) ------------------------------
 
 const writeContext = (tree, context) => {
@@ -686,6 +913,43 @@ test("chat(): an empty response retries like a truncated one", async () => {
     assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), { ok: true });
     assert.equal(calls.length, 2, "an empty response was not retried");
     assert.deepEqual(delays, [2000], "the retry waits out the first backoff step");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("chat(): thrown errors carry their class — status for an HTTP failure, kind for content and network failures", async () => {
+  const realFetch = globalThis.fetch;
+  const thrownBy = async (fetchImpl) => {
+    globalThis.fetch = fetchImpl;
+    try {
+      await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async () => {} });
+    } catch (error) {
+      return error;
+    }
+    assert.fail("the call must throw");
+  };
+  try {
+    // An HTTP failure carries the response status, retryable or not.
+    const auth = await thrownBy(async () => ({ ok: false, status: 401, headers: { get: () => null }, text: async () => "unauthorized" }));
+    assert.equal(auth.status, 401);
+    assert.match(auth.message, /HTTP 401/);
+    const limited = await thrownBy(async () => ({ ok: false, status: 429, headers: { get: () => null }, text: async () => "slow down" }));
+    assert.equal(limited.status, 429);
+    // Every body/content failure — a cut-off body, no message content,
+    // unparseable JSON — is kind "content", with the message unchanged.
+    const cutOff = await thrownBy(async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected end of JSON input"); } }));
+    assert.equal(cutOff.kind, "content");
+    assert.equal(cutOff.message, "Unexpected end of JSON input");
+    const empty = await thrownBy(async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: {} }] }) }));
+    assert.equal(empty.kind, "content");
+    assert.equal(empty.message, "LLM response carried no message content");
+    const garbage = await thrownBy(async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "not json" } }] }) }));
+    assert.equal(garbage.kind, "content");
+    // A network failure is kind "network", with the original message.
+    const network = await thrownBy(async () => { throw new TypeError("fetch failed"); });
+    assert.equal(network.kind, "network");
+    assert.equal(network.message, "fetch failed");
   } finally {
     globalThis.fetch = realFetch;
   }
