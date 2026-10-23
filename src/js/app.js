@@ -2121,10 +2121,19 @@ function hodlWalletDatDeps() {
 // "Load inputs to derive" flow (hodlKeyManagerUseInStation).
 function hodlCoreImportIntoStation(item) {
   if (!item?.xprv || typeof item.xprv !== "string") return;
+  let family = /^xprv/.test(item.xprv) ? "mainnet" : "testnet";
+  // The wallet's own chain goes to the header picker, the same call a picker
+  // click makes, so a regtest wallet derives bcrt1… rather than tb1…. A chain
+  // outside the key's family is never applied.
+  if (["mainnet", "testnet", "signet", "regtest"].includes(item.network) && hodlNetworkFamily(item.network) === family && item.network !== hodlNetworkChoice) {
+    hodlApplyNetworkDefault(item.network);
+    hodlJournalLog("network", hodlNetworkChoice, "core");
+    hodlNetworkPickerRender?.();
+  }
   let source = hodlNewKeyState();
   source.mode = "seed";
   source.fields.seed = item.xprv;
-  source.fields.network = /^xprv/.test(item.xprv) ? "mainnet" : "testnet";
+  source.fields.network = family;
   source.fields.coinType = source.fields.network === "testnet" ? "1'" : "0'";
   if (item.kind === "account" && item.script) {
     source.fields.script = item.script;
@@ -2132,10 +2141,12 @@ function hodlCoreImportIntoStation(item) {
     // Keep the form's public path text in step with the script the account
     // import chose — the derivation of an account key ignores it, but the
     // key card's summary would otherwise read the m/84' default.
-    let purpose = { bip44: 44, bip49: 49, bip84: 84, bip86: 86 }[item.script], coinType = source.fields.network === "testnet" ? 1 : 0;
+    // The account comes from the descriptor's origin (0' without one).
+    let purpose = { bip44: 44, bip49: 49, bip84: 84, bip86: 86 }[item.script], coinType = source.fields.network === "testnet" ? 1 : 0, account = Number.isSafeInteger(item.account) && item.account >= 0 && item.account < 2 ** 31 ? item.account : 0;
     source.fields.purpose = `${purpose}'`;
-    source.fields.derivationAccountPath = `m/${purpose}'/${coinType}'/0'`;
-    source.fields.derivationPath = `m/${purpose}'/${coinType}'/0'/{0-1}/{0-9}`;
+    source.fields.account = `${account}'`;
+    source.fields.derivationAccountPath = `m/${purpose}'/${coinType}'/${account}'`;
+    source.fields.derivationPath = `m/${purpose}'/${coinType}'/${account}'/{0-1}/{0-9}`;
   }
   let labIndex = hodlFillLabFromKey(source);
   hodlActiveKey = labIndex;

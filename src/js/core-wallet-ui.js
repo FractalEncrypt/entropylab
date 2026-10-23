@@ -199,8 +199,13 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
             ? t("Wallet root key — the wallet’s master key, covering every descriptor in it")
             : t("Account key — {type}", { type: outputTypeName({ bip44: 0, bip49: 1, bip84: 2, bip86: 3 }[item.script] ?? -1) });
           const branches = item.internal && item.external ? t("receive and change") : item.internal ? t("change") : t("receive");
+          // An account key cannot prove its master: the origin's fingerprint
+          // is shown as the descriptor's claim, apart from the key's own.
+          const origin = item.kind === "account" && item.originFingerprint
+            ? `<br><span class="muted">${tHtml("Descriptor origin claims master {fingerprint}, account {account}' — not provable from the account key", { fingerprint: item.originFingerprint, account: item.account ?? 0 })}</span>`
+            : "";
           return `<tr>
-            <td><strong>${escapeHtml(kindLabel)}</strong><br><span class="muted">${tHtml("Fingerprint {fingerprint} · {branches}", { fingerprint: item.fingerprint, branches })}</span></td>
+            <td><strong>${escapeHtml(kindLabel)}</strong><br><span class="muted">${tHtml("Fingerprint {fingerprint} · {branches}", { fingerprint: item.fingerprint, branches })}</span>${origin}</td>
             <td><button class="btn secondary" type="button" data-core-import-go="${index}" ${failed ? `disabled aria-disabled="true"` : ""}>${tHtml("Import into Key Station")}</button></td>
           </tr>`;
         })

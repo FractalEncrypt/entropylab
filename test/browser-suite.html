@@ -1678,6 +1678,12 @@
     const names = ["BIP-85 Child", "Core Wallet", "Journal", "Keys", "Multi Signature", "Silent Payments", "Transactions", "Vanity Address"];
     equal(tabs.map((tab) => tab.getAttribute("aria-label")).sort().join("|"), names.join("|"), "every tool tab names itself in full");
     assert(!document.querySelector('#workspace [data-workspace="sp"] .silent-payments-icon'), "Silent Payments icon should not be in the workspace tab");
+    // A mismatched end tag in the shell silently reparents every later card
+    // into a hidden one, so no tab panel may sit inside another.
+    for (const panel of document.querySelectorAll('[role="tabpanel"][id$="-card"]')) {
+      const host = panel.parentElement.closest('[role="tabpanel"][id$="-card"]');
+      assert(!host, `#${panel.id} is nested inside #${host?.id}`);
+    }
     const start = document.querySelector('#workspace [data-workspace="calc"]');
     try {
       start.focus();
@@ -4340,11 +4346,14 @@
     // The Key Station lab is filled, nothing derived yet: the user derives.
     await until(() => !document.getElementById("calc-card").hidden, "key workspace after import");
     equal(document.getElementById("seed").value, generatedTprv, "the Key Station seed field did not carry the wallet's root tprv");
+    // The wallet is regtest: the picker follows its chain, not just the tprv family.
+    equal(document.getElementById("network-picker").dataset.network, "regtest", "the import did not carry the wallet's chain");
     await until(() => !document.getElementById("go").disabled, "Derive Key to enable for the imported key");
     document.getElementById("go").click();
     await until(() => [...document.querySelectorAll("#key-tabs .key-tab")].some((tab) => tab.textContent.includes(generatedFingerprint)), "the imported key's tab with the wallet's master fingerprint", 60000);
     assert(document.getElementById("out").textContent.includes(generatedFingerprint), "the derived wallet does not show the wallet's master fingerprint");
     assert(document.getElementById("out").textContent.includes("Master fingerprint"), "the derived wallet does not name its master fingerprint");
+    assert(document.getElementById("out").textContent.includes("bcrt1"), "the regtest import did not derive regtest addresses");
     // Clean up: delete the imported key, then wipe the Core Wallet tab.
     [...document.querySelectorAll("#key-tabs .key-tab")].find((tab) => tab.textContent.includes(generatedFingerprint)).click();
     await until(() => !document.getElementById("delete-key").disabled, "Delete current key to enable");
@@ -4354,6 +4363,7 @@
     await until(() => !document.getElementById("core-card").hidden, "Core Wallet tab");
     document.getElementById("core-wipe").click();
     await until(() => document.getElementById("core-out").textContent === "", "core wipe after import");
+    document.querySelector('#network-picker-menu [data-network="mainnet"]').click();
     document.querySelector('#workspace [data-workspace="calc"]').click();
   });
 
@@ -4382,6 +4392,7 @@
     await until(() => rows().length === 4, "four account import rows (one per script type)");
     const taprootRow = rows().find((row) => row.textContent.includes("Taproot"));
     assert(taprootRow, "no Taproot account import row");
+    assert(taprootRow.textContent.includes("420c9ea3"), "the account row does not show the origin's claimed master fingerprint");
     taprootRow.querySelector("[data-core-import-go]").click();
     await until(() => !document.getElementById("calc-card").hidden, "key workspace after account import");
     equal(document.getElementById("seed").value, accountTprv, "the Key Station seed field did not carry the account tprv");
@@ -4393,6 +4404,7 @@
     await until(() => !document.getElementById("core-card").hidden, "Core Wallet tab");
     document.getElementById("core-wipe").click();
     await until(() => document.getElementById("core-out").textContent === "", "core wipe after account import");
+    document.querySelector('#network-picker-menu [data-network="mainnet"]').click();
     document.querySelector('#workspace [data-workspace="calc"]').click();
   });
 

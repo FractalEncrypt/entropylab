@@ -231,6 +231,33 @@ test("detects an active record filed on the wrong chain", () => {
   assert.ok(badChecks(core.verifyWalletDoc(doc, coreDeps)).some((check) => /filed as internal but its branch is receive/.test(check.detail)));
 });
 
+test("checks every active record that names one descriptor, not only the last", () => {
+  const { core } = loadModule();
+  const records = REF_WATCH_ONLY_RECORDS.map(([key, value]) => [key, value]);
+  const change = parseRecords(records).descriptors.find((item) => item.functions.join(":") === "wpkh" && /\/1\/\*\)/.test(item.descriptor));
+  assert.ok(change, "fixture has a native-SegWit change descriptor");
+  // Receive pointer for type 2 now names the change descriptor, which its
+  // own internal pointer also names: one record is wrong whichever is read.
+  const external = records.find(([key]) => key === "1161637469766565787465726e616c73706b02"); // activeexternalspk type 2
+  external[1] = change.id;
+  const bad = badChecks(core.verifyWalletDoc(parseRecords(records), coreDeps)).map((check) => check.detail);
+  assert.ok(bad.some((line) => /filed as external but its branch is change/.test(line)), JSON.stringify(bad));
+  assert.ok(bad.some((line) => /named by 2 active records/.test(line)), JSON.stringify(bad));
+});
+
+test("descriptor key versions must belong to the wallet's network", () => {
+  const { core } = loadModule();
+  // Core decodes an extended key against the chain's own base58 prefixes:
+  // tpub on every test chain, xpub on mainnet; anything else fails to load.
+  const regtest = core.verifyWalletDoc(parseRecords(REF_WATCH_ONLY_RECORDS), coreDeps);
+  assert.ok(regtest.some((check) => check.tone === "ok" && check.label === "Descriptor network"));
+  assert.ok(!regtest.some((check) => check.tone === "bad" && check.label === "Descriptor network"));
+  const signet = core.verifyWalletDoc(parseRecords(REF_WATCH_ONLY_RECORDS, 0x0a03cf40), coreDeps);
+  assert.ok(!signet.some((check) => check.tone === "bad" && check.label === "Descriptor network"), "tpub is right on signet too");
+  const mainnet = core.verifyWalletDoc(parseRecords(REF_WATCH_ONLY_RECORDS, 0xf9beb4d9), coreDeps);
+  assert.equal(mainnet.filter((check) => check.tone === "bad" && check.label === "Descriptor network").length, 8, "every tpub descriptor in a mainnet file");
+});
+
 test("a descriptor with a character outside Core's charset yields checks, not a throw", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
@@ -427,6 +454,26 @@ test("a one-key multisig wrapper is still treated as a multisig shape", () => {
   assert.deepEqual(badChecks(core.verifyWalletDoc(reparsed, coreDeps)), []);
 });
 
+test("a multisig active record's output type is checked against its wrapper", () => {
+  const { core } = loadModule();
+  // Core's OutputType for each multisig wrapper: sh = LEGACY (0),
+  // sh(wsh) = P2SH_SEGWIT (1), wsh = BECH32 (2).
+  for (const [descriptor, type] of [
+    [`sh(multi(1,${REF_ACCOUNT_TPUB}/0/*))`, 0],
+    [`sh(wsh(sortedmulti(1,${REF_ACCOUNT_TPUB}/0/*)))`, 1],
+    [`wsh(multi(1,${REF_ACCOUNT_TPUB}/0/*))`, 2],
+  ]) {
+    const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
+    const unit = core.unitFromDescriptor(descriptor, { internal: false, active: true }, coreDeps);
+    assert.equal(unit.type, type);
+    const reparsed = core.parseWalletDat(core.buildWalletDat(doc, core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME)));
+    assert.deepEqual(badChecks(core.verifyWalletDoc(reparsed, coreDeps)), [], descriptor);
+    const added = reparsed.descriptors.find((entry) => entry.descriptor === unit.descriptor);
+    added.active.type = 3; // filed as Taproot
+    assert.ok(badChecks(core.verifyWalletDoc(reparsed, coreDeps)).some((check) => new RegExp(`marked type 3 but its wrapper is type ${type}`).test(check.detail)), descriptor);
+  }
+});
+
 test("a multisig descriptor's single xprv is found in a later slot, not the first xpub", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_PRIVATE_RECORDS);
@@ -500,6 +547,21 @@ test("a Core-generated wallet imports as exactly one root key", () => {
   assert.equal(item.fingerprint.length, 8, "the displayed fingerprint is the BIP32 4-byte head");
 });
 
+test("import and verification zero their secret temporaries", () => {
+  const { core } = loadModule();
+  const doc = parseHex(GENERATED_ROWS);
+  const seen = [];
+  const spy = (fn) => (bytes) => { seen.push(bytes); return fn(bytes); };
+  const spied = { ...importDeps, publicKeyForPrivate: spy(importDeps.publicKeyForPrivate), base58Encode: spy(importDeps.base58Encode) };
+  const result = core.stationImports(doc, spied);
+  assert.equal(result.imports[0].xprv, GENERATED_ROOT_TPRV, "the key is assembled before its buffers are wiped");
+  core.verifyWalletDoc(doc, spied);
+  assert.ok(seen.length > 0);
+  for (const bytes of seen) assert.ok(bytes.every((byte) => byte === 0), "a secret or xprv buffer was left populated");
+  // The parsed records themselves stay intact: they are the wallet's data.
+  assert.ok(doc.descriptors.some((entry) => entry.keys.some((key) => key.der.some((byte) => byte !== 0))));
+});
+
 test("an imported account-key wallet imports as one account xprv per script type", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_PRIVATE_RECORDS);
@@ -523,6 +585,32 @@ test("an imported account-key wallet imports as one account xprv per script type
     assert.equal(item.fingerprint.length, 8);
   }
   assert.deepEqual(result.imports.map((item) => item.script).sort(), scripts);
+});
+
+test("an import carries the wallet's chain and the origin's account and fingerprint", () => {
+  const { core } = loadModule();
+  // A root import from a regtest wallet: the chain is regtest (bcrt1…), not
+  // just the tprv family; no origin, account 0' is the path Key Station uses.
+  const [root] = core.stationImports(parseHex(GENERATED_ROWS), importDeps).imports;
+  assert.equal(root.network, "regtest");
+  assert.equal(root.account, 0);
+  assert.equal(root.originFingerprint, null);
+  // An account import: the origin [420c9ea3/<purpose>h/1h/0h] claims a master
+  // fingerprint the account key cannot prove, and names the account.
+  const signet = core.stationImports(parseRecords(REF_PRIVATE_RECORDS, 0x0a03cf40), importDeps).imports;
+  assert.equal(signet.length, 4);
+  for (const item of signet) {
+    assert.equal(item.network, "signet");
+    assert.equal(item.account, 0);
+    assert.equal(item.originFingerprint, "420c9ea3");
+  }
+  // Account 5' in the origin still imports (the key is the account node),
+  // and the item names account 5, not the 0' default.
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  for (const entry of doc.descriptors) entry.descriptor = entry.descriptor.replace(/\/1h\/0h\]/, "/1h/5h]");
+  const fifth = core.stationImports(doc, importDeps).imports;
+  assert.equal(fifth.length, 4);
+  for (const item of fifth) assert.equal(item.account, 5);
 });
 
 test("a tr(NUMS, multi_a) script-path key is not imported as BIP86 key-path", () => {

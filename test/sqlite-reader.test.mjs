@@ -234,4 +234,9 @@ test("rejects structural corruption instead of guessing", () => {
   badPageSize[16] = 0x00;
   badPageSize[17] = 0x03;
   assert.throws(() => reader.readDatabase(badPageSize), /page size/);
+  // The header length counts its own varint, so 0 is corrupt; 1 is the
+  // legitimate empty header of a zero-column record.
+  assert.throws(() => reader.decodeRecord(Uint8Array.of(0)), /header length mismatch/);
+  assert.throws(() => reader.decodeRecord(Uint8Array.of(0, 1, 2)), /header length mismatch/);
+  assert.deepEqual(reader.decodeRecord(Uint8Array.of(1)), []);
 });

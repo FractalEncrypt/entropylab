@@ -170,8 +170,10 @@ var hodlCoreWallet = (() => {
   // The OutputType a descriptor's wrapper produces, from its parsed function
   // chain; null when the shape is outside the ones the export knows.
   const descriptorOutputType = (functions) => {
-    const chain = functions.join(":");
-    if (chain === "pkh") return 0;
+    // A multisig inside a wrapper takes the wrapper's type (sh(multi) is
+    // legacy, wsh(sortedmulti) is bech32), so the multi function is dropped.
+    const chain = functions.filter((name) => !/^(?:sorted)?multi(?:_a)?$/.test(name)).join(":");
+    if (chain === "pkh" || (chain === "sh" && functions.length > 1)) return 0;
     if (chain === "sh:wpkh" || chain === "sh:wsh") return 1;
     if (chain === "wpkh" || chain === "wsh") return 2;
     if (chain === "tr") return 3;
@@ -267,6 +269,7 @@ var hodlCoreWallet = (() => {
               caches: [],
               keys: [],
               active: null,
+              actives: [],
             };
             byDescriptorId.set(entry.id, entry);
             doc.descriptors.push(entry);
@@ -323,7 +326,12 @@ var hodlCoreWallet = (() => {
     }
     for (const active of doc.meta.actives ?? []) {
       const entry = byDescriptorId.get(active.id);
-      if (entry) entry.active = active;
+      // Every pointer is kept: Core files both chains, so a descriptor
+      // named twice must have each record checked, not only the last.
+      if (entry) {
+        entry.active ??= active;
+        entry.actives.push(active);
+      }
     }
     return doc;
   };
@@ -439,14 +447,20 @@ var hodlCoreWallet = (() => {
       // The active record's chain and output type must name this descriptor:
       // Core files it under that (internal, type) key, so a swapped value
       // would make it watch a chain or script type it does not describe.
-      if (entry.active) {
+      // A descriptor watches one chain of one type, so a second pointer at it
+      // always files it somewhere it does not describe.
+      const actives = entry.actives ?? [];
+      if (actives.length > 1) {
+        checks.push(check("bad", `Active scriptPubKey`, `${label} is named by ${actives.length} active records — a descriptor is the active one for a single chain and type`));
+      }
+      for (const active of actives) {
         const expectedType = descriptorOutputType(entry.functions);
-        if (expectedType !== null && entry.active.type !== expectedType) {
-          checks.push(check("bad", `Active scriptPubKey`, `${label} is marked type ${entry.active.type} but its wrapper is type ${expectedType}`));
+        if (expectedType !== null && active.type !== expectedType) {
+          checks.push(check("bad", `Active scriptPubKey`, `${label} is marked type ${active.type} but its wrapper is type ${expectedType}`));
         }
         const change = /\/1['hH]?\/\*\)/.test(entry.descriptor);
-        if (entry.active.internal !== change) {
-          checks.push(check("bad", `Active scriptPubKey`, `${label} is filed as ${entry.active.internal ? "internal" : "external"} but its branch is ${change ? "change" : "receive"}`));
+        if (active.internal !== change) {
+          checks.push(check("bad", `Active scriptPubKey`, `${label} is filed as ${active.internal ? "internal" : "external"} but its branch is ${change ? "change" : "receive"}`));
         }
       }
 
@@ -457,6 +471,15 @@ var hodlCoreWallet = (() => {
       const pubs = [];
       let match;
       while ((match = EXTENDED_PUB_GLOBAL.exec(text))) pubs.push(match[1]);
+      // Core decodes extended keys with the chain's own prefixes (xpub on
+      // mainnet, tpub on every test chain); any other version fails at load.
+      if (doc.network && pubs.length) {
+        const prefix = doc.network === "mainnet" ? "xpub" : "tpub";
+        const foreign = pubs.filter((key) => !key.startsWith(prefix)).length;
+        checks.push(foreign
+          ? check("bad", `Descriptor network`, `${label} has ${foreign} extended key(s) that are not ${prefix} — Bitcoin Core would not load it on ${doc.network}`)
+          : check("ok", `Descriptor network`, `${label} keys are ${prefix}, matching ${doc.network}`));
+      }
       pubs.forEach((xpub, index) => {
         let expected = null;
         try {
@@ -486,24 +509,30 @@ var hodlCoreWallet = (() => {
       for (const keyRecord of entry.keys) {
         // Bitcoin Core CPrivKey DER form: 3081d3 020101 0420 <32-byte secret> …
         const secret = keyRecord.der.slice(8, 40);
-        if (keyRecord.der.length !== 214 || keyRecord.der[0] !== 0x30 || keyRecord.der[6] !== 0x04 || keyRecord.der[7] !== 0x20) {
-          checks.push(check("bad", `Private key record`, `${label} key record is not the expected DER private key`));
-          continue;
-        }
-        let pubkey;
         try {
-          pubkey = deps.publicKeyForPrivate(secret);
-        } catch {
-          checks.push(check("bad", `Private key record`, `${label} key record secret is not a valid secp256k1 private key`));
-          continue;
-        }
-        const hash = deps.sha256(deps.sha256(concat(keyRecord.pubkey, keyRecord.der)));
-        if (!bytesEqual(pubkey, keyRecord.pubkey)) {
-          checks.push(check("bad", `Private key record`, `${label} private key does not match its record pubkey`));
-        } else if (!bytesEqual(hash, keyRecord.keyHash)) {
-          checks.push(check("bad", `Private key record`, `${label} key record hash mismatch`));
-        } else {
-          checks.push(check("ok", `Private key record`, `${label} private key matches its pubkey and record hash`));
+          if (keyRecord.der.length !== 214 || keyRecord.der[0] !== 0x30 || keyRecord.der[6] !== 0x04 || keyRecord.der[7] !== 0x20) {
+            checks.push(check("bad", `Private key record`, `${label} key record is not the expected DER private key`));
+            continue;
+          }
+          let pubkey;
+          try {
+            pubkey = deps.publicKeyForPrivate(secret);
+          } catch {
+            checks.push(check("bad", `Private key record`, `${label} key record secret is not a valid secp256k1 private key`));
+            continue;
+          }
+          const preimage = concat(keyRecord.pubkey, keyRecord.der);
+          const hash = deps.sha256(deps.sha256(preimage));
+          preimage.fill(0);
+          if (!bytesEqual(pubkey, keyRecord.pubkey)) {
+            checks.push(check("bad", `Private key record`, `${label} private key does not match its record pubkey`));
+          } else if (!bytesEqual(hash, keyRecord.keyHash)) {
+            checks.push(check("bad", `Private key record`, `${label} key record hash mismatch`));
+          } else {
+            checks.push(check("ok", `Private key record`, `${label} private key matches its pubkey and record hash`));
+          }
+        } finally {
+          secret.fill(0); // best-effort: the copy, not the parsed record
         }
       }
     }
@@ -646,7 +675,9 @@ var hodlCoreWallet = (() => {
   //     an origin is present, [<8-hex master fingerprint>] only.
   //   depth 3 (key is an account): /<0|1>/* and, if an origin is present,
   //     [<8-hex>/<purpose>h/<coin>h/<account>h] with purpose and coin matching.
-  // Returns the branch digit, or null when the path is not importable.
+  // Returns { branch, account, originFingerprint }, or null when the path is
+  // not importable. The origin's fingerprint is the descriptor's claim about
+  // the master; an account key cannot prove it, so it is reported, not checked.
   const importBranch = (entry, pub, script, depth, family) => {
     const body = entry.descriptor.split("#")[0];
     const at = body.indexOf(pub);
@@ -654,6 +685,7 @@ var hodlCoreWallet = (() => {
     const prefix = body.slice(0, at), tail = body.slice(at + pub.length);
     const coin = family === "mainnet" ? "0" : "1";
     const origin = /\[([^\]]*)\]$/.exec(prefix)?.[1] ?? null;
+    let account = 0;
     if (origin !== null) {
       const parts = origin.split("/");
       if (!/^[0-9a-fA-F]{8}$/.test(parts[0])) return null;
@@ -662,14 +694,14 @@ var hodlCoreWallet = (() => {
         if (parts.length !== 4 || !parts.slice(1).every((step) => /^\d+['hH]$/.test(step))) return null;
         if (Number(parts[1].slice(0, -1)) !== IMPORT_PURPOSE[script]) return null;
         if (Number(parts[2].slice(0, -1)) !== Number(coin)) return null;
+        account = Number(parts[3].slice(0, -1));
       }
     }
-    if (depth === 0) {
-      const match = new RegExp(`^/${IMPORT_PURPOSE[script]}['hH]/${coin}['hH]/0['hH]/([01])/\\*\\)`).exec(tail);
-      return match ? match[1] : null;
-    }
-    const match = /^\/([01])\/\*\)/.exec(tail);
-    return match ? match[1] : null;
+    const match = depth === 0
+      ? new RegExp(`^/${IMPORT_PURPOSE[script]}['hH]/${coin}['hH]/0['hH]/([01])/\\*\\)`).exec(tail)
+      : /^\/([01])\/\*\)/.exec(tail);
+    if (!match) return null;
+    return { branch: match[1], account, originFingerprint: origin === null ? null : origin.split("/")[0].toLowerCase() };
   };
 
   const stationImports = (doc, deps) => {
@@ -716,8 +748,8 @@ var hodlCoreWallet = (() => {
       }
       // The branch, and that the descriptor's path is the one Key Station
       // derives (the node is proven above, the path is not).
-      const branch = importBranch(entry, pubs[0], script, depth, family);
-      if (!branch) {
+      const path = importBranch(entry, pubs[0], script, depth, family);
+      if (!path) {
         skipped += entry.keys.length;
         continue;
       }
@@ -729,35 +761,47 @@ var hodlCoreWallet = (() => {
           continue;
         }
         const secret = der.slice(8, 40);
-        // The two-way node check: the secret's pubkey is the record's pubkey,
-        // and that pubkey is the embedded extended key's own.
-        let secretPubkey;
+        let body = null;
         try {
-          secretPubkey = deps.publicKeyForPrivate(secret);
-        } catch {
-          skipped++;
-          continue;
+          // The two-way node check: the secret's pubkey is the record's pubkey,
+          // and that pubkey is the embedded extended key's own.
+          let secretPubkey;
+          try {
+            secretPubkey = deps.publicKeyForPrivate(secret);
+          } catch {
+            skipped++;
+            continue;
+          }
+          if (!bytesEqual(secretPubkey, keyRecord.pubkey) || !bytesEqual(keyRecord.pubkey, raw.slice(45, 78))) {
+            skipped++;
+            continue;
+          }
+          body = concat(u32be(version), raw.slice(4, 45), u8(0), secret);
+          const xprv = deps.base58Encode(body);
+          // Root items ignore the script (a root derives every type); account
+          // items keep one import per (account key, script type).
+          const key = depth === 0 ? `0::${bytesToHex(raw.slice(4))}` : `3:${script}:${bytesToHex(raw.slice(4))}`;
+          const item = items.get(key) ?? {
+            xprv,
+            fingerprint: bytesToHex(deps.hash160(secretPubkey).subarray(0, 4)),
+            kind: depth === 0 ? "root" : "account",
+            script: depth === 0 ? null : script,
+            // The wallet's own chain (regtest renders bcrt1…, not just the
+            // tprv family) and what the origin names.
+            network: doc.network,
+            account: path.account,
+            originFingerprint: path.originFingerprint,
+            internal: false,
+            external: false,
+          };
+          if (path.branch === "1") item.internal = true;
+          else item.external = true;
+          if (!items.has(key)) items.set(key, item);
+        } finally {
+          // Best-effort: the copies of the secret and the xprv bytes.
+          secret.fill(0);
+          body?.fill(0);
         }
-        if (!bytesEqual(secretPubkey, keyRecord.pubkey) || !bytesEqual(keyRecord.pubkey, raw.slice(45, 78))) {
-          skipped++;
-          continue;
-        }
-        const body = concat(u32be(version), raw.slice(4, 45), u8(0), secret);
-        const xprv = deps.base58Encode(body);
-        // Root items ignore the script (a root derives every type); account
-        // items keep one import per (account key, script type).
-        const key = depth === 0 ? `0::${bytesToHex(raw.slice(4))}` : `3:${script}:${bytesToHex(raw.slice(4))}`;
-        const item = items.get(key) ?? {
-          xprv,
-          fingerprint: bytesToHex(deps.hash160(secretPubkey).subarray(0, 4)),
-          kind: depth === 0 ? "root" : "account",
-          script: depth === 0 ? null : script,
-          internal: false,
-          external: false,
-        };
-        if (branch === "1") item.internal = true;
-        else item.external = true;
-        if (!items.has(key)) items.set(key, item);
       }
     }
     const imports = [...items.values()];

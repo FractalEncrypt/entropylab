@@ -205,7 +205,8 @@ an explicit error before those pairs are allocated.
   re-derived from the account keys (an honest warning where a descriptor
   shape sits outside that re-derivation, never a silent pass), private-key
   records against their pubkeys
-  and record hashes, and the network magic against the chain's genesis hash.
+  and record hashes, the network magic against the chain's genesis hash, and
+  every descriptor key's xpub/tpub version against that network.
   Private key material is listed but redacted unless a reveal toggle is on.
   Additional ranged descriptors (watch-only or, into a wallet that already
   signs, private) can be appended; the rebuilt database is re-parsed and
@@ -216,7 +217,8 @@ an explicit error before those pairs are allocated.
   reassembled into the exact root or account xprv they belong to (given the
   descriptor's own public bookkeeping) — only when the secret provably matches
   the record's pubkey and the embedded extended key — and the Key Station
-  opens with the key filled in for the user to derive and compare by hand.
+  opens with the key filled in for the user to derive and compare by hand,
+  on the wallet's own chain (a regtest wallet derives `bcrt1…`).
   Only the standard path the Key Station derives is accepted (a master key
   with its purpose/coin/account-0 tail, or an account key on `/0/*` or
   `/1/*`); a non-standard path is skipped, because the fingerprint would
