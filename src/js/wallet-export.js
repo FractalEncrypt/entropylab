@@ -616,30 +616,48 @@ var hodlWalletExport = (() => {
       });
 
       if (unit.privateDescriptor) {
-        let xprv = extractExtendedKey(unit.privateDescriptor, "spending");
-        // The key record must map the stored descriptor's root pubkey, or
-        // Core's GetExtKey finds no key for it and the wallet cannot sign.
-        // A hardened branch step means the stored root is the branch key, so
-        // derive the branch xprv; otherwise the account key signs as itself.
-        const privateTail = descriptorKeyTail(unit.privateDescriptor, xprv);
-        if (privateTail.hardened) xprv = deps.deriveExtendedPrivateChild(xprv, 0x80000000 + privateTail.branch);
-        const raw = deps.base58Decode(xprv);
-        if (raw.length !== 78 || raw[45] !== 0) throw new Error("wallet.dat export: unexpected extended private key payload");
-        const secret = raw.slice(46, 78);
-        const pubkey = deps.publicKeyForPrivate(secret);
-        if (pubkey.length !== 33) throw new Error("wallet.dat export: public key must be 33 bytes");
-        const der = concat(DER_PREFIX, secret, DER_PARAMS, DER_PUBKEY_PREFIX, pubkey);
-        if (der.length !== 214) throw new Error("wallet.dat export: DER private key must be 214 bytes");
-        const keyHash = deps.sha256(deps.sha256(concat(pubkey, der)));
-        push(
-          concat(streamString("walletdescriptorkey"), id, compactSize(pubkey.length), pubkey),
-          concat(compactSize(der.length), der, keyHash),
-        );
-        // concat() copied the bytes into the record; wipe the intermediates.
-        raw.fill(0);
-        secret.fill(0);
-        der.fill(0);
-        keyHash.fill(0);
+        let raw = null;
+        let secret = null;
+        let der = null;
+        let keyHash = null;
+        let hashInput = null;
+        try {
+          let xprv = extractExtendedKey(unit.privateDescriptor, "spending");
+          // The key record must map the stored descriptor's root pubkey, or
+          // Core's GetExtKey finds no key for it and the wallet cannot sign.
+          // A hardened branch step means the stored root is the branch key, so
+          // derive the branch xprv; otherwise the account key signs as itself.
+          const privateTail = descriptorKeyTail(unit.privateDescriptor, xprv);
+          if (privateTail.hardened) xprv = deps.deriveExtendedPrivateChild(xprv, 0x80000000 + privateTail.branch);
+          raw = deps.base58Decode(xprv);
+          if (raw.length !== 78 || raw[45] !== 0) throw new Error("wallet.dat export: unexpected extended private key payload");
+          secret = raw.slice(46, 78);
+          const pubkey = deps.publicKeyForPrivate(secret);
+          if (pubkey.length !== 33) throw new Error("wallet.dat export: public key must be 33 bytes");
+          der = concat(DER_PREFIX, secret, DER_PARAMS, DER_PUBKEY_PREFIX, pubkey);
+          if (der.length !== 214) throw new Error("wallet.dat export: DER private key must be 214 bytes");
+          hashInput = concat(pubkey, der);
+          const innerHash = deps.sha256(hashInput);
+          try {
+            keyHash = deps.sha256(innerHash);
+          } finally {
+            innerHash.fill(0);
+          }
+          hashInput.fill(0);
+          hashInput = null;
+          push(
+            concat(streamString("walletdescriptorkey"), id, compactSize(pubkey.length), pubkey),
+            concat(compactSize(der.length), der, keyHash),
+          );
+        } finally {
+          // concat() copied the bytes into the record; wipe every intermediate
+          // this block owns, whether the record was built or a check threw.
+          if (raw) raw.fill(0);
+          if (secret) secret.fill(0);
+          if (der) der.fill(0);
+          if (keyHash) keyHash.fill(0);
+          if (hashInput) hashInput.fill(0);
+        }
       }
 
       // A branch beyond the first external/internal one is a stored
