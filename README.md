@@ -362,6 +362,8 @@ an explicit error before those pairs are allocated.
   branch windows. Branch roles and active descriptors follow the wallet.dat export.
   It uses the wallet birthday selection and watches beyond each displayed address
   window, just like multisig. This JSON stays watch-only even while private data is revealed.
+  Export refuses an unavailable account selection or hardened derivation after a
+  public key; hardened branches are supported through their already-derived public keys.
 - A derived multisig can export a watch-only Bitcoin Core `wallet.dat` (same
   SQLite descriptor wallet as Key Station, never with private keys) and the
   `importdescriptors` JSON for a blank `disable_private_keys` wallet. Drop the

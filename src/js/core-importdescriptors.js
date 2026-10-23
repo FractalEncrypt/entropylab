@@ -102,6 +102,14 @@ export function canonicalizeWatchDescriptor(descriptor, codec, label = "Descript
     return next;
   });
   assertNoPrivateMaterial(rewritten, label);
+  // Hardened origins precede the key and are only metadata. Derivation
+  // after a public key must be unhardened, including the final wildcard.
+  for (const match of rewritten.matchAll(EXTENDED_PUB)) {
+    const path = rewritten.slice(match.index + match[0].length);
+    if (/^(?:\/\d+)*\/(?:\d+|\*)['hH]/.test(path)) {
+      throw new Error("Hardened derivation after an extended public key is not supported. Watch-only export refused.");
+    }
+  }
   return changed || !text.includes("#") ? withChecksum(rewritten) : text;
 }
 

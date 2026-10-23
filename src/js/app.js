@@ -2188,7 +2188,9 @@ function hodlCoreImportDescriptorsWallet(scope) {
   if (scope === "msig") return hodlWalletResult?.kind === "msig" ? hodlWalletResult : null;
   if (hodlWalletResult?.kind !== "hd") return null;
   const accounts = hodlWalletResult.accounts;
-  return accounts.find((account) => account.def?.id === hodlAccountId) ?? accounts.find((account) => account.def?.id === "bip84") ?? accounts[0];
+  const account = accounts.find((account) => account.def?.id === hodlAccountId);
+  if (!account) throw hodlError("The selected account is unavailable. Select a script type and export again.");
+  return account;
 }
 // Never spread the source account, branches, or rows: they may own private
 // getters. Copy only the fields needed by the shared branch/active mapping.

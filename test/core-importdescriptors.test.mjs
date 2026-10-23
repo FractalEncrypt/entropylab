@@ -48,9 +48,9 @@ const parse = (json) => JSON.parse(json);
 function keyExportHarness() {
   const source = read("src/js/app.js");
   const context = vm.createContext({ buildImportDescriptorsJson, hodlBase58Check: codec,
-    hodlWalletExport: loadModule(), hodlDescriptorChecksum: descriptorChecksum, hodlT: text => text,
+    hodlWalletExport: loadModule(), hodlDescriptorChecksum: descriptorChecksum, hodlT: text => text, hodlTText: text => text,
     hodlWalletDatBirthday: "genesis", hodlAccountId: "bip84", hodlWalletResult: null });
-  for (const name of ["hodlMsigCoreImportCodec", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson", "hodlCoreImportDescriptorsPublicWallet", "hodlCoreImportDescriptorsError", "hodlCopyCoreImportDescriptors", "hodlDownloadCoreImportDescriptors", "hodlKeyCoreImportDescriptorsMarkup", "hodlCoreImportDescriptorsNote", "hodlCoreImportDescriptorsButtons"]) {
+  for (const name of ["hodlError", "hodlFormatErrorSpec", "hodlMsigCoreImportCodec", "hodlCoreImportDescriptorsWallet", "hodlCoreImportDescriptorsJson", "hodlCoreImportDescriptorsPublicWallet", "hodlCoreImportDescriptorsError", "hodlCopyCoreImportDescriptors", "hodlDownloadCoreImportDescriptors", "hodlKeyCoreImportDescriptorsMarkup", "hodlCoreImportDescriptorsNote", "hodlCoreImportDescriptorsButtons"]) {
     const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
     assert.ok(match, `application export adapter ${name} exists`);
     vm.runInContext(match[0], context);
@@ -84,13 +84,37 @@ test("Key Station exports only the selected public account with the existing bir
     })));
   }
   ui.hodlAccountId = "stale-account";
-  assert.equal(parse(ui.hodlCoreImportDescriptorsJson("calc"))[0].desc, accounts[2].receiveDescriptor, "fallback matches the displayed account");
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /account/i, "a stale selection must not export a fallback account");
+  ui.hodlAccountId = "bip84";
   accounts[2].receiveDescriptor = `wpkh(${master.privateExtendedKey}/0/*)`;
   assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /private key/);
   ui.hodlWalletResult = null;
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
   ui.hodlWalletResult = { kind: "single" };
   assert.equal(ui.hodlCoreImportDescriptorsJson("calc"), "");
+});
+
+test("Key Station refuses missing selected accounts without copying or downloading", () => {
+  const ui = keyExportHarness();
+  const error = { textContent: "" };
+  let copies = 0, downloads = 0;
+  ui.document = { getElementById: id => id === "key-core-importdescriptors-error" ? error : null };
+  ui.hodlErrorSpecFrom = error => ({ raw: error.message });
+  ui.copyText = () => { copies++; return Promise.resolve(false); };
+  ui.Blob = class { constructor() { downloads++; } };
+  const accounts = [84, 86].map(purpose => customAccount(purpose, "mainnet", 0, 2).account);
+  ui.hodlAccountId = "stale-account";
+  for (const available of [accounts, [accounts[1]], []]) {
+    ui.hodlWalletResult = { kind: "hd", accounts: available };
+    assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /account/i);
+    for (const handler of [ui.hodlCopyCoreImportDescriptors, ui.hodlDownloadCoreImportDescriptors]) {
+      error.textContent = "";
+      handler("calc");
+      assert.ok(error.textContent, "missing account must produce a visible refusal");
+      assert.equal(copies, 0);
+      assert.equal(downloads, 0);
+    }
+  }
 });
 
 // The expected branch mapping is stated independently of the adapter: only
@@ -157,11 +181,11 @@ test("Key Station export failures reach the result's error slot without copying 
   const ui = keyExportHarness();
   const elements = { error: { textContent: "", hidden: true }, "key-core-importdescriptors-error": { textContent: "" } };
   ui.document = { getElementById: id => elements[id] };
-  ui.hodlFormatErrorSpec = spec => spec?.raw ?? "";
   ui.hodlErrorSpecFrom = error => ({ raw: error.message });
   ui.hodlSetWorkspaceError = (_, spec) => { elements.error.textContent = spec?.raw ?? ""; };
-  ui.copyText = () => { assert.fail("a refused export must not copy"); };
-  ui.Blob = class { constructor() { assert.fail("a refused export must not download"); } };
+  let copies = 0, downloads = 0;
+  ui.copyText = () => { copies++; return Promise.resolve(false); };
+  ui.Blob = class { constructor() { downloads++; } };
   const { account } = customAccount(84, "mainnet", 0, 2);
   account.receiveDescriptor = "invalid";
   account.addressBranches[0].publicDescriptor = "invalid";
@@ -170,6 +194,52 @@ test("Key Station export failures reach the result's error slot without copying 
     elements["key-core-importdescriptors-error"].textContent = "";
     handler("calc");
     assert.ok(elements["key-core-importdescriptors-error"].textContent, "failure was sent to a hidden input panel");
+    assert.equal(copies, 0);
+    assert.equal(downloads, 0);
+  }
+  ui.hodlCoreImportDescriptorsError("calc", null);
+  assert.equal(elements["key-core-importdescriptors-error"].textContent, "", "the real formatter must clear a prior error");
+  assert.equal(ui.hodlFormatErrorSpec(null), "");
+});
+
+// BIP32 CKDpub cannot derive a hardened child. Hardened key origins are
+// metadata; a branch xpub derived privately before export can still use /*.
+test("watch-only JSON refuses hardened steps after every public key", () => {
+  for (const version of [0x0488b21e, 0x043587cf, 0x04b24746, 0x02aa7ed3]) {
+    const raw = b58checkDecode(nodeB.publicExtendedKey);
+    new DataView(raw.buffer, raw.byteOffset, raw.byteLength).setUint32(0, version);
+    const key = b58checkEncode(raw);
+    for (const tail of ["0h/*", "0H/*", "0'/*", "0/1h/*", "*h", "*H", "*'"]) {
+      for (const body of [`wpkh(${key}/${tail})`, `wsh(sortedmulti(2,${keyA}/0/*,${key}/${tail}))`]) {
+        const descriptor = `${body}#${harnessChecksum(body)}`;
+        const unit = { descriptor, internal: false, active: true, rangeEnd: 1000 };
+        const reason = /hardened.*public key/i;
+        assert.throws(() => canonicalizeWatchDescriptor(descriptor, codec), reason);
+        assert.throws(() => buildImportDescriptorsJson({ receiveDescriptor: descriptor, ...codec }), reason);
+        assert.throws(() => buildImportDescriptorsJson({ descriptorUnits: [unit], branchHardened: true, ...codec }), reason);
+      }
+    }
+  }
+});
+
+test("Key Station refuses hardened public paths but keeps prederived hardened branches", () => {
+  const ui = keyExportHarness();
+  const { account } = customAccount(84, "mainnet", 2, 2, true);
+  ui.hodlWalletResult = { kind: "hd", accounts: [account] };
+  assert.deepEqual(parse(ui.hodlCoreImportDescriptorsJson("calc")).map(entry => entry.desc), account.addressBranches.map(entry => entry.publicDescriptor));
+  const body = `wpkh([${fingerprint}/84h/0h/0h]${nodeA.publicExtendedKey}/0h/*)`;
+  account.addressBranches[1].publicDescriptor = `${body}#${harnessChecksum(body)}`;
+  assert.throws(() => ui.hodlCoreImportDescriptorsJson("calc"), /hardened.*public key/i);
+});
+
+test("watch-only JSON preserves hardened origins and unhardened multi-step public paths", () => {
+  const branch = master.derive("m/84'/0'/0'/2'");
+  for (const body of [
+    `wpkh([${fingerprint}/84h/0h/0h/2h]${branch.publicExtendedKey}/*)`,
+    `sh(sortedmulti(1,${keyA}/0/0/*))`,
+  ]) {
+    const descriptor = `${body}#${harnessChecksum(body)}`;
+    assert.equal(parse(buildImportDescriptorsJson({ receiveDescriptor: descriptor }))[0].desc, descriptor);
   }
 });
 
@@ -488,6 +558,24 @@ test("wallet.dat export accepts watch-only msig and still ignores private materi
 
 // Core is the consumer of this JSON. Independently derived scure addresses
 // check both branches, including index 0 when the displayed window starts at 2.
+test("Bitcoin Core and JSON export refuse hardened derivation from xpub", { skip: !BITCOIND, timeout: 120000 }, async () => {
+  await withChainNode("regtest", cli => {
+    const rpc = (...args) => JSON.parse(cli(args).stdout);
+    rpc("-named", "createwallet", "wallet_name=refusals", "disable_private_keys=true", "blank=true");
+    const node = HDKey.fromMasterSeed(seed, { public: 0x043587cf, private: 0x04358394 }).derive("m/84'/1'/0'");
+    for (const tail of ["0h/*", "0'/*", "*h"]) {
+      const body = `wpkh([${fingerprint}/84h/1h/0h]${node.publicExtendedKey}/${tail})`;
+      const descriptor = `${body}#${harnessChecksum(body)}`;
+      const [result] = rpc("-rpcwallet=refusals", "importdescriptors", JSON.stringify([
+        { desc: descriptor, active: true, internal: false, timestamp: 0, range: [0, 1] },
+      ]));
+      assert.equal(result.success, false, "Core cannot derive hardened children from a public key");
+      assert.match(result.error.message, /hardened/i);
+      assert.throws(() => buildImportDescriptorsJson({ receiveDescriptor: descriptor }), /hardened.*public key/i);
+    }
+  });
+});
+
 for (const network of Object.keys(CHAIN_FIXTURES)) {
   test(`Bitcoin Core imports Key Station JSON on ${network}`, { skip: !BITCOIND, timeout: 120000 }, async () => {
     const ui = keyExportHarness(), mainnet = network === "mainnet";
