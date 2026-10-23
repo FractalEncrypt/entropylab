@@ -169,8 +169,28 @@ export const auditSchema = {
   additionalProperties: false,
 };
 
-// One chat-completions call. Retries once on network errors and 429/5xx.
-export async function chat({ url, key, model, name, schema, messages }) {
+// One chat-completions call. Retries transient failures — network errors,
+// HTTP 429/5xx, empty or unparseable content — up to 5 attempts in total,
+// waiting 2 s, 4 s, 8 s, 16 s between attempts; a 429 or 503 that carries a
+// Retry-After header (seconds) is honoured instead, capped at 60 s. A
+// non-retryable 4xx fails at once, as before. `sleep` is injectable so tests
+// never really wait; call sites without it use a real timer.
+const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const BACKOFF_MS = [2000, 4000, 8000, 16000];
+const MAX_RETRY_AFTER_MS = 60000;
+
+// A Retry-After header in seconds, capped; anything else (absent, empty, an
+// HTTP-date, garbage) falls back to the exponential backoff. A missing header
+// reads as null, and Number(null) is 0, so it must be checked before parsing.
+const retryAfterMs = (response) => {
+  const header = response.headers?.get("retry-after");
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+};
+
+export async function chat({ url, key, model, name, schema, messages, sleep = realSleep }) {
   const body = JSON.stringify({
     model,
     messages,
@@ -178,7 +198,9 @@ export async function chat({ url, key, model, name, schema, messages }) {
     response_format: { type: "json_schema", json_schema: { name, schema, strict: true } },
   });
   let lastError;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let waitMs;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await sleep(waitMs);
     let response;
     try {
       response = await fetch(url, {
@@ -188,15 +210,26 @@ export async function chat({ url, key, model, name, schema, messages }) {
       });
     } catch (error) {
       lastError = error;
+      waitMs = BACKOFF_MS[attempt];
       continue;
     }
     if (response.ok) {
-      const data = await response.json();
+      // A body cut off in transit ("Unexpected end of JSON input", run
+      // 39891870190's Spanish failure) is the same transient class: retry it.
+      let data;
+      try {
+        data = await response.json();
+      } catch (error) {
+        lastError = error;
+        waitMs = BACKOFF_MS[attempt];
+        continue;
+      }
       let content = data?.choices?.[0]?.message?.content;
       if (typeof content !== "string") {
         // An empty choice (provider cut the stream to nothing) is the same
         // transient class as a truncated one — retry it, don't fail the run.
         lastError = new Error("LLM response carried no message content");
+        waitMs = BACKOFF_MS[attempt];
         continue;
       }
       // Providers sometimes wrap the JSON in markdown fences, and a slow or
@@ -208,11 +241,14 @@ export async function chat({ url, key, model, name, schema, messages }) {
         return JSON.parse(content);
       } catch (error) {
         lastError = error;
+        waitMs = BACKOFF_MS[attempt];
         continue;
       }
     }
     lastError = new Error(`LLM request failed: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
     if (response.status !== 429 && response.status < 500) break;
+    waitMs = BACKOFF_MS[attempt];
+    if (response.status === 429 || response.status === 503) waitMs = retryAfterMs(response) ?? waitMs;
   }
   throw lastError;
 }

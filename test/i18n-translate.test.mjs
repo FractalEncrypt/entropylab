@@ -426,14 +426,15 @@ test("an arrival equal to its exact correction lands even when the audit rejects
   }
 });
 
-test("chat(): wire format carries the strict JSON schema and bearer auth, and retries 5xx once", async () => {
+test("chat(): wire format carries the strict JSON schema and bearer auth, and retries transient 5xx with backoff", async () => {
   const seen = [];
+  const delays = [];
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       seen.push({ auth: req.headers.authorization, body: JSON.parse(body) });
-      if (seen.length === 1) {
+      if (seen.length < 5) {
         res.writeHead(500).end("boom");
         return;
       }
@@ -445,10 +446,11 @@ test("chat(): wire format carries the strict JSON schema and bearer auth, and re
   try {
     const url = `http://127.0.0.1:${server.address().port}/v1/chat/completions`;
     const schema = translationSchema(["Save", "Cancel"]);
-    const out = await chat({ url, key: "sk-test", model: "m/test", name: "translate", schema, messages: [{ role: "user", content: "x" }] });
+    const out = await chat({ url, key: "sk-test", model: "m/test", name: "translate", schema, messages: [{ role: "user", content: "x" }], sleep: async (ms) => { delays.push(ms); } });
     assert.deepEqual(out, { ok: true });
-    assert.equal(seen.length, 2, "one retry after the 500");
-    const sent = seen[1];
+    assert.equal(seen.length, 5, "four retries after the 500s, then success");
+    assert.deepEqual(delays, [2000, 4000, 8000, 16000], "exponential backoff between attempts");
+    const sent = seen[4];
     assert.equal(sent.auth, "Bearer sk-test");
     assert.equal(sent.body.model, "m/test");
     assert.equal(sent.body.temperature, 0);
@@ -463,11 +465,124 @@ test("chat(): wire format carries the strict JSON schema and bearer auth, and re
 });
 
 test("chat(): a non-retryable 4xx fails immediately", async () => {
+  const delays = [];
   const server = createServer((req, res) => res.writeHead(401).end("unauthorized"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const url = `http://127.0.0.1:${server.address().port}/`;
-    await assert.rejects(() => chat({ url, key: "k", model: "m", name: "t", schema: translationSchema(["a"]), messages: [] }), /HTTP 401/);
+    await assert.rejects(() => chat({ url, key: "k", model: "m", name: "t", schema: translationSchema(["a"]), messages: [], sleep: async (ms) => { delays.push(ms); } }), /HTTP 401/);
+    assert.deepEqual(delays, [], "a non-retryable 4xx never waits");
+  } finally {
+    server.close();
+  }
+});
+
+// A brief upstream rate limit (HTTP 429) must not fail a language: the call
+// backs off and retries, so one blip cannot block the publish job for every
+// language. The waits go through an injected sleep so the tests never really
+// wait; the delays they record are the contract.
+test("chat(): a 429 then success returns the result after one backoff wait", async () => {
+  const seen = [];
+  const delays = [];
+  const server = createServer((req, res) => {
+    seen.push(1);
+    if (seen.length === 1) {
+      res.writeHead(429).end("temporarily rate-limited upstream. Please retry shortly");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message: { content: "{\"ok\": true}" } }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const out = await chat({ url, key: "k", model: "m", name: "t", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } });
+    assert.deepEqual(out, { ok: true });
+    assert.equal(seen.length, 2, "one retry after the 429");
+    assert.deepEqual(delays, [2000], "the retry waits out the first backoff step");
+  } finally {
+    server.close();
+  }
+});
+
+test("chat(): four 429s then success still returns the result", async () => {
+  const seen = [];
+  const delays = [];
+  const server = createServer((req, res) => {
+    seen.push(1);
+    if (seen.length < 5) {
+      res.writeHead(429).end("temporarily rate-limited upstream. Please retry shortly");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message: { content: "{\"ok\": true}" } }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const out = await chat({ url, key: "k", model: "m", name: "t", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } });
+    assert.deepEqual(out, { ok: true });
+    assert.equal(seen.length, 5, "the fifth attempt succeeds");
+    assert.deepEqual(delays, [2000, 4000, 8000, 16000], "backoff doubles up to the fourth wait");
+  } finally {
+    server.close();
+  }
+});
+
+test("chat(): five 429s fail with the last error", async () => {
+  const seen = [];
+  const delays = [];
+  const server = createServer((req, res) => {
+    seen.push(1);
+    res.writeHead(429).end("temporarily rate-limited upstream. Please retry shortly");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    await assert.rejects(() => chat({ url, key: "k", model: "m", name: "t", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), /HTTP 429/);
+    assert.equal(seen.length, 5, "no sixth attempt");
+    assert.deepEqual(delays, [2000, 4000, 8000, 16000]);
+  } finally {
+    server.close();
+  }
+});
+
+test("chat(): a Retry-After header on a 429 replaces the backoff wait", async () => {
+  const seen = [];
+  const delays = [];
+  const server = createServer((req, res) => {
+    seen.push(1);
+    if (seen.length === 1) {
+      res.writeHead(429, { "retry-after": "3" }).end("temporarily rate-limited upstream. Please retry shortly");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message: { content: "{\"ok\": true}" } }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const out = await chat({ url, key: "k", model: "m", name: "t", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } });
+    assert.deepEqual(out, { ok: true });
+    assert.deepEqual(delays, [3000], "the server's Retry-After is honoured over the 2 s step");
+  } finally {
+    server.close();
+  }
+});
+
+test("chat(): a 400 fails after one attempt with no wait", async () => {
+  const seen = [];
+  const delays = [];
+  const server = createServer((req, res) => {
+    seen.push(1);
+    res.writeHead(400).end("bad request");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    await assert.rejects(() => chat({ url, key: "k", model: "m", name: "t", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), /HTTP 400/);
+    assert.equal(seen.length, 1, "a bad request is never retried");
+    assert.deepEqual(delays, []);
   } finally {
     server.close();
   }
@@ -489,17 +604,45 @@ test("chat strips markdown fences and retries a truncated response", async () =>
   try {
     const [calls, fenced] = stubFetch(["```json\n{\"a\": 1}\n```"]);
     globalThis.fetch = fenced;
-    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [] }), { a: 1 });
+    const fencedDelays = [];
+    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { fencedDelays.push(ms); } }), { a: 1 });
+    assert.deepEqual(fencedDelays, []);
 
     const [retryCalls, truncThenGood] = stubFetch(["{\"a\": ", "{\"a\": 2}"]);
     globalThis.fetch = truncThenGood;
-    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [] }), { a: 2 });
+    const truncDelays = [];
+    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { truncDelays.push(ms); } }), { a: 2 });
     assert.equal(retryCalls.length, 2, "a truncated response was not retried");
+    assert.deepEqual(truncDelays, [2000], "the retry waits out the first backoff step");
 
     const [garbageCalls, garbage] = stubFetch(["not json at all"]);
     globalThis.fetch = garbage;
-    await assert.rejects(() => chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [] }));
-    assert.equal(garbageCalls.length, 2, "persistent garbage was not attempted exactly twice");
+    const garbageDelays = [];
+    await assert.rejects(() => chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { garbageDelays.push(ms); } }));
+    assert.equal(garbageCalls.length, 5, "persistent garbage is attempted at most five times");
+    assert.deepEqual(garbageDelays, [2000, 4000, 8000, 16000]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("chat(): an OK response whose body is cut off retries instead of failing the language", async () => {
+  // Translate run 39891870190: Spanish failed with "Unexpected end of JSON
+  // input", thrown by response.json() before any retry could run.
+  const realFetch = globalThis.fetch;
+  try {
+    const calls = [];
+    globalThis.fetch = async () => {
+      calls.push(1);
+      return { ok: true, status: 200, json: async () => {
+        if (calls.length === 1) throw new SyntaxError("Unexpected end of JSON input");
+        return { choices: [{ message: { content: "{\"ok\": true}" } }] };
+      } };
+    };
+    const delays = [];
+    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), { ok: true });
+    assert.equal(calls.length, 2, "a cut-off body was not retried");
+    assert.deepEqual(delays, [2000]);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -517,8 +660,10 @@ test("chat(): an empty response retries like a truncated one", async () => {
         ? { choices: [{ message: {} }] }
         : { choices: [{ message: { content: "{\"ok\": true}" } }] }) };
     };
-    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [] }), { ok: true });
+    const delays = [];
+    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), { ok: true });
     assert.equal(calls.length, 2, "an empty response was not retried");
+    assert.deepEqual(delays, [2000], "the retry waits out the first backoff step");
   } finally {
     globalThis.fetch = realFetch;
   }
