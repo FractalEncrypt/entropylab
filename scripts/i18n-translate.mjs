@@ -245,7 +245,15 @@ export async function chat({ url, key, model, name, schema, messages, sleep = re
         continue;
       }
     }
-    lastError = new Error(`LLM request failed: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
+    // The error body can be cut off in transit too (GLM 5.3 and Kimi K3 on
+    // #1067): read it best-effort, so a retryable status is still retried.
+    let detail = "";
+    try {
+      detail = (await response.text()).slice(0, 200);
+    } catch {
+      detail = "(error body cut off)";
+    }
+    lastError = new Error(`LLM request failed: HTTP ${response.status} ${detail}`);
     if (response.status !== 429 && response.status < 500) break;
     waitMs = BACKOFF_MS[attempt];
     if (response.status === 429 || response.status === 503) waitMs = retryAfterMs(response) ?? waitMs;

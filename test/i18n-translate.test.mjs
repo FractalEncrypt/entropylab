@@ -648,6 +648,28 @@ test("chat(): an OK response whose body is cut off retries instead of failing th
   }
 });
 
+test("chat(): a 503 whose error body is cut off is still retried", async () => {
+  // GLM 5.3 and Kimi K3 on #1067: response.text() in the error branch ran
+  // outside any guard, so a dropped connection escaped the retry loop.
+  const realFetch = globalThis.fetch;
+  try {
+    const calls = [];
+    globalThis.fetch = async () => {
+      calls.push(1);
+      if (calls.length === 1) {
+        return { ok: false, status: 503, headers: { get: () => null }, text: async () => { throw new TypeError("terminated"); } };
+      }
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "{\"ok\": true}" } }] }) };
+    };
+    const delays = [];
+    assert.deepEqual(await chat({ url: "https://x", key: "k", model: "m", name: "n", schema: {}, messages: [], sleep: async (ms) => { delays.push(ms); } }), { ok: true });
+    assert.equal(calls.length, 2, "a 503 with a cut-off body was not retried");
+    assert.deepEqual(delays, [2000]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("chat(): an empty response retries like a truncated one", async () => {
   const realFetch = globalThis.fetch;
   try {
