@@ -801,6 +801,28 @@ test("a stored passphrase is shown as bullets, and clearing empties both", () =>
   assert.equal(field.value, "");
 });
 
+// Deep sweep of cb18b09 (Muse Spark, GLM 5.3, DeepSeek V4.1; confirmed by
+// Claude): vault.setBytes clears the vault FIRST and then throws on invalid
+// UTF-8, and the field API's setBytes let the throw skip its render — the
+// field kept showing the previous passphrase's mask (or text) over an empty
+// vault, so the screen said a passphrase was set while derivation used the
+// empty one. A refusal must empty the field with the vault.
+test("a refused setBytes empties the field with the vault", () => {
+  const { field, vault, api } = bound();
+  api.setBytes(utf8("stored 🔑"));
+  masked(field, vault);
+  assert.throws(() => api.setBytes(Uint8Array.of(0xff)), /not valid UTF-8/);
+  assert.equal(vault.length, 0);
+  assert.equal(field.value, "", "the field must not keep the previous mask over an empty vault");
+  // Inactive (plain) mode: the field held the passphrase as text.
+  const plain = bound(() => false);
+  plain.api.setBytes(utf8("stored words"));
+  assert.equal(plain.field.value, "stored words");
+  assert.throws(() => plain.api.setBytes(Uint8Array.of(0xff)), /not valid UTF-8/);
+  assert.equal(plain.vault.length, 0);
+  assert.equal(plain.field.value, "", "the field must not keep the previous text over an empty vault");
+});
+
 // BIP39: PBKDF2-HMAC-SHA512(NFKD(mnemonic), NFKD("mnemonic" + passphrase)).
 const MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const TREZOR_SEED = "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";

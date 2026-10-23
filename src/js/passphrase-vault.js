@@ -422,7 +422,15 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
     // Script-side: the field shows `bytes` (a stored passphrase), or nothing.
     setBytes: (bytes) => {
       endComposition();
-      vault.setBytes(bytes);
+      try {
+        vault.setBytes(bytes);
+      } catch (error) {
+        // The refusal left the vault empty: the field must not keep showing
+        // the previous passphrase's mask (or text) over it.
+        if (active()) render(0);
+        else field.value = "";
+        throw error;
+      }
       if (active()) render(vault.length);
       else {
         field.value = vault.text();
