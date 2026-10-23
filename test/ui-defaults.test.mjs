@@ -1,5 +1,40 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+test("hodlPassphraseHasLineBreak reads the vault, not the field API", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlPassphraseHasLineBreak()");
+  assert.ok(start >= 0, "hodlPassphraseHasLineBreak is defined");
+  const end = source.indexOf("\n}", start);
+  assert.ok(end > start, "hodlPassphraseHasLineBreak has a body");
+  const body = source.slice(start, end);
+  assert.ok(!body.includes("hodlPassphraseVaultField.bytes"), "must not call the field API's bytes()");
+  assert.ok(body.includes("hodlPassphraseVault.bytes()"), "must read the vault's bytes");
+});
+
+// The line-break check must read the held bytes, never decode them to text:
+// a string of the passphrase cannot be wiped.
+test("passphrase line-break check does not decode the passphrase to text", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlPassphraseHasLineBreak(");
+  assert.ok(start >= 0, "hodlPassphraseHasLineBreak is defined");
+  const end = source.indexOf("\n}", start);
+  assert.ok(end > start, "hodlPassphraseHasLineBreak has a body");
+  assert.doesNotMatch(source.slice(start, end), /hodlPassphraseText|hodlTypedText/);
+});
+
+// The Key Station says why a passphrase with a line break cannot be edited as
+// BIP39 words: a private note under the switch, hidden until it applies.
+test("the passphrase line-break warning is a hidden private note", async () => {
+  const { readFileSync } = await import("node:fs");
+  const app = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const note = app.match(/<p class="edge-note is-private" id="passphrase-linebreak-warning"[^>]*>/);
+  assert.ok(note, "the warning note is in the BIP39-words markup");
+  assert.match(note[0], /data-passphrase-linebreak-warning/);
+  assert.match(note[0], /\bhidden\b/);
+});
 import { readFileSync } from "node:fs";
 import { transformSync } from "esbuild";
 import { hodlKeyModeLabels } from "../src/js/i18n-labels.js";
