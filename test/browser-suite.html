@@ -2818,7 +2818,13 @@
           tabs.scrollLeft = selected.offsetLeft;
           for (const target of [selected, field]) {
             target.focus({ preventScroll: true });
-            await wait(180);
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            void getComputedStyle(field).borderTopColor;
+            const animated = [field, ...tabs.querySelectorAll('[role="tab"]')];
+            await until(
+              () => animated.every((el) => el.getAnimations().every((animation) => animation.playState !== "running" && animation.playState !== "pending")),
+              "Journal edge transitions must settle",
+            );
             const editor = getComputedStyle(field), tab = getComputedStyle(selected);
             equal(editor.resize, "vertical", "Notes resize must preserve their width");
             for (const edge of ["Top", "Left", "Right"]) {
