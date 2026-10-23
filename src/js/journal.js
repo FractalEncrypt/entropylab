@@ -148,6 +148,15 @@ export function serializeNotebook(journal) {
       content: journalNotebookRuns(page.notesText),
     })),
   };
+  for (const page of document.pages) {
+    // parseNotebook refuses a page over the read cap; a save that produced
+    // one would hand back a file the app cannot open.
+    try {
+      journalTextFromRuns(page.content);
+    } catch {
+      throw new Error("A notebook page is too large to save.");
+    }
+  }
   return JSON.stringify(document, null, 2) + "\n";
 }
 
@@ -355,6 +364,12 @@ export const JOURNAL_CIPHER = "AES-256-GCM";
 export const JOURNAL_ITERATIONS = 600_000; // OWASP 2023 floor for PBKDF2-HMAC-SHA-256
 export const JOURNAL_MIN_ITERATIONS = 100_000; // never open a file cheaper than this
 export const JOURNAL_MAX_ITERATIONS = 10_000_000; // a crafted file must not hang the page
+// Size caps mirroring the notebook's discipline (NOTEBOOK_MAX_PAGES /
+// NOTEBOOK_MAX_TEXT_LENGTH): generous for real journals, hard for hostile
+// ones — nothing on the open path may allocate without bound (audit L9).
+export const JOURNAL_MAX_ENTRIES = 1000;
+export const JOURNAL_MAX_FILE_LENGTH = 4 * 1024 * 1024;
+export const JOURNAL_MAX_TEXT_LENGTH = 1024 * 1024;
 export const JOURNAL_SALT_PREFIX = "entropylab-journal-salt-v1:";
 export const IV_BYTES = 12;
 export const METHODS = Object.freeze(["dice", "coin", "hex", "brain", "seed", "cards"]);
@@ -469,8 +484,7 @@ export async function deriveJournalKeys(password, iterations = JOURNAL_ITERATION
   try {
     const encKey = await subtle.importKey("raw", master.subarray(0, 32), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
     const ivKey = await subtle.importKey("raw", master.subarray(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const verify = new Uint8Array(await subtle.digest("SHA-256", master));
-    return { encKey, ivKey, verify, iterations, passwordProtected: password.length > 0 };
+    return { encKey, ivKey, iterations, passwordProtected: password.length > 0 };
   } finally {
     wipeBytes(master);
   }
@@ -483,23 +497,28 @@ export function emptyDocument() {
 export function normalizeEntry(entry, now = new Date()) {
   const method = String(entry?.method || "").trim();
   if (!METHODS.includes(method)) throw new Error("Journal method must be dice, coin, hex, brain, seed, or cards.");
-  const label = String(entry?.label ?? "").trim();
+  const bounded = (value, what) => {
+    const text = String(value ?? "");
+    if (text.length > JOURNAL_MAX_TEXT_LENGTH) throw new Error(`A journal entry's ${what} is too large.`);
+    return text;
+  };
+  const label = bounded(entry?.label, "label").trim();
   if (!label) throw new Error("Every journal entry needs a label.");
   const created = entry?.created ? String(entry.created) : now.toISOString();
   if (!/^\d{4}-\d{2}-\d{2}T/.test(created)) throw new Error("Journal timestamp must be ISO-8601.");
   const walletId = entry?.walletId == null || entry.walletId === "" ? null : Number(entry.walletId);
   if (walletId != null && (!Number.isInteger(walletId) || walletId < 0)) throw new Error("Session wallet id must be a whole number.");
   const normalized = {
-    id: Number.isInteger(entry?.id) && entry.id > 0 ? entry.id : 0,
+    id: Number.isSafeInteger(entry?.id) && entry.id > 0 ? entry.id : 0,
     method,
-    input: String(entry?.input ?? ""),
-    phrase: String(entry?.phrase ?? ""),
+    input: bounded(entry?.input, "input"),
+    phrase: bounded(entry?.phrase, "phrase"),
     label,
-    notes: String(entry?.notes ?? ""),
+    notes: bounded(entry?.notes, "notes"),
     created,
     walletId,
-    walletName: String(entry?.walletName ?? ""),
-    fingerprint: String(entry?.fingerprint ?? "").toLowerCase(),
+    walletName: bounded(entry?.walletName, "wallet name"),
+    fingerprint: bounded(entry?.fingerprint, "fingerprint").toLowerCase(),
   };
   const variantField = METHOD_VARIANT_FIELD[method] || "";
   for (const field of Object.keys(ENTRY_VARIANTS)) {
@@ -511,7 +530,15 @@ export function normalizeEntry(entry, now = new Date()) {
 
 export function addEntry(doc, fields, now = new Date()) {
   if (!doc || !Array.isArray(doc.entries)) throw new Error("Journal document is missing.");
-  const entry = normalizeEntry({ ...fields, id: doc.nextId || 1 }, now);
+  if (doc.entries.length >= JOURNAL_MAX_ENTRIES) throw new Error(`A journal holds at most ${JOURNAL_MAX_ENTRIES} entries.`);
+  // The counter is repaired on open, but a document built elsewhere could
+  // still carry one below an existing id.
+  const highest = doc.entries.reduce((max, entry) => Math.max(max, Number(entry?.id) || 0), 0);
+  // Above 2**53 a counter stops advancing; refuse before the document changes
+  // so a failed add leaves a saveable state behind.
+  const id = Math.max(Number.isSafeInteger(doc.nextId) && doc.nextId > 0 ? doc.nextId : 1, highest + 1);
+  if (!Number.isSafeInteger(id)) throw new Error("Journal entry ids are past the safe integer range.");
+  const entry = normalizeEntry({ ...fields, id }, now);
   doc.entries = [...doc.entries, entry];
   doc.nextId = entry.id + 1;
   return entry;
@@ -677,6 +704,7 @@ export function encodeFile({ iv, ciphertext, iterations = JOURNAL_ITERATIONS }) 
 }
 
 export function parseFile(text) {
+  if (typeof text === "string" && text.length > JOURNAL_MAX_FILE_LENGTH) throw new Error("That journal file is too large to open.");
   let parsed;
   try {
     parsed = typeof text === "string" ? JSON.parse(text) : text;
@@ -701,7 +729,8 @@ export function parseFile(text) {
   return { iv, ciphertext, iterations: parsed.iterations };
 }
 
-function parseDocument(plain) {
+export function parseDocument(plain) {
+  if (plain.length > JOURNAL_MAX_TEXT_LENGTH) throw new Error("The journal file is too large to open.");
   let parsed;
   try {
     parsed = JSON.parse(plain);
@@ -711,9 +740,31 @@ function parseDocument(plain) {
   if (!parsed || parsed.version !== JOURNAL_VERSION || !Array.isArray(parsed.entries)) {
     throw new Error("The journal file is corrupt.");
   }
-  const nextId = Number.isInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
+  if (parsed.entries.length > JOURNAL_MAX_ENTRIES) {
+    throw new Error(`A journal holds at most ${JOURNAL_MAX_ENTRIES} entries.`);
+  }
+  const nextId = Number.isSafeInteger(parsed.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
   const entries = parsed.entries.map((entry) => normalizeEntry(entry));
-  return { version: JOURNAL_VERSION, nextId, entries };
+  // The id keys the list: the view, edit and delete paths take the first
+  // match, so a repeat would make one entry unreachable, and id 0 is falsy at
+  // the editor's add-or-replace fork. An id that is missing or outside the
+  // safe range is given the lowest free positive one, which keeps the entry
+  // editable in place. `nextId` is only a counter, so a stale one is repaired.
+  const ids = new Set();
+  for (const entry of entries) {
+    if (!entry.id) continue;
+    if (ids.has(entry.id)) throw new Error("That journal file has duplicate entry ids.");
+    ids.add(entry.id);
+  }
+  let spare = 0;
+  for (const entry of entries) {
+    if (entry.id) continue;
+    do spare++; while (ids.has(spare));
+    entry.id = spare;
+    ids.add(spare);
+  }
+  const highest = Math.max(0, ...ids);
+  return { version: JOURNAL_VERSION, nextId: Math.max(nextId, highest + 1), entries };
 }
 
 // The IV is a synthetic nonce — HMAC-SHA-256 of the plaintext under its own
@@ -729,7 +780,15 @@ async function sealPlainText(plainText, keys) {
     try {
       const iv = tag.slice(0, IV_BYTES);
       const ciphertext = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, keys.encKey, plain));
-      return encodeFile({ iv, ciphertext, iterations: keys.iterations });
+      const file = encodeFile({ iv, ciphertext, iterations: keys.iterations });
+      // parseFile caps the text it is handed, and every download writes
+      // JSON.stringify(file, null, 2) + "\n": a plaintext under the cap can
+      // still grow past the file cap through UTF-8 expansion and hex coding.
+      // Refuse here so a save never produces a file the reader rejects.
+      if (JSON.stringify(file, null, 2).length + 1 > JOURNAL_MAX_FILE_LENGTH) {
+        throw new Error("The journal is too large to save as one file.");
+      }
+      return file;
     } finally {
       wipeBytes(tag);
     }
@@ -739,11 +798,15 @@ async function sealPlainText(plainText, keys) {
 }
 
 export async function sealDocument(doc, keys) {
-  return sealPlainText(JSON.stringify({
+  const plain = JSON.stringify({
     version: JOURNAL_VERSION,
     nextId: doc.nextId,
     entries: doc.entries,
-  }), keys);
+  });
+  // parseDocument refuses a plaintext over the read cap, so a save must not
+  // create a file that the app then reports as too large to open.
+  if (plain.length > JOURNAL_MAX_TEXT_LENGTH) throw new Error("The journal is too large to save as one file.");
+  return sealPlainText(plain, keys);
 }
 
 export async function sealExport(kind, content, keys) {

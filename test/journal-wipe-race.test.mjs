@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  JOURNAL_MAX_FILE_LENGTH,
   JOURNAL_MIN_ITERATIONS,
   addEntry,
   createDocument,
@@ -62,6 +63,7 @@ const varLine = (name) => {
 const source = [
   varLine("hodlJournalKeys"),
   varLine("hodlJournalGeneration"),
+  varLine("hodlJournalUnlockBusy"),
   varLine("hodlJournalFileRead"),
   varLine("hodlJournalTool"),
   varLine("hodlJournalEncryptDownloads"),
@@ -89,7 +91,7 @@ const loadApp = ({ onOpen = (file, password) => openDocument(file, password), on
   const documentStub = { getElementById: (id) => fields[id] ?? null };
   const api = new Function(
     "wipeJournal", "hodlJournal", "hodlJournalWipeDocument", "hodlJournalWipeBytes",
-    "hodlJournalOpenDocument", "hodlJournalCreateDocument", "document",
+    "hodlJournalOpenDocument", "hodlJournalCreateDocument", "hodlJournalMaxFileLength", "document",
     "hodlKeyManagerReset", "hodlJournalClearFields", "hodlJournalHideEditor", "hodlJournalSetGate",
     "hodlJournalSyncEncryptDownloads", "hodlJournalShowWork", "hodlSyncJournalTool",
     "hodlRenderJournalPageTabs", "hodlJournalApplyPageStyle", "hodlJournalSetStatus",
@@ -104,7 +106,7 @@ const loadApp = ({ onOpen = (file, password) => openDocument(file, password), on
     };`,
   )(
     wipeJournal, createJournal(), wipeDocument, wipeBytes,
-    onOpen, onCreate, documentStub,
+    onOpen, onCreate, JOURNAL_MAX_FILE_LENGTH, documentStub,
     noop, noop, noop, noop,
     noop, noop, noop,
     noop, noop, noop,
@@ -138,7 +140,6 @@ test("an unlock that completes after a wipe discards the decrypted notebook (iss
   assert.deepEqual(env.state(), { keys: null, doc: null }, "the journal stays locked");
   assert.ok(captured, "decryption did complete");
   assert.equal(captured.doc.entries.length, 0, "the discarded document was wiped, not kept");
-  assert.ok(captured.keys.verify.every((byte) => byte === 0), "the discarded verify digest was wiped");
 });
 
 test("an undisturbed unlock still installs the notebook", async () => {
@@ -155,7 +156,7 @@ test("an undisturbed unlock still installs the notebook", async () => {
   assert.ok(env.state().keys && env.state().doc, "unlocked");
   assert.equal(env.state().doc.entries.length, 1);
   assert.equal(env.state().doc.entries[0].label, "seed entry");
-  assert.ok(captured.keys.verify.some((byte) => byte !== 0), "a live session keeps its digest");
+  assert.ok(captured.keys, "the discarded keys object still existed to be dropped");
 });
 
 test("a create that completes after a wipe discards the new notebook (issue #389)", async () => {
@@ -171,7 +172,7 @@ test("a create that completes after a wipe discards the new notebook (issue #389
   env.wipeMem();
   await pending;
   assert.deepEqual(env.state(), { keys: null, doc: null }, "the journal stays locked");
-  assert.ok(captured?.keys.verify.every((byte) => byte === 0), "the discarded verify digest was wiped");
+  assert.ok(captured, "the create did complete and its keys object was dropped");
 });
 
 test("an undisturbed create still installs the notebook", async () => {

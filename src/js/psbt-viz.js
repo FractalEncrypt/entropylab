@@ -26,6 +26,67 @@ import { publicValueHtml } from "./public-data.js";
 const escapeHtml = (text) =>
   String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+// Display cap for every PSBT view's per-element rendering (the editor's
+// tables and map sections import this). A crafted PSBT passes the 5 MB /
+// 100k-element load gates with tens of thousands of inputs, and building one
+// box, table row and map section per element hangs the tab (red-team F7).
+// Totals, fees, warnings and every analysis still cover ALL elements — only
+// rendering stops at the cap, with the elided count noted under the list.
+export const PSBT_RENDER_LIMIT = 500;
+
+// The PSBT Inspector shows more per list than the other views. Measured
+// 2026-10-22, rendering an input there costs about 0.2 ms on a desktop and
+// 1.3 ms with the CPU throttled 4x (a phone), against about 2.7 and 22 ms in
+// the Editor. 2,000 keeps every standard transaction (about 1,400 P2WPKH
+// inputs fit in 100 kvB) on one screen, and each "Show 2,000 more" button
+// grows the window by the same step.
+export const PSBT_INSPECTOR_LIMIT = 2000;
+
+// One total render budget per view (red-team F7, round 4): the per-list cap
+// bounds one list, but nested lists multiply — 500 capped map sections of
+// 200 pairs still render 100,000 rows. The budget bounds the whole view:
+// every row, map section and diagram box spends one unit, lists render in
+// document order, and when the budget is spent the view stops rendering and
+// one muted line notes how much was elided (counted, never rendered).
+// Analysis, totals and verdicts still cover every element.
+export const PSBT_RENDER_BUDGET = 2000;
+
+export const renderBudget = (units = PSBT_RENDER_BUDGET) => {
+  let left = units;
+  return {
+    // Spend up to `count` units; returns how many were granted (0 once spent).
+    take: (count = 1) => {
+      const granted = Math.max(0, Math.min(count, left));
+      left -= granted;
+      return granted;
+    },
+    get left() {
+      return left;
+    },
+    get spent() {
+      return left <= 0;
+    },
+  };
+};
+
+// The one capped-list renderer every PSBT view shares: the first
+// PSBT_RENDER_LIMIT items rendered by renderOne, then — when more exist — a
+// single muted line noting how many were elided (n as a plain integer).
+// Analysis, totals and verdicts are computed by the callers over ALL items
+// before this runs; only rendering stops at the cap. app.js passes `line`
+// so the elision text goes through hodlT like its existing input/output
+// lines; the plain modules use the default line built from `noun`. A caller
+// holding the view's render budget passes it as `budget`: the rendered items
+// spend from it, and the elision line then also counts what the budget cut.
+export const cappedHtml = (items, renderOne, noun, line, budget) => {
+  const granted = budget ? budget.take(Math.min(items.length, PSBT_RENDER_LIMIT)) : Math.min(items.length, PSBT_RENDER_LIMIT);
+  const shown = items.slice(0, granted).map(renderOne).join("");
+  const more = items.length - granted;
+  if (more <= 0) return shown;
+  const text = line ? line(more) : `…and ${more} more ${noun} (not rendered).`;
+  return shown + `<p class="muted">${text}</p>`;
+};
+
 // One renderer for the whole app: rust-bitcoin's Address::from_script via
 // the entropylab-wasm crate, exactly what the inspector shows — exotic
 // witness programs (off-curve v1 keys, v1 ≠ 32 bytes, v2–v16) get their
@@ -89,14 +150,23 @@ export const witnessProgramNote = (scriptHex) => {
 // The editor summary's notes for those outputs, one per output, each on its
 // own line after the transaction's validity line.
 const NOTE_STYLE = { warn: ["psbted-note-warn", "⚠ "], bad: ["psbted-note-bad", "✕ "], info: ["muted", ""] };
-export const psbtOutputNotesHtml = (doc) => (doc?.tx?.outputs ?? [])
-  .map((output, index) => {
-    const found = witnessProgramNote(output.scriptPubKey);
-    if (!found) return "";
-    const [className, mark] = NOTE_STYLE[found.tone];
-    return `<br><span class="${className}">${mark}${escapeHtml(found.note(index))}</span>`;
-  })
-  .join("");
+export const psbtOutputNotesHtml = (doc, budget) => {
+  // Every output is classified (the analysis covers all of them); only the
+  // rendered notes are capped — a crafted PSBT can carry an undefined
+  // witness program on tens of thousands of outputs (red-team F7).
+  const notes = (doc?.tx?.outputs ?? [])
+    .map((output, index) => {
+      const found = witnessProgramNote(output.scriptPubKey);
+      if (!found) return null;
+      const [className, mark] = NOTE_STYLE[found.tone];
+      return `<br><span class="${className}">${mark}${escapeHtml(found.note(index))}</span>`;
+    })
+    .filter((note) => note !== null);
+  // The caller passes the view's render budget when the notes render inside
+  // one (the editor's summary): the notes spend from it like every other
+  // list, so they cannot push the view past the budget (red-team F7 round 6).
+  return cappedHtml(notes, (note) => note, "notes", undefined, budget);
+};
 
 // Well-known script templates, tagged like a block explorer would, then the
 // undefined witness programs above. Anything else returns null and the box
@@ -114,17 +184,26 @@ const scriptKind = (scriptHex, asm) => {
 
 // The amount an input claims to spend, resolved as a set so map order cannot
 // change the answer (issue #324): when both a witness UTXO and a verified
-// non-witness UTXO claim exist they must agree, otherwise the box shows a
-// conflict warning instead of picking one. The verified non-witness claim's
-// script wins the label when both are present and consistent. Pairs that
-// fail their typed decode claim nothing.
+// non-witness UTXO claim exist they must agree on amount AND scriptPubKey —
+// the consensus layer (psbt-wasm verify.rs, utxo_claim_conflict) treats a
+// same-amount/different-script pair as conflicting too — otherwise the box
+// shows a conflict warning instead of picking one. The verified non-witness
+// claim's script wins the label when both are present and consistent. Pairs
+// that fail their typed decode claim nothing.
 const claimedPrevout = (pairs) => {
-  const witness = pairs.find((pair) => pair.name === "PSBT_IN_WITNESS_UTXO" && pair.decoded);
-  const nonWitness = pairs.find((pair) => pair.name === "PSBT_IN_NON_WITNESS_UTXO" && pair.decoded?.prevout);
-  const witnessClaim = witness && { value: witness.decoded.value, scriptPubKey: witness.decoded.scriptPubKey };
-  const nonWitnessClaim = nonWitness && { value: nonWitness.decoded.prevout.value, scriptPubKey: nonWitness.decoded.prevout.scriptPubKey };
+  const witnessClaims = pairs.filter((pair) => pair.name === "PSBT_IN_WITNESS_UTXO" && pair.decoded)
+    .map((pair) => ({ value: pair.decoded.value, scriptPubKey: pair.decoded.scriptPubKey }));
+  const nonWitnessClaims = pairs.filter((pair) => pair.name === "PSBT_IN_NON_WITNESS_UTXO" && pair.decoded?.prevout)
+    .map((pair) => ({ value: pair.decoded.prevout.value, scriptPubKey: pair.decoded.prevout.scriptPubKey }));
+  // Two pairs of the same type are ambiguous: the verifier takes the last,
+  // this diagram used to take the first, so the box and the fee could tell
+  // different stories about one input. Say conflicting instead.
+  if (witnessClaims.length > 1) return { conflict: [witnessClaims[0].value, witnessClaims[1].value] };
+  if (nonWitnessClaims.length > 1) return { conflict: [nonWitnessClaims[0].value, nonWitnessClaims[1].value] };
+  const witnessClaim = witnessClaims[0], nonWitnessClaim = nonWitnessClaims[0];
   if (witnessClaim && nonWitnessClaim) {
-    return witnessClaim.value === nonWitnessClaim.value ? nonWitnessClaim : { conflict: [witnessClaim.value, nonWitnessClaim.value] };
+    const agree = witnessClaim.value === nonWitnessClaim.value && witnessClaim.scriptPubKey === nonWitnessClaim.scriptPubKey;
+    return agree ? nonWitnessClaim : { conflict: [witnessClaim.value, nonWitnessClaim.value] };
   }
   return witnessClaim ?? nonWitnessClaim ?? null;
 };
@@ -138,9 +217,27 @@ const FINAL_PAIR_NAMES = ["PSBT_IN_FINAL_SCRIPTSIG", "PSBT_IN_FINAL_SCRIPTWITNES
 // reads as malformed, never as progress (issue #328).
 const signingStatus = (pairs) => {
   const decodedOk = (pair) => pair.decoded && !pair.decodeError;
+  const keyHex = (pair) => (typeof pair.key === "string" ? pair.key.toLowerCase() : "");
+  // A pair's key shape is part of its meaning (issue #328 follow-up, AR-09).
+  // `pair.key` is the full serialized key: one type byte then keydata. Final
+  // fields carry no keydata; a tap-key signature is keyless by definition; a
+  // partial signature carries the signer's public key as keydata (BIP-174);
+  // a tap-script signature its x-only key plus leaf hash. A `07aa`-style
+  // lookalike, or a keyless partial signature, is a malformed field, not
+  // signing progress.
+  const shapeOk = (pair) => {
+    const key = keyHex(pair);
+    if (pair.name === "PSBT_IN_PARTIAL_SIG") {
+      const prefix = key.slice(2, 4);
+      return (key.length === 68 && (prefix === "02" || prefix === "03"))
+        || (key.length === 132 && prefix === "04");
+    }
+    if (pair.name === "PSBT_IN_TAP_SCRIPT_SIG") return key.length === 130;
+    return key.length === 2;
+  };
   const finals = pairs.filter((pair) => FINAL_PAIR_NAMES.includes(pair.name));
-  if (finals.some(decodedOk)) return { text: "finalized", tone: "psbted-note-ok" };
-  const sigs = pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name) && decodedOk(pair)).length;
+  if (finals.some((pair) => shapeOk(pair) && decodedOk(pair))) return { text: "finalized", tone: "psbted-note-ok" };
+  const sigs = pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name) && shapeOk(pair) && decodedOk(pair)).length;
   if (sigs) return { text: `${sigs} signature${sigs === 1 ? "" : "s"}`, tone: "" };
   const malformed = finals.length + pairs.filter((pair) => SIGNING_PAIR_NAMES.includes(pair.name)).length;
   if (malformed) return { text: "malformed signing field", tone: "psbted-note-bad" };
@@ -187,7 +284,7 @@ const inputBox = (doc, index, network, copyIcon) => {
       ${address ? "" : `<span class="psbted-viz-id psbted-viz-in">${escapeHtml(label)}</span>`}
     </button>
     ${address ? publicValueHtml(address, { copyIcon, preview: label, className: "psbted-viz-id psbted-viz-in" }) : ""}
-    <p class="psbted-viz-amount psbt-amount">${conflict ? `<span class="psbted-note-bad">conflicting claims: ${groupSats(conflict[0])} vs ${groupSats(conflict[1])} sats</span>` : claim ? `${groupSats(claim.value)} sats` : `<span class="muted">no amount claim</span>`}</p>
+    <p class="psbted-viz-amount psbt-amount">${conflict ? `<span class="psbted-note-bad">conflicting claims: ${conflict[0] === conflict[1] ? "different previous output scripts" : `${groupSats(conflict[0])} vs ${groupSats(conflict[1])} sats`}</span>` : claim ? `${groupSats(claim.value)} sats` : `<span class="muted">no amount claim</span>`}</p>
     <p class="psbted-viz-sub" title="spends ${escapeHtml(input.txid)}:${escapeHtml(String(input.vout))}">${kind ? `<span class="psbted-viz-kind">${escapeHtml(kind)}</span> · ` : ""}<span class="psbted-viz-status ${status.tone}">${escapeHtml(status.text)}</span></p>
   </div>`;
 };
@@ -219,8 +316,17 @@ const outputBox = (doc, index, network, copyIcon) => {
 // SVG layer ships empty: psbt-editor.js measures the laid-out boxes and
 // draws the connector paths into it (no layout in this pure module).
 export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
-  const inputs = doc.tx.inputs.map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
-  const outputs = doc.tx.outputs.map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
+  // The boxes spend from one render budget like every PSBT view; with the
+  // per-side cap at PSBT_RENDER_LIMIT the two columns can never spend it
+  // (2 × PSBT_RENDER_LIMIT < PSBT_RENDER_BUDGET), so the per-side elision
+  // lines below remain the only notes the diagram needs.
+  const budget = renderBudget();
+  const shownInputs = budget.take(Math.min(doc.tx.inputs.length, PSBT_RENDER_LIMIT));
+  const shownOutputs = budget.take(Math.min(doc.tx.outputs.length, PSBT_RENDER_LIMIT));
+  const inputs = doc.tx.inputs.slice(0, shownInputs).map((_, index) => inputBox(doc, index, network, copyIcon)).join("");
+  const outputs = doc.tx.outputs.slice(0, shownOutputs).map((_, index) => outputBox(doc, index, network, copyIcon)).join("");
+  const moreInputs = doc.tx.inputs.length - shownInputs;
+  const moreOutputs = doc.tx.outputs.length - shownOutputs;
   // Column totals ride in the hint lines; the inputs side can only total
   // when every input carries a claim (doc.totalIn is null otherwise).
   const inputsHint = doc.totalIn === null
@@ -233,6 +339,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Inputs <span class="label-value">(${doc.tx.inputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${inputsHint}</p>
       ${inputs || `<div class="psbted-viz-box muted">No inputs.</div>`}
+      ${moreInputs ? `<p class="psbted-note-warn">${moreInputs === 1 ? "1 more input not shown, still included in this transaction." : `${moreInputs} more inputs not shown, still included in this transaction.`}</p>` : ""}
     </div>
     <div class="psbted-viz-mid">
       <div class="psbted-viz-arrow" aria-hidden="true"></div>
@@ -248,6 +355,7 @@ export const psbtVizHtml = (doc, network, { copyIcon = () => "" } = {}) => {
       <h3 class="psbted-viz-heading">Outputs <span class="label-value">(${doc.tx.outputs.length})</span></h3>
       <p class="psbted-viz-hint muted">${doc.totalOut === null ? "outputs total unknown — amounts overflow u64" : `${groupSats(doc.totalOut)} sats in total`} · editable in the boxes</p>
       ${outputs || `<div class="psbted-viz-box muted">No outputs.</div>`}
+      ${moreOutputs ? `<p class="psbted-note-warn">${moreOutputs === 1 ? "1 more output not shown, still included in this transaction." : `${moreOutputs} more outputs not shown, still included in this transaction.`}</p>` : ""}
     </div>
   </div>
 </div>`;

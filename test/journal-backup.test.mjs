@@ -170,7 +170,7 @@ test("restoring drops unknown fields and repairs a broken nextId", async () => {
   const file = await sealDocument({ nextId: -5, entries: [entry] }, keys);
   const opened = await openDocument(pack(file), password);
   assert.equal("evil" in opened.doc.entries[0], false);
-  assert.equal(opened.doc.nextId, 1); // non-positive nextId falls back to 1
+  assert.equal(opened.doc.nextId, 2); // non-positive nextId falls back to 1, then clears the entry's repaired id 1
 });
 
 test("an export file is not a journal backup and vice versa", async () => {
@@ -217,7 +217,11 @@ test("encodeFile refuses to write a malformed envelope", () => {
 
 test("key derivation is deterministic, bounded, and non-extractable", async () => {
   const again = await deriveJournalKeys(password);
-  assert.deepEqual([...again.verify], [...keys.verify]); // same password, same verifier
+  // CryptoKeys are not comparable, so determinism is pinned behaviorally: a
+  // fresh derivation of the same password decrypts what the first one sealed.
+  const sealed = JSON.stringify(await sealDocument(emptyDocument(), again));
+  const reopened = await openDocument(sealed, password);
+  assert.equal(reopened.keys.iterations, JOURNAL_ITERATIONS);
   assert.equal(again.iterations, JOURNAL_ITERATIONS);
   assert.equal(again.passwordProtected, true);
   assert.equal(again.encKey.extractable, false);
@@ -231,7 +235,6 @@ test("key derivation is deterministic, bounded, and non-extractable", async () =
   await assert.rejects(() => deriveJournalKeys(password, 600000.5), /key-derivation cost/);
   const passwordless = await deriveJournalKeys("");
   assert.equal(passwordless.passwordProtected, false);
-  assert.ok(passwordless.verify.some((byte) => byte !== 0));
 });
 
 // --- Entry bookkeeping behind the backup ------------------------------------
