@@ -157,10 +157,29 @@ const declaredSighash = (doc, index) => {
   return null;
 };
 
-const taprootish = (doc, index) => (doc.inputs?.[index] ?? []).some((pair) => {
-  const type = parseInt(keyType(pair.key), 16);
-  return type >= 0x13 && type <= 0x18;
-});
+// Taproot-ness comes from the spent output, never from PSBT fields a signer
+// can add: only a P2TR scriptPubKey (34 bytes, 5120 || 32-byte x-only key)
+// makes SIGHASH_DEFAULT (0x00) defined. A missing UTXO or scriptPubKey is
+// not Taproot, so 0x00 stays undefined and fails closed.
+const spentScriptPubKey = (doc, index) => {
+  const pairs = doc.inputs?.[index] ?? [];
+  const witness = pairs.find((pair) => pair.name === "PSBT_IN_WITNESS_UTXO");
+  if (witness) {
+    const { scriptPubKey } = utxoValues(witness);
+    return scriptPubKey !== undefined ? lower(scriptPubKey) : null;
+  }
+  const nonWitness = pairs.find((pair) => pair.name === "PSBT_IN_NON_WITNESS_UTXO");
+  if (nonWitness) {
+    const { scriptPubKey } = utxoValues(nonWitness);
+    return scriptPubKey !== undefined ? lower(scriptPubKey) : null;
+  }
+  return null;
+};
+
+const taprootish = (doc, index) => {
+  const script = spentScriptPubKey(doc, index);
+  return typeof script === "string" && /^5120[0-9a-f]{64}$/.test(script);
+};
 
 const definedSighash = (value, tap) => {
   if (value === 0x01 || value === 0x02 || value === 0x03 || value === 0x81 || value === 0x82 || value === 0x83) return true;
@@ -170,11 +189,11 @@ const definedSighash = (value, tap) => {
 const weakSighash = (value) => (value & 0x80) !== 0 || (value & 0x7f) === 0x02 || (value & 0x7f) === 0x03;
 const fullCommitment = (value, tap) => value === 0x01 || (tap && value === 0x00);
 
-const declaredPolicy = (doc, index) => {
+const declaredPolicy = (doc, index, utxoDoc = doc) => {
   if (sighashPairs(doc, index).length === 0) return { value: null, invalid: false };
   const value = declaredSighash(doc, index);
   if (value === null) return { value: null, invalid: true };
-  if (!definedSighash(value, taprootish(doc, index))) return { value, invalid: true };
+  if (!definedSighash(value, taprootish(utxoDoc, index))) return { value, invalid: true };
   return { value, invalid: false };
 };
 
@@ -412,7 +431,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     if (change.kind === "added" && FINAL_FIELDS.has(change.name) && !beforeHasFinal(change.index)) {
       finalizationCandidates.add(change.index);
       if (!addedFinalFieldsByInput.has(change.index)) addedFinalFieldsByInput.set(change.index, []);
-      addedFinalFieldsByInput.get(change.index).push(change.name);
+      addedFinalFieldsByInput.get(change.index).push({ name: change.name, key: change.key });
     }
   }
 
@@ -432,9 +451,12 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     if (finalizationEmitted.has(index)) return;
     finalizationEmitted.add(index);
     const removedFields = removedFieldsByInput.get(index) ?? [];
-    const finalFields = addedFinalFieldsByInput.get(index) ?? [];
+    const finalFieldEntries = addedFinalFieldsByInput.get(index) ?? [];
+    const finalFields = finalFieldEntries.map((field) => field.name);
     const entries = (options.verification?.signatures ?? []).filter((entry) => entry.index === index && FINAL_FIELDS.has(entry.name));
-    const covered = finalFields.every((name) => entries.some((entry) => entry.name === name));
+    const covered = finalFieldEntries.every((field) => entries.some((entry) => entry.name === field.name
+      && typeof entry.key === "string"
+      && lower(entry.key) === lower(field.key)));
     const verified = covered && entries.length > 0 && entries.every((entry) => entry.valid === true);
     if (verified) {
       findings.push(finding("FINALIZED", "info", "input-map", index, null, { index, finalFields, removedFields, signatures: entries.length }));
@@ -519,7 +541,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     if (name === "PSBT_IN_SIGHASH_TYPE") {
       if (kind === "added") {
         const value = parseLittleEndian32(change.after);
-        const tap = taprootish(afterDoc, index);
+        const tap = taprootish(beforeView, index);
         if (value === null || !definedSighash(value, tap)) {
           emitDeclaredUndefined(index, value);
         } else if (fullCommitment(value, tap)) {
@@ -730,7 +752,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       expected = beforePolicy.value;
     }
 
-    const afterPolicy = declaredPolicy(afterDoc, event.index);
+    const afterPolicy = declaredPolicy(afterDoc, event.index, beforeView);
     if (afterPolicy.invalid && afterPolicy.value !== null) {
       emitDeclaredUndefined(event.index, afterPolicy.value);
     }
@@ -768,7 +790,9 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     }
   }
 
-  // Phase F — signature verification (fail closed).
+  // Phase F — signature verification (fail closed). Each entry names the
+  // exact PSBT key it verified; an entry without a key never matches, so the
+  // signature stays unverified.
   const verificationEntries = (options.verification?.signatures ?? []).map((entry) => ({ entry, used: false }));
   for (const event of newSigEvents) {
     if (event.malformed) continue;
@@ -786,7 +810,8 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     const match = verificationEntries.find((candidate) => !candidate.used
       && candidate.entry.index === event.index
       && candidate.entry.name === event.name
-      && samePubkey(candidate.entry.pubkey, pubkey));
+      && typeof candidate.entry.key === "string"
+      && lower(candidate.entry.key) === lower(event.key));
     if (match) match.used = true;
     const entry = match?.entry;
     if (!entry || entry.valid !== true) {
