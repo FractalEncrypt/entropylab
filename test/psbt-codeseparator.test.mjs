@@ -406,3 +406,27 @@ test("a signature made with extra entropy is counted as checked and as a mismatc
   assert.ok(detail.endsWith(sentence), detail);
   assert.deepEqual(rfc6979Notes(html), [sentence]);
 });
+
+test("an ECDSA signature with no extractable r still counts toward the RFC 6979 coverage line (#1074 red-team)", () => {
+  harness.hodlTestSetPriv(SECRET);
+  // The control's two signatures are checked; a third input carries a 0x02
+  // partial signature that is neither DER nor loose-r readable. Before the
+  // fix that row took the uninspected branch before rfcTotal was
+  // incremented, so the coverage line claimed "all 2" and never mentioned
+  // the third signature.
+  const psbt = harness.hodlParsePsbt(buildPsbt(CONTROL_SCRIPT, CONTROL_SCRIPT));
+  const base = psbt.inputs[0];
+  psbt.tx.inputs.push({ ...psbt.tx.inputs[0], vout: INPUTS });
+  psbt.inputs.push([
+    { ...base.find((entry) => entry.type === 0x01) }, // witness UTXO, same P2WSH script
+    { ...base.find((entry) => entry.type === 0x02), val: Uint8Array.of(0x30, 0x00, 0x01) }, // non-DER, no extractable r
+    { ...base.find((entry) => entry.type === 0x05) }, // witness script
+  ]);
+  const html = harness.hodlRenderPsbt(psbt, new Uint8Array(), new Date().toISOString(), "all");
+  const sentence = "RFC 6979: checked for 2 of 3 ECDSA signatures.";
+  const detail = nonceSummaryDetail(html);
+  assert.ok(detail.endsWith(sentence), detail);
+  assert.deepEqual(rfc6979Notes(html), [sentence]);
+  const rows = html.match(/Signature is not DER and its nonce cannot be inspected\./g) || [];
+  assert.equal(rows.length, 1, "the extra input's row reports the unreadable signature");
+});

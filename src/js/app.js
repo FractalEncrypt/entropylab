@@ -13108,6 +13108,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // hodlPsbtWipeMem.
       let privateKey = null;
       try {
+        rfcTotal += 1;
         if (!parts && !looseR) {
           uninspected += 1;
           policyIncomplete += 1;
@@ -13118,7 +13119,6 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             className = "psbt-bad";
           }
         } else {
-          rfcTotal += 1;
           privateKey = hodlPrivForPub(signature.pubkey) || hodlPrivFromPath(entries, signature.pubkey, inputDerivationBudget);
           if (privateKey) rfcKeyFound = true;
           rValues.push({
