@@ -1641,6 +1641,10 @@ test("workspace tabs retain the Journal only in test builds", () => {
   }
 });
 
+test("Key Station Core export markup stays hidden outside test builds", () => {
+  assert.match(appSource, /function hodlKeyCoreImportDescriptorsMarkup\(account\) \{\s*(?:\/\/[^\n]*\n\s*)*if \(typeof __ENTROPYLAB_TEST_HOOKS__ !== "undefined" && !__ENTROPYLAB_TEST_HOOKS__\) return "";/);
+});
+
 test("one PSBT workspace contains PSBT Inspector, PSBT Editor and Nonce Inspector tabs", () => {
   assert.match(appSource, /\["psbt", "Transactions", "Txns"\]/);
   assert.doesNotMatch(appSource, /\["psbted", "PSBT Editor", "Editor"\]/);

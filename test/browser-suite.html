@@ -6455,6 +6455,104 @@
     assert(!dat.includes("walletdescriptorkey"), "Watch-only wallet.dat leaked private key records");
   });
 
+  await test("Key Station Core JSON follows the selected script and stays watch-only when revealed", async () => {
+    const originalScript = document.querySelector('#acct-tabs [aria-pressed="true"]').dataset.account;
+    const birthday = document.querySelector('#out [data-wallet-dat-birthday]') || document.querySelector('[data-wallet-dat-birthday]');
+    const originalBirthday = birthday.value;
+    try {
+      for (const script of ["bip44", "bip49", "bip84", "bip86"]) {
+        document.getElementById(`account-tab-${script}`).click();
+        const save = document.getElementById("key-save-importdescriptors");
+        assert(save, "selected account has no Core JSON export");
+        state.lastBlob = null;
+        save.click();
+        const text = await (await until(() => state.lastBlob, "Core watch-only JSON")).text();
+        equal(state.downloadName, "entropylab-importdescriptors.json");
+        const entries = JSON.parse(text);
+        equal(JSON.stringify(entries.map(entry => entry.internal)), "[false,true]");
+        assert(entries.every(entry => entry.active && entry.timestamp === 0 && entry.range[0] === 0), "Core import metadata is wrong");
+        const prefix = { bip44: "pkh(", bip49: "sh(wpkh(", bip84: "wpkh(", bip86: "tr(" }[script];
+        assert(entries.every(entry => entry.desc.startsWith(prefix) && entry.desc.includes("tpub") && /#[a-z0-9]{8}$/.test(entry.desc)), "selected script or public descriptor encoding is wrong");
+        equal(await copiedBy(document.getElementById("key-copy-importdescriptors")), text);
+      }
+      birthday.value = "now";
+      birthday.dispatchEvent(new Event("change", { bubbles: true }));
+      const reveal = document.getElementById("reveal");
+      reveal.checked = true;
+      reveal.dispatchEvent(new Event("change", { bubbles: true }));
+      const text = await copiedBy(document.getElementById("key-copy-importdescriptors"));
+      assert(JSON.parse(text).every(entry => entry.timestamp === "now"), "birthday was lost during reveal");
+      assert(!/[xtyzuvYZUV]prv|abandon/.test(text), "Core JSON leaked private recovery material");
+      state.lastBlob = null;
+      document.getElementById("key-save-importdescriptors").click();
+      equal(await (await until(() => state.lastBlob, "Core JSON while revealed")).text(), text);
+    } finally {
+      const reveal = document.getElementById("reveal");
+      reveal.checked = false;
+      reveal.dispatchEvent(new Event("change", { bubbles: true }));
+      const currentBirthday = document.querySelector('[data-wallet-dat-birthday]');
+      currentBirthday.value = originalBirthday;
+      currentBirthday.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById(`account-tab-${originalScript}`).click();
+    }
+  });
+
+  await test("Core JSON preserves custom branches and shows refusals beside the clicked controls", async () => {
+    const ids = ["branch-start", "branch-range", "address-start", "address-range"];
+    const original = ids.map(id => document.getElementById(id).value);
+    const originalScript = document.querySelector('#acct-tabs [aria-pressed="true"]').dataset.account;
+    const clipboardWrite = navigator.clipboard.writeText;
+    const rederive = async values => {
+      document.getElementById("key-edit-inputs").click();
+      await until(() => !document.getElementById("key-lab").hidden, "key inputs for custom export");
+      ids.forEach((id, index) => input(document.getElementById(id), String(values[index])));
+      const update = document.getElementById("key-update");
+      await until(() => !update.disabled, "custom key update to enable");
+      update.click();
+      await until(() => document.getElementById("key-lab").hidden && document.getElementById("key-save-importdescriptors"), "custom key result", 60000);
+      for (let parent = document.getElementById("key-save-importdescriptors").parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS" && !parent.open) parent.querySelector("summary").click();
+      }
+    };
+    const exported = async () => {
+      state.lastBlob = null;
+      document.getElementById("key-save-importdescriptors").click();
+      return JSON.parse(await (await until(() => state.lastBlob, "custom Core JSON")).text());
+    };
+    try {
+      await rederive([1, 1, 2, 1]);
+      let entries = await exported();
+      equal(entries.length, 1);
+      assert(entries[0].active && !entries[0].internal && entries[0].desc.includes("/1/*"), "branch 1 alone must become the external descriptor");
+      await rederive([2, 2, 7, 1]);
+      entries = await exported();
+      equal(entries.length, 2);
+      assert(entries.every(entry => !entry.internal && entry.range[1] === 1007), "custom branches lost role or address range");
+      assert(entries[0].active && !entries[1].active && entries[0].desc.includes("/2/*") && entries[1].desc.includes("/3/*"), "custom descriptors or active flags were lost");
+      await rederive([0, 2, 999000, 1]);
+      let copies = 0;
+      navigator.clipboard.writeText = () => { copies++; return Promise.resolve(); };
+      for (const action of ["copy", "save"]) {
+        state.lastBlob = null;
+        document.getElementById(`key-${action}-importdescriptors`).click();
+        const error = await until(() => {
+          const el = document.getElementById("key-core-importdescriptors-error");
+          return el?.textContent.trim() && el;
+        }, "visible Core export refusal");
+        assert(!error.closest("[hidden]") && error.getClientRects().length > 0, "refusal is inside a hidden input panel");
+        equal(error.getAttribute("role"), "alert");
+        assert(!error.querySelector("*"), "the error must remain a text sink");
+        equal(state.lastBlob, null, "refused JSON was downloaded");
+        equal(copies, 0, "refused JSON reached the clipboard");
+      }
+    } finally {
+      navigator.clipboard.writeText = clipboardWrite;
+      await rederive(original);
+      document.getElementById(`account-tab-${originalScript}`).click();
+    }
+    equal(document.getElementById("key-core-importdescriptors-error").textContent, "", "a new result retained a stale export error");
+  });
+
   await test("private export contains complete recovery material", async () => {
     const reveal = document.getElementById("reveal");
     reveal.checked = true;
