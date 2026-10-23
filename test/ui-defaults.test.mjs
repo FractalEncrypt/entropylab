@@ -1628,7 +1628,7 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs retain the Journal only in test builds", () => {
+test("workspace tabs retain Core Wallet and the Journal only in test builds", () => {
   for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
     /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
     /\["core", "Core Wallet", "Core"\]/,
@@ -1636,6 +1636,9 @@ test("workspace tabs retain the Journal only in test builds", () => {
     assert.match(appSource, entry);
   }
   assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["journal", "Journal", "Journal"\]\] : \[\]/);
+  assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["core", "Core Wallet", "Core"\]\] : \[\]/);
+  // Release first paint and no-JS show the static strip: a held-back tool has no button there.
+  assert.doesNotMatch(shell, /aria-controls="core-card"/);
   for (const markup of [shell]) {
     assert.match(markup, /id="bip85-card"/);
     assert.match(markup, /id="bip85-go"/);
@@ -1932,7 +1935,7 @@ test("the workspace switcher keeps every tool on screen as a tab strip", () => {
   // Every tool with a tab ships in the static markup, each with a full name
   // and the
   // short form narrow screens show instead.
-  for (const [full, short] of [["Keys", "Keys"], ["Vanity Address", "Vanity"], ["BIP-85 Child", "BIP-85"], ["Multi Signature", "MultiSig"], ["Silent Payments", "SP"], ["Transactions", "Txns"], ["Core Wallet", "Core"]]) {
+  for (const [full, short] of [["Keys", "Keys"], ["Vanity Address", "Vanity"], ["BIP-85 Child", "BIP-85"], ["Multi Signature", "MultiSig"], ["Silent Payments", "SP"], ["Transactions", "Txns"]]) {
     assert.ok(
       shell.includes(`<span class="workspace-tab-full">${full}</span><span class="workspace-tab-short">${short}</span>`),
       `${full} is missing from the workspace strip`,
@@ -1944,7 +1947,7 @@ test("the workspace switcher keeps every tool on screen as a tab strip", () => {
   // Hidden text leaves the accessibility tree, so the full name is stated on
   // the tab itself and assistive tech hears it at every width.
   assert.match(appSource, /button\.setAttribute\("aria-label", hodlTText\(label\)\);/);
-  for (const full of ["Keys", "Vanity Address", "BIP-85 Child", "Multi Signature", "Silent Payments", "Transactions", "Core Wallet"]) {
+  for (const full of ["Keys", "Vanity Address", "BIP-85 Child", "Multi Signature", "Silent Payments", "Transactions"]) {
     assert.match(shell, new RegExp(`aria-label="${full.replace("/", "\\/")}">[\\s\\S]*?<span class="workspace-tab-full">${full.replace("/", "\\/")}</span>`), `${full} tab needs its accessible name`);
   }
   // A tablist owes arrow keys; the key and multisig strips already answer them.
@@ -2018,7 +2021,7 @@ test("each static tool tab points at a tab panel the shell has", () => {
   const start = shell.indexOf('id="workspace-tabs"');
   const strip = shell.slice(start, shell.indexOf("</div>", start));
   const tabs = strip.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
-  assert.equal(tabs.length, 7, "the static strip carries the seven release tools");
+  assert.equal(tabs.length, 6, "the static strip carries the six release tools");
   for (const tab of tabs) {
     const ids = tab.match(/aria-controls="([^"]*)"/)?.[1].split(" ").filter(Boolean) ?? [];
     assert.ok(ids.length, `${tab} names no panel`);
