@@ -166,6 +166,14 @@ export class PassphraseVault {
 // check on isComposing or on "insertCompositionText" alone misses them.
 const COMPOSITION_INPUT_TYPES = new Set(["insertCompositionText", "deleteCompositionText", "insertFromComposition", "deleteByComposition"]);
 const isCompositionInputType = (type) => COMPOSITION_INPUT_TYPES.has(type ?? "");
+// What a single-line field makes of inserted text (Chromium's and WebKit's
+// TextFieldInputType, Firefox's default editor.singleLine.pasteNewlines):
+// line breaks at the end are dropped, and every other one, CRLF counted as
+// one, becomes a space. The vault holds what a native password field would,
+// so a passphrase pasted with its trailing newline derives the seed other
+// tools derive from it, and unmask() (whose value setter strips line breaks)
+// shows exactly what the vault holds.
+const singleLineText = (text) => text.replace(/[\r\n]+$/, "").replace(/\r\n|[\r\n]/g, " ");
 
 export const bindVaultField = (field, vault, { active = () => true } = {}) => {
   let pending = null, composing = null, echoing = false;
@@ -253,7 +261,7 @@ export const bindVaultField = (field, vault, { active = () => true } = {}) => {
         pending = null; // prevented, so no input event will consume it
         return;
       }
-      text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
+      text = singleLineText(event.data ?? event.dataTransfer?.getData("text/plain") ?? "");
     } else if (type === "deleteContentBackward") {
       if (start === end) from = Math.max(0, start - 1);
     } else if (type === "deleteContentForward") {

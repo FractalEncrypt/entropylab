@@ -146,6 +146,48 @@ test("a paste replaces the selection, and undo has nothing to undo", () => {
   masked(field, vault);
 });
 
+// Red-team F16 (rt-chain2, 2026-10-22): a paste kept its line breaks, so a
+// passphrase copied with its trailing newline derived a different seed than
+// a native password field (and every other tool) derives from it. The
+// expected values are the browsers' own rule for a single-line field:
+// trailing line breaks dropped, every other one (CRLF as one) a space.
+for (const [paste, expected] of [
+  ["pass\n", "pass"],
+  ["pass\r\n", "pass"],
+  ["pass\r\n\r\n", "pass"],
+  ["a\r\nb\nc\rd", "a b c d"],
+  ["a\n\nb\n\n", "a  b"],
+  ["\nab", " ab"],
+  ["\n", ""],
+]) {
+  test(`a pasted ${JSON.stringify(paste)} is stored as a single-line field stores it: ${JSON.stringify(expected)}`, () => {
+    const { field, vault } = bound();
+    field.type("xy");
+    field.select(1);
+    field.edit("insertFromPaste", { paste });
+    assert.equal(vault.text(), `x${expected}y`);
+    assert.equal(field.selectionStart, 1 + [...expected].length);
+    masked(field, vault);
+  });
+}
+
+test("a passphrase pasted with a newline survives unmask and mask unchanged", () => {
+  // A field whose value setter strips line breaks, as an <input>'s does.
+  let active = true;
+  const { field, vault, api } = bound(() => active);
+  let value = "";
+  Object.defineProperty(field, "value", { get: () => value, set: (text) => { value = String(text).replace(/[\r\n]/g, ""); } });
+  field.edit("insertFromPaste", { paste: "correct horse\n" });
+  assert.equal(vault.text(), "correct horse");
+  const before = hex(vault.bytes());
+  active = false;
+  api.unmask();
+  assert.equal(field.value, "correct horse");
+  active = true;
+  api.mask();
+  assert.equal(hex(vault.bytes()), before, "showing and hiding the passphrase changed it");
+});
+
 test("an IME composition is taken into the vault when it ends", () => {
   const { field, vault } = bound();
   field.type("ab");
