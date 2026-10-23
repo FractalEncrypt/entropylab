@@ -5482,6 +5482,7 @@ function hodlBindPassphraseKeyboard(inputId = "pass", toggleId = "passphrase-key
   }
   refresh();
 }
+const hodlPassphraseLineBreakBound = new WeakSet();
 function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
   let input = document.getElementById("pass"), bip39Toggle = document.getElementById("passphrase-bip39-words"), autocompleteToggle = document.getElementById("passphrase-autocomplete"), autocompleteControl = document.getElementById("passphrase-autocomplete-control"), keyboard = document.getElementById(keyboardId), modeButton = keyboard?.querySelector("[data-seed-keyboard-mode]");
   if (!input || !bip39Toggle || !autocompleteToggle || !autocompleteControl) return;
@@ -5499,9 +5500,13 @@ function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
     refresh();
   };
   // The note goes away as soon as the passphrase no longer has a line break.
-  input.addEventListener("input", () => {
-    if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
-  });
+  // Bind once per field: the field outlives the form and this runs on every render.
+  if (!hodlPassphraseLineBreakBound.has(input)) {
+    hodlPassphraseLineBreakBound.add(input);
+    input.addEventListener("input", () => {
+      if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
+    });
+  }
   bip39Toggle.onchange = () => {
     let state = hodlKeys[hodlActiveKey];
     // A passphrase with a line break cannot be edited as words: the field

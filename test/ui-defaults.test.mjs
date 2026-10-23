@@ -1,6 +1,56 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+test("passphrase line-break input listener binds once per field element", async () => {
+  const { readFileSync } = await import("node:fs");
+  const vm = await import("node:vm");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlBindPassphraseOptions(");
+  assert.notEqual(start, -1, "hodlBindPassphraseOptions is present");
+  let depth = 0, end = start;
+  for (; end < source.length; end++) {
+    if (source[end] === "{") depth++;
+    else if (source[end] === "}" && --depth === 0) { end++; break; }
+  }
+  const fnSource = source.slice(start, end);
+  const inputListeners = [];
+  const input = {
+    addEventListener(type, listener) {
+      if (type === "input") inputListeners.push(listener);
+    },
+  };
+  const bip39Toggle = { checked: false, onchange: null };
+  const autocompleteToggle = { checked: false, onchange: null };
+  const autocompleteControl = { hidden: false };
+  const reveal = { checked: false, closest: () => null, onchange: null };
+  const keyboard = { querySelector: () => null };
+  const elements = {
+    pass: input,
+    "passphrase-bip39-words": bip39Toggle,
+    "passphrase-autocomplete": autocompleteToggle,
+    "passphrase-autocomplete-control": autocompleteControl,
+    "passphrase-reveal": reveal,
+    "passphrase-keyboard": keyboard,
+  };
+  const sandbox = {
+    document: { getElementById: (id) => elements[id] ?? null },
+    hodlPassphraseShown: false,
+    hodlRenderPassphraseInputState() {},
+    hodlUpdatePassphraseKeyboardKeys() {},
+    hodlPassphraseHasLineBreak: () => false,
+    hodlShowPassphraseLineBreakWarning() {},
+    hodlKeys: {},
+    hodlActiveKey: "key",
+    hodlPassphraseVaultField: null,
+    hodlSetSeedKeyboardLayout() {},
+    hodlSyncKeyClearButton() {},
+    hodlSyncDeriveButton() {},
+    hodlPassphraseLineBreakBound: new WeakSet(),
+  };
+  vm.runInNewContext(`${fnSource}\nhodlBindPassphraseOptions();\nhodlBindPassphraseOptions();`, sandbox);
+  assert.equal(inputListeners.length, 1);
+});
+
 test("hodlPassphraseHasLineBreak reads the vault, not the field API", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
