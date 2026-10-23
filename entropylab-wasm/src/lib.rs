@@ -52,7 +52,7 @@
 use bitcoin_hashes::{hash160, ripemd160, sha256, sha512, Hash, HashEngine, Hmac, HmacEngine};
 use secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature};
 use secp256k1::schnorr::Signature as SchnorrSignature;
-use secp256k1::{Message, PublicKey, Scalar, Secp256k1, SecretKey, XOnlyPublicKey};
+use secp256k1::{Message, PublicKey, Scalar, Secp256k1, SecretKey};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::OnceLock;
 
