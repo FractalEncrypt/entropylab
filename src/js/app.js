@@ -12989,6 +12989,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       }
       signatures = signatures.concat(finalMaterial.signatures);
       uninspected += finalMaterial.uninspected + (finalMaterial.malformed ? 1 : 0);
+      // Every ECDSA signature the finalized fields carry but this analysis
+      // could not attribute is still an ECDSA signature the coverage line
+      // must count as unchecked (Kimi K3's review of #1074): otherwise it
+      // claims "checked for all N" while N + k are present. Taproot material
+      // stays in tapUninspected.
+      rfcTotal += finalMaterial.uninspected + (finalMaterial.malformed && !hodlFinalIsTaproot(entries, claim) ? 1 : 0);
     }
     // Only a Schnorr signature that parses under BIP341 counts as present: an
     // unparseable one is flagged as a policy problem below, not silently

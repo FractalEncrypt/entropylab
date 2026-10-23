@@ -430,3 +430,22 @@ test("an ECDSA signature with no extractable r still counts toward the RFC 6979 
   const rows = html.match(/Signature is not DER and its nonce cannot be inspected\./g) || [];
   assert.equal(rows.length, 1, "the extra input's row reports the unreadable signature");
 });
+
+test("a finalized ECDSA signature that cannot be attributed counts toward the RFC 6979 coverage line (#1074)", () => {
+  harness.hodlTestSetPriv(SECRET);
+  // The control's two partial signatures are checked. A third input carries
+  // a finalized ECDSA signature that hodlFinalSigs cannot attribute (its
+  // script has OP_CODESEPARATOR, so the digest is not reconstructed). Before
+  // the fix that signature was counted as uninspected but never entered
+  // rfcTotal, so the coverage line claimed "all 2" while three ECDSA
+  // signatures were present.
+  const psbt = harness.hodlParsePsbt(buildPsbt(CONTROL_SCRIPT, CONTROL_SCRIPT));
+  const { entries } = finalizedEntries(TWO_KEY_SEPARATED, CONTROL_SCRIPT);
+  psbt.tx.inputs.push({ ...psbt.tx.inputs[0], vout: INPUTS });
+  psbt.inputs.push(entries);
+  const html = harness.hodlRenderPsbt(psbt, new Uint8Array(), new Date().toISOString(), "all");
+  const sentence = "RFC 6979: checked for 2 of 3 ECDSA signatures.";
+  const detail = nonceSummaryDetail(html);
+  assert.ok(detail.endsWith(sentence), detail);
+  assert.deepEqual(rfc6979Notes(html), [sentence]);
+});
