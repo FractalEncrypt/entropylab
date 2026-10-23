@@ -173,6 +173,11 @@ var hodlWalletExport = (() => {
     if (!match) throw new Error(`wallet.dat export: no extended key found in ${label} descriptor`);
     return match[1];
   };
+  const extractExtendedPrivateKey = (descriptor) => {
+    const match = descriptor.match(PRIVATE_KEY);
+    if (!match) throw new Error("wallet.dat export: no extended private key found in spending descriptor");
+    return match[0];
+  };
   const extractExtendedPubs = (descriptor) => {
     EXTENDED_PUB_GLOBAL.lastIndex = 0;
     const keys = [];
@@ -539,7 +544,6 @@ var hodlWalletExport = (() => {
     const records = [];
     const push = (key, value) => records.push([key, value]);
 
-    for (const unit of units) {
       // Every unit's watch-only descriptor is stored in canonical form:
       // Bitcoin Core's descriptor parser accepts only xpub/tpub, so a
       // SLIP-132 prefix (ypub/zpub/…) on a single-sig descriptor must be
@@ -598,7 +602,7 @@ var hodlWalletExport = (() => {
         let keyHash = null;
         let hashInput = null;
         try {
-          let xprv = extractExtendedKey(unit.privateDescriptor, "spending");
+          let xprv = extractExtendedPrivateKey(unit.privateDescriptor);
           // The key record must map the stored descriptor's root pubkey, or
           // Core's GetExtKey finds no key for it and the wallet cannot sign.
           // A hardened branch step means the stored root is the branch key, so
@@ -642,6 +646,51 @@ var hodlWalletExport = (() => {
           id,
         );
       }
+    return records;
+  };
+
+  // Builds the exact key/value rows of the `main` table.
+  // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate,
+  //           canonicalizeDescriptor? } — the optional canonicalizer re-versions
+  //           SLIP-132 prefixes to the xpub/tpub Core parses; without it such
+  //           keys are refused.
+  const buildWalletRecords = (wallet, includePrivate, deps, creationTime) => {
+    const network = NETWORKS[wallet?.network];
+    if (!network) throw new Error(`wallet.dat export: unknown network ${wallet?.network}`);
+    const units = walletDescriptorUnits(wallet, includePrivate);
+    if (!units.length) throw new Error("wallet.dat export: no descriptors to export");
+
+    // Fail closed before any record is written: every descriptor, public and
+    // private, must be exactly one of the shapes this writer can place, and
+    // its wrapper must produce the output type the wallet declared.
+    for (const unit of units) {
+      assertDescriptorShape(unit.descriptor, "watch-only", deps, unit.type, Boolean(unit.multiKey));
+      if (unit.privateDescriptor) assertDescriptorShape(unit.privateDescriptor, "spending", deps, unit.type, Boolean(unit.multiKey));
+    }
+
+    const records = [];
+    const push = (key, value) => records.push([key, value]);
+
+    push(streamString("version"), u32le(RECORD_VERSION));
+    push(streamString("minversion"), u32le(RECORD_MINVERSION));
+    // The wallet is only signing-capable if at least one descriptor got a
+    // private key record; otherwise keep the disable-private-keys flag.
+    const hasPrivateKeys = includePrivate && units.some((unit) => unit.privateDescriptor);
+    const flags = FLAG_DESCRIPTORS | FLAG_BLANK_WALLET | (hasPrivateKeys ? 0n : FLAG_DISABLE_PRIVATE_KEYS);
+    push(streamString("flags"), u64le(flags));
+    // Fresh wallets sit on the genesis block: an empty locator for bestblock,
+    // and a one-hash locator for bestblock_nomerkle.
+    push(streamString("bestblock"), concat(u32le(DUMMY_LOCATOR_VERSION), compactSize(0)));
+    push(streamString("bestblock_nomerkle"), concat(u32le(DUMMY_LOCATOR_VERSION), compactSize(1), reverseHex(network.genesis)));
+
+    const seenActive = new Set();
+    for (const unit of units) {
+      if (unit.active !== false) {
+        const activeKey = `${unit.internal}:${unit.type}`;
+        if (seenActive.has(activeKey)) throw new Error("wallet.dat export: duplicate script type across accounts");
+        seenActive.add(activeKey);
+      }
+      records.push(...descriptorUnitRecords(unit, deps, creationTime));
     }
     return records;
   };
@@ -698,6 +747,7 @@ var hodlWalletExport = (() => {
     descriptorKeyTail,
     extendedKeyBody,
     cacheKeyExpIndex,
+    assertDescriptorShape,
     FLAG_DISABLE_PRIVATE_KEYS,
   };
 })();

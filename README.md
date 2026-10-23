@@ -202,7 +202,9 @@ an explicit error before those pairs are allocated.
   sync locators, descriptors with their cached branch parents and private-key
   records, and the active scriptPubKey pointers — then re-checked claim by
   claim: descriptor checksums and recomputed DescriptorIDs, cache parents
-  re-derived from the account keys, private-key records against their pubkeys
+  re-derived from the account keys (an honest warning where a descriptor
+  shape sits outside that re-derivation, never a silent pass), private-key
+  records against their pubkeys
   and record hashes, and the network magic against the chain's genesis hash.
   Private key material is listed but redacted unless a reveal toggle is on.
   Additional ranged descriptors (watch-only or, into a wallet that already

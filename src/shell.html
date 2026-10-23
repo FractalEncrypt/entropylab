@@ -753,7 +753,7 @@ words, pick one of the checksum words.</span></span>
         <summary>Add a descriptor</summary>
         <p class="muted label-description">Append a ranged descriptor to the loaded wallet. The file is rebuilt and re-checked before it can be downloaded.</p>
         <label class="field">Output descriptor
-          <span class="field-note">Ranged descriptors only, with a /* wildcard. A private (xprv) descriptor is stored neutered plus its key record, and only into a wallet that already holds private keys — the same rule Bitcoin Core applies.</span>
+          <span class="field-note">Ranged descriptors only, with a /* wildcard. A private (xprv) descriptor is stored neutered plus its key record, and only into a wallet that already holds private keys — or its watch-only form into an encrypted wallet, whose added key would otherwise sit unencrypted.</span>
           <textarea id="core-add-text" placeholder="wpkh([00000000/84'/0'/0']xpub…/0/*)" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
         </label>
         <div class="switch-row"><label class="switch-toggle"><input type="checkbox" id="core-add-active" aria-describedby="core-add-active-note"><span class="label">Set as the active descriptor for its type</span></label><p class="switch-note" id="core-add-active-note">New addresses of this type come from it. The descriptor it replaces stays in the wallet.</p></div>

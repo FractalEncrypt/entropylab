@@ -7,7 +7,7 @@
 // hodlCoreWallet global (src/js/core-wallet.js); this module only renders
 // the document and wires the controls, the same split the PSBT editor keeps
 // between psbt-wasm.js and psbt-editor.js.
-import { t, tHtml } from "./i18n.js";
+import { t, tAttr, tHtml } from "./i18n.js";
 import { expandableHtml, initExpandable } from "./expandable.js";
 
 const escapeHtml = (text) =>
@@ -28,6 +28,13 @@ const OUTPUT_TYPE_NAMES = [
 ];
 const outputTypeName = (type) => (OUTPUT_TYPE_NAMES[type] ?? (() => t("unknown type {n}", { n: type })))();
 
+// A u64 creation time can sit outside the Date range; toISOString() would
+// throw and blank the whole report.
+const createdText = (seconds) => {
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? t("{n} (outside the date range)", { n: seconds }) : date.toISOString();
+};
+
 // A check's tone reads as a verdict word in the inspector's status colours.
 const TONE_VERDICT = {
   ok: ["psbt-ok", () => t("Passed")],
@@ -36,7 +43,7 @@ const TONE_VERDICT = {
 };
 const toneVerdict = (tone) => TONE_VERDICT[tone] ?? ["psbt-warn", () => t("Unknown")];
 
-export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
+export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon } = {}) => {
   const upload = document.getElementById("core-upload");
   if (!upload) return;
   const $ = (id) => document.getElementById(id);
@@ -49,7 +56,9 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
   let fileName = "wallet.dat";
   let added = 0; // descriptors appended since upload
 
-  initExpandable();
+  // The shared overlay's copy button takes the app's icon pair; without it
+  // the button is present but blank.
+  initExpandable(copyIcon ? { copy: copyIcon, copied: copiedIcon } : {});
 
   const setError = (message) => {
     error.textContent = message || "";
@@ -81,17 +90,20 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
         return `<li data-tone="${escapeHtml(item.tone)}"><span class="label">${escapeHtml(item.label)}</span> — <span class="${className}">${escapeHtml(word())}</span><br><span class="muted">${escapeHtml(item.detail)}</span></li>`;
       })
       .join("");
-    return `<section class="psbt-analysis-summary" data-core-checks aria-label="${escapeHtml(t("Wallet verification status"))}"><p class="label">${tHtml("Wallet verification")}</p><p class="${overallClass}"><strong>${overall}</strong></p><ul>${rows}</ul><p class="edge-note is-private">${tHtml("Passed means only that the file’s records agree with each other. It does not show that the keys are backed up or that Bitcoin Core will load the file.")}</p></section>`;
+    return `<section class="psbt-analysis-summary" data-core-checks aria-label="${tAttr("Wallet verification status")}"><p class="label">${tHtml("Wallet verification")}</p><p class="${overallClass}"><strong>${overall}</strong></p><ul>${rows}</ul><p class="edge-note is-private">${tHtml("Passed means only that the file’s records agree with each other. It does not show that the keys are backed up or that Bitcoin Core will load the file.")}</p></section>`;
   };
 
   const walletRowsHtml = () => {
     const rows = [];
     const push = (field, valueHtml) => rows.push(`<tr><td>${field}</td><td>${valueHtml}</td></tr>`);
     const privateKeys = doc.descriptors.reduce((count, entry) => count + entry.keys.length, 0);
+    const encryptedKeys = doc.records.filter((record) => record.name === "walletdescriptorcryptedkey").length;
     push(tHtml("Network"), doc.network ? escapeHtml(doc.network) : `<span class="psbted-note-bad">${tHtml("unknown application_id 0x{id}", { id: doc.applicationId.toString(16).padStart(8, "0") })}</span>`);
     push(tHtml("Wallet type"), privateKeys
       ? tHtml("signing ({count} private key record(s))", { count: privateKeys })
-      : tHtml("watch-only"));
+      : encryptedKeys
+        ? tHtml("encrypted ({count} encrypted key record(s))", { count: encryptedKeys })
+        : tHtml("watch-only"));
     push(tHtml("SQLite page size"), tHtml("{count} bytes", { count: doc.pageSize }));
     if (doc.meta.version !== undefined) push(tHtml("Client version"), escapeHtml(String(doc.meta.version)));
     if (doc.meta.minversion !== undefined) push(tHtml("Minimum client version"), escapeHtml(String(doc.meta.minversion)));
@@ -111,12 +123,17 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
 
   const descriptorHtml = (entry, index) => {
     const functions = entry.functions.join(" → ") || t("unknown");
-    const branch = entry.active?.internal ? t("change") : t("external");
+    // Inactive descriptors have no pointer to say which chain they are, so
+    // read the branch step in front of the wildcard; the key origin's own
+    // path contains /1h/ steps too, hence the wildcard anchor.
+    const branch = entry.active
+      ? (entry.active.internal ? t("change") : t("external"))
+      : /\/1['hH]?\/\*\)/.test(entry.descriptor) ? t("change") : t("external");
     const rows = [];
     const push = (field, valueHtml) => rows.push(`<tr><td>${field}</td><td>${valueHtml}</td></tr>`);
     push(tHtml("Descriptor"), expandableHtml(entry.descriptor, { label: t("Descriptor {n}", { n: index + 1 }) }));
     push(tHtml("Descriptor ID"), expandableHtml(entry.id, { label: t("Descriptor {n} id", { n: index + 1 }) }));
-    push(tHtml("Created"), entry.creationTime ? escapeHtml(new Date(entry.creationTime * 1000).toISOString()) : tHtml("0 (epoch — a fresh wallet)"));
+    push(tHtml("Created"), entry.creationTime ? escapeHtml(createdText(entry.creationTime)) : tHtml("0 (epoch — a fresh wallet)"));
     push(tHtml("Next index"), escapeHtml(String(entry.nextIndex)));
     push(tHtml("Range"), escapeHtml(`${entry.rangeStart} … ${entry.rangeEnd}`));
     push(
@@ -148,9 +165,9 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
       .map((record) => {
         const note = record.error ? `<span class="psbted-note-bad">${escapeHtml(record.error)}</span>` : "";
         return `<tr>
-          <td class="psbted-name">${escapeHtml(record.name ?? t("(unnamed)"))}${note ? `<br>${note}` : ""}</td>
-          <td class="psbted-hex">${expandableHtml(bytesToHex(record.key), { label: t("Record key (hex)") })}</td>
-          <td class="psbted-hex">${expandableHtml(bytesToHex(record.value), { label: t("Record value (hex)") })}</td>
+          <td class="psbted-name">${record.name == null ? tHtml("(unnamed)") : escapeHtml(record.name)}${note ? `<br>${note}` : ""}</td>
+          <td class="psbted-hex">${expandableHtml(bytesToHex(record.key), { label: tHtml("Record key (hex)") })}</td>
+          <td class="psbted-hex">${expandableHtml(bytesToHex(record.value), { label: tHtml("Record value (hex)") })}</td>
         </tr>`;
       })
       .join("");
@@ -183,7 +200,7 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
             : t("Account key — {type}", { type: outputTypeName({ bip44: 0, bip49: 1, bip84: 2, bip86: 3 }[item.script] ?? -1) });
           const branches = item.internal && item.external ? t("receive and change") : item.internal ? t("change") : t("receive");
           return `<tr>
-            <td><strong>${escapeHtml(kindLabel)}</strong><br><span class="muted">${escapeHtml(t("Fingerprint {fingerprint} · {branches}", { fingerprint: item.fingerprint, branches }))}</span></td>
+            <td><strong>${escapeHtml(kindLabel)}</strong><br><span class="muted">${tHtml("Fingerprint {fingerprint} · {branches}", { fingerprint: item.fingerprint, branches })}</span></td>
             <td><button class="btn secondary" type="button" data-core-import-go="${index}" ${failed ? `disabled aria-disabled="true"` : ""}>${tHtml("Import into Key Station")}</button></td>
           </tr>`;
         })
@@ -194,7 +211,7 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
       if (result.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape is not an importable key.", { count: result.skipped })}</p>`;
     } else {
       body = `<p class="muted">${escapeHtml((IMPORT_REASONS[result?.reason] ?? IMPORT_REASONS["unsupported-key-records"])())}</p>`;
-      if (result?.skipped) body += `<p class="muted">${escapeHtml(t("{count} private key record(s) stayed out: their shape is not an importable key.", { count: result.skipped }))}</p>`;
+      if (result?.skipped) body += `<p class="muted">${tHtml("{count} private key record(s) stayed out: their shape is not an importable key.", { count: result.skipped })}</p>`;
     }
     return `${sectionHeadHtml(tHtml("Import into Key Station"), result?.imports?.length || undefined, tHtml("Move this wallet’s proven key material into the Key Station to review and derive there"))}${body}`;
   };
@@ -262,6 +279,9 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
     (async () => {
       try {
         setError(null);
+        // Check the reported size before materialising an oversized file:
+        // arrayBuffer() has already read it all by the time loadBytes runs.
+        if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(t("This wallet file is too large to inspect safely."));
         loadBytes(new Uint8Array(await chosen.arrayBuffer()), chosen.name);
         render();
       } catch (exception) {
@@ -321,4 +341,28 @@ export const initCoreWallet = ({ deps, onImportIntoStation } = {}) => {
 
   reveal.addEventListener("change", () => render());
   addText.addEventListener("input", syncAddGo);
+
+  // A revealed key record is private DOM: leaving the page hides it again and
+  // a pagehide drops the parsed wallet entirely, so neither a bfcache restore
+  // nor a screen capture after leaving shows old key material.
+  const concealing = () => {
+    if (!doc || !reveal.checked) return;
+    reveal.checked = false;
+    render();
+  };
+  document.addEventListener("hodl:conceal", concealing);
+  const teardown = () => {
+    // A pasted descriptor (possibly an xprv) can sit in the field before any
+    // wallet is loaded, so clear it even when there is no document to wipe.
+    if (!doc) {
+      addText.value = "";
+      reveal.checked = false;
+      return;
+    }
+    wipe.onclick();
+  };
+  addEventListener("pagehide", teardown);
+  addEventListener("pageshow", (event) => {
+    if (event.persisted) teardown();
+  });
 };

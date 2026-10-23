@@ -167,6 +167,17 @@ var hodlCoreWallet = (() => {
     return null;
   };
 
+  // The OutputType a descriptor's wrapper produces, from its parsed function
+  // chain; null when the shape is outside the ones the export knows.
+  const descriptorOutputType = (functions) => {
+    const chain = functions.join(":");
+    if (chain === "pkh") return 0;
+    if (chain === "sh:wpkh" || chain === "sh:wsh") return 1;
+    if (chain === "wpkh" || chain === "wsh") return 2;
+    if (chain === "tr") return 3;
+    return null;
+  };
+
   const flagNames = (flags) => {
     const names = [];
     let rest = flags;
@@ -375,7 +386,14 @@ var hodlCoreWallet = (() => {
     }
 
     const byId = new Map(doc.descriptors.map((entry) => [entry.id, entry]));
+    if (byId.size !== doc.descriptors.length) {
+      checks.push(check("bad", "Descriptor ids", `${doc.descriptors.length - byId.size} duplicate walletdescriptor id(s) — Core resolves one id to one descriptor`));
+    }
+    const activeKeys = new Set();
     for (const active of doc.meta.actives ?? []) {
+      const activeKey = `${active.internal}:${active.type}`;
+      if (activeKeys.has(activeKey)) checks.push(check("bad", "Active scriptPubKey", `more than one ${active.internal ? "internal" : "external"} record for type ${active.type}`));
+      activeKeys.add(activeKey);
       if (byId.has(active.id)) continue;
       checks.push(check("bad", "Active scriptPubKey", `${active.internal ? "internal" : "external"} type ${active.type} points at a missing descriptor`));
     }
@@ -400,15 +418,36 @@ var hodlCoreWallet = (() => {
         // DescriptorID: sha256 of the compat form (' instead of h) with its
         // checksum — the id Core recomputes at load (DBErrors::CORRUPT on a
         // mismatch).
-        const compatBody = hodlWalletExport.toCompatForm(body);
-        const id = bytesToHex(deps.sha256(utf8(`${compatBody}#${deps.checksum(compatBody)}`)));
-        checks.push(id === entry.id
-          ? check("ok", `Descriptor id`, `${label} id matches its recomputed DescriptorID`)
-          : check("bad", `Descriptor id`, `${label} record key is not the DescriptorID Core would compute`));
+        let id = null;
+        try {
+          const compatBody = hodlWalletExport.toCompatForm(body);
+          id = bytesToHex(deps.sha256(utf8(`${compatBody}#${deps.checksum(compatBody)}`)));
+        } catch {
+          id = null; // the descriptor has a character Core's charset lacks
+        }
+        checks.push(id === null
+          ? check("bad", `Descriptor id`, `${label} id cannot be recomputed from its text`)
+          : id === entry.id
+            ? check("ok", `Descriptor id`, `${label} id matches its recomputed DescriptorID`)
+            : check("bad", `Descriptor id`, `${label} record key is not the DescriptorID Core would compute`));
       }
 
       if (!(entry.rangeStart <= entry.rangeEnd && entry.nextIndex >= entry.rangeStart && entry.nextIndex <= entry.rangeEnd + 1)) {
         checks.push(check("bad", `Descriptor range`, `${label} range [${entry.rangeStart}, ${entry.rangeEnd}] with next index ${entry.nextIndex} is incoherent`));
+      }
+
+      // The active record's chain and output type must name this descriptor:
+      // Core files it under that (internal, type) key, so a swapped value
+      // would make it watch a chain or script type it does not describe.
+      if (entry.active) {
+        const expectedType = descriptorOutputType(entry.functions);
+        if (expectedType !== null && entry.active.type !== expectedType) {
+          checks.push(check("bad", `Active scriptPubKey`, `${label} is marked type ${entry.active.type} but its wrapper is type ${expectedType}`));
+        }
+        const change = /\/1['hH]?\/\*\)/.test(entry.descriptor);
+        if (entry.active.internal !== change) {
+          checks.push(check("bad", `Active scriptPubKey`, `${label} is filed as ${entry.active.internal ? "internal" : "external"} but its branch is ${change ? "change" : "receive"}`));
+        }
       }
 
       // Every pubkey provider must have a cached parent: the branch child of
@@ -422,7 +461,7 @@ var hodlCoreWallet = (() => {
         let expected = null;
         try {
           const body = text.split("#")[0];
-          const tail = hodlWalletExport.descriptorKeyTail(body, xpub);
+          const tail = hodlWalletExport.descriptorKeyTail(body, xpub, pubs.slice(0, index).filter((key) => key === xpub).length);
           expected = tail.branch === null
             ? hodlWalletExport.extendedKeyBody(xpub, deps)
             : deps.deriveBranchBody(xpub, tail.branch);
@@ -447,11 +486,19 @@ var hodlCoreWallet = (() => {
       for (const keyRecord of entry.keys) {
         // Bitcoin Core CPrivKey DER form: 3081d3 020101 0420 <32-byte secret> …
         const secret = keyRecord.der.slice(8, 40);
-        const pubkey = deps.publicKeyForPrivate(secret);
-        const hash = deps.sha256(deps.sha256(concat(keyRecord.pubkey, keyRecord.der)));
         if (keyRecord.der.length !== 214 || keyRecord.der[0] !== 0x30 || keyRecord.der[6] !== 0x04 || keyRecord.der[7] !== 0x20) {
           checks.push(check("bad", `Private key record`, `${label} key record is not the expected DER private key`));
-        } else if (!bytesEqual(pubkey, keyRecord.pubkey)) {
+          continue;
+        }
+        let pubkey;
+        try {
+          pubkey = deps.publicKeyForPrivate(secret);
+        } catch {
+          checks.push(check("bad", `Private key record`, `${label} key record secret is not a valid secp256k1 private key`));
+          continue;
+        }
+        const hash = deps.sha256(deps.sha256(concat(keyRecord.pubkey, keyRecord.der)));
+        if (!bytesEqual(pubkey, keyRecord.pubkey)) {
           checks.push(check("bad", `Private key record`, `${label} private key does not match its record pubkey`));
         } else if (!bytesEqual(hash, keyRecord.keyHash)) {
           checks.push(check("bad", `Private key record`, `${label} key record hash mismatch`));
@@ -507,7 +554,16 @@ var hodlCoreWallet = (() => {
     else throw new Error("Unsupported descriptor function for a Core wallet (pkh, sh, wpkh, wsh, tr, multi).");
 
     EXTENDED_PUB_GLOBAL.lastIndex = 0;
-    const multiKey = (body.match(EXTENDED_PUB_GLOBAL) || []).length > 1;
+    // A multisig *wrapper* with one key is still a multisig shape (Core's
+    // wallet kind); the record builder must read it through the multi path
+    // even though there is only one provider.
+    const multiKey = /\b(?:sortedmulti|multi|multi_a)\(/.test(body)
+      || (body.match(EXTENDED_PUB_GLOBAL) || []).length > 1;
+    // The export's own shape guard: it refuses what Core would parse
+    // differently than the stored text (a leading-zero path step, a step at
+    // 2^31 or deeper) and every wrapper the record builder cannot place.
+    hodlWalletExport.assertDescriptorShape(stored, "watch-only", deps, type, multiKey);
+    if (privateText) hodlWalletExport.assertDescriptorShape(privateText, "spending", deps, type, multiKey);
     return {
       type,
       internal,
@@ -529,6 +585,9 @@ var hodlCoreWallet = (() => {
     const rows = [...doc.rows];
     if (unit.privateDescriptor && doc.meta.flags !== undefined && (doc.meta.flags & hodlWalletExport.FLAG_DISABLE_PRIVATE_KEYS) !== 0n) {
       throw new Error("This wallet is flagged disable-private-keys; Bitcoin Core would refuse a private descriptor here too.");
+    }
+    if (unit.privateDescriptor && isEncrypted(doc)) {
+      throw new Error("This wallet is encrypted; the added private descriptor would sit in the file unencrypted. Add its watch-only form instead.");
     }
     const unitRows = hodlWalletExport.descriptorUnitRecords(unit, deps, creationTime);
     const descriptorKey = bytesToHex(unitRows[0][0]);
@@ -576,9 +635,11 @@ var hodlCoreWallet = (() => {
   const XPRV_VERSION = { mainnet: 0x0488ade4, testnet: 0x04358394 }; // xprv / tprv
   const IMPORT_SCRIPTS = { pkh: "bip44", "sh:wpkh": "bip49", wpkh: "bip84", tr: "bip86" };
 
+  const isEncrypted = (doc) => doc.records.some((record) => record.name === "walletdescriptorcryptedkey");
+
   const stationImports = (doc, deps) => {
     const none = (reason) => ({ reason, skipped: 0, imports: [] });
-    if (doc.records.some((record) => record.name === "walletdescriptorcryptedkey")) return none("encrypted");
+    if (isEncrypted(doc)) return none("encrypted");
     const signers = doc.descriptors.filter((entry) => entry.keys.length);
     if (!signers.length) return none("no-private-keys");
     // The four chains share two extended-key families: mainnet xprv/xpub, and
@@ -595,7 +656,10 @@ var hodlCoreWallet = (() => {
       const script = IMPORT_SCRIPTS[entry.functions.join(":")];
       EXTENDED_PUB_GLOBAL.lastIndex = 0;
       const pubs = entry.descriptor.match(EXTENDED_PUB_GLOBAL) || [];
-      if (!script || pubs.length !== 1) {
+      // tr(NUMS, …) is a script-path output: the account key is a leaf, so a
+      // key-path BIP86 derivation would produce different addresses.
+      const scriptPath = script === "bip86" && /^tr\([0-9a-fA-F]{64},/.test(entry.descriptor.split("#")[0]);
+      if (!script || pubs.length !== 1 || scriptPath) {
         skipped += entry.keys.length;
         continue;
       }
@@ -649,7 +713,7 @@ var hodlCoreWallet = (() => {
         const key = depth === 0 ? `0::${bytesToHex(raw.slice(4))}` : `3:${script}:${bytesToHex(raw.slice(4))}`;
         const item = items.get(key) ?? {
           xprv,
-          fingerprint: bytesToHex(deps.hash160(secretPubkey)),
+          fingerprint: bytesToHex(deps.hash160(secretPubkey).subarray(0, 4)),
           kind: depth === 0 ? "root" : "account",
           script: depth === 0 ? null : script,
           internal: false,

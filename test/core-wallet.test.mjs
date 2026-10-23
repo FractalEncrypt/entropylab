@@ -112,7 +112,7 @@ test("the build and the shell register the module and the tab", () => {
   assert.match(template, /\/\*@@JS_CORE_WALLET@@\*\//);
   const app = read("src/js/app.js");
   assert.match(app, /import \{ initCoreWallet \} from "\.\/core-wallet-ui\.js"/);
-  assert.match(app, /initCoreWallet\(\{ deps: hodlWalletDatDeps\(\), onImportIntoStation: hodlCoreImportIntoStation \}\)/);
+  assert.match(app, /initCoreWallet\(\{ deps: hodlWalletDatDeps\(\), onImportIntoStation: hodlCoreImportIntoStation, copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup \}\)/);
 });
 
 test("parses a real Core watch-only wallet and verifies clean", () => {
@@ -213,6 +213,47 @@ test("detects a wrong cache parent (Core would watch the wrong subtree)", () => 
   assert.ok(bad.some((check) => check.label === "Descriptor cache"), JSON.stringify(bad));
 });
 
+test("detects an active record whose type does not match the descriptor wrapper", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
+  const entry = doc.descriptors.find((item) => item.active && item.functions.join(":") === "wpkh" && !item.active.internal);
+  assert.ok(entry, "fixture has an active native-SegWit receive descriptor");
+  entry.active.type = 3; // filed as Taproot
+  assert.ok(badChecks(core.verifyWalletDoc(doc, coreDeps)).some((check) => /marked type 3 but its wrapper is type 2/.test(check.detail)));
+});
+
+test("detects an active record filed on the wrong chain", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
+  const entry = doc.descriptors.find((item) => item.active && !item.active.internal && /\/0\/\*\)/.test(item.descriptor));
+  assert.ok(entry, "fixture has an active receive branch");
+  entry.active.internal = true;
+  assert.ok(badChecks(core.verifyWalletDoc(doc, coreDeps)).some((check) => /filed as internal but its branch is receive/.test(check.detail)));
+});
+
+test("a descriptor with a character outside Core's charset yields checks, not a throw", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
+  doc.descriptors[0].descriptor = doc.descriptors[0].descriptor.replace("#", "!#");
+  // The app's checksum implementation throws on a character outside Core's
+  // charset; model that instead of the harness's permissive reference.
+  const strict = { ...coreDeps, checksum: (body) => { if (body.includes("!")) throw new Error("bad character");
+    return coreDeps.checksum(body); } };
+  const bad = badChecks(core.verifyWalletDoc(doc, strict)).map((check) => check.detail);
+  assert.ok(bad.some((line) => /checksum mismatch/.test(line)));
+  assert.ok(bad.some((line) => /cannot be recomputed/.test(line)));
+});
+
+test("detects duplicate descriptor ids and duplicate active slots", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
+  doc.descriptors.push({ ...doc.descriptors[0] });
+  doc.meta.actives.push({ ...doc.meta.actives[0] });
+  const bad = badChecks(core.verifyWalletDoc(doc, coreDeps)).map((check) => check.detail);
+  assert.ok(bad.some((line) => /duplicate walletdescriptor id/.test(line)));
+  assert.ok(bad.some((line) => /more than one /.test(line)));
+});
+
 test("detects an active record pointing at a missing descriptor", () => {
   const { core } = loadModule();
   const records = REF_WATCH_ONLY_RECORDS.map(([key, value]) => [key, value]);
@@ -281,6 +322,51 @@ test("unitFromDescriptor rewrites SLIP-132 keys and rejects bad input", () => {
   );
 });
 
+test("unitFromDescriptor refuses a path step Core would normalize out of the stored text", () => {
+  const { core } = loadModule();
+  // "/00/*" parses in Core but its DescriptorID is recomputed from the
+  // normalized "/0/*", so a file storing the raw text fails load.
+  const zero = `wpkh([420c9ea3/84h/1h/0h]${REF_ACCOUNT_TPUB}/00/*)`;
+  assert.throws(() => core.unitFromDescriptor(zero, {}, coreDeps), /leading zero|path step/);
+  // A step at 2^31 is beyond Core's parser.
+  const huge = `wpkh([420c9ea3/84h/1h/0h]${REF_ACCOUNT_TPUB}/2147483648/*)`;
+  assert.throws(() => core.unitFromDescriptor(huge, {}, coreDeps), /path shape/);
+});
+
+test("an encrypted wallet refuses a private descriptor that would land in plaintext", () => {
+  const { core } = loadModule();
+  const crypted = ["1a77616c6c657464657363726970746f72637279707465646b6579" + "00".repeat(32) + "21" + "02".repeat(33), "f0" + "01".repeat(48)];
+  const doc = parseRecords([...REF_PRIVATE_RECORDS, crypted]);
+  const unit = core.unitFromDescriptor(EXTRA_ACCOUNT.private, { internal: false }, coreDeps);
+  assert.throws(() => core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME), /encrypted/);
+});
+
+test("an out-of-range key secret reports a check instead of aborting verification", () => {
+  const { core } = loadModule();
+  const rows = REF_PRIVATE_RECORDS.map(([key, value]) => [key, value]);
+  const keyPrefix = "1377616c6c657464657363726970746f726b6579";
+  const record = rows.find(([key]) => key.startsWith(keyPrefix));
+  const value = hexToBytes(record[1]);
+  value.fill(0, 1 + 8, 1 + 40); // zero the 32-byte secret, keep the DER shape
+  record[1] = bytesToHex(value);
+  const doc = parseRecords(rows);
+  const checks = core.verifyWalletDoc(doc, coreDeps);
+  assert.ok(checks.some((item) => item.tone === "bad" && /not a valid secp256k1 private key/.test(item.detail)));
+});
+
+test("a malformed key record reports a check instead of aborting the whole verification", () => {
+  const { core } = loadModule();
+  const rows = REF_PRIVATE_RECORDS.map(([key, value]) => [key, value]);
+  const keyPrefix = "1377616c6c657464657363726970746f726b6579";
+  const record = rows.find(([key]) => key.startsWith(keyPrefix));
+  // compactSize(3) + three bytes + the 32-byte record hash: too short to
+  // carry the 32-byte secret the verifier reads.
+  record[1] = "03abcdef" + "00".repeat(32);
+  const doc = parseRecords(rows);
+  const checks = core.verifyWalletDoc(doc, coreDeps);
+  assert.ok(checks.some((item) => item.tone === "bad" && /expected DER/.test(item.detail)), "the short key record must be a bad check");
+});
+
 test("adding a descriptor appends records, rebuilds, and re-verifies clean", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
@@ -329,6 +415,35 @@ test("a private descriptor joins a signing wallet and verifies", () => {
   assert.deepEqual(badChecks(core.verifyWalletDoc(reparsed, coreDeps)), []);
 });
 
+test("a one-key multisig wrapper is still treated as a multisig shape", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  const descriptor = `wsh(multi(1,${REF_ACCOUNT_TPUB}/0/*))`;
+  const unit = core.unitFromDescriptor(descriptor, { internal: false }, coreDeps);
+  assert.equal(unit.multiKey, true, "one key, still the multi shape");
+  assert.equal(unit.type, 2);
+  const rows = core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME);
+  const reparsed = core.parseWalletDat(core.buildWalletDat(doc, rows));
+  assert.deepEqual(badChecks(core.verifyWalletDoc(reparsed, coreDeps)), []);
+});
+
+test("a multisig descriptor's single xprv is found in a later slot, not the first xpub", () => {
+  const { core } = loadModule();
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  const privKey = EXTRA_ACCOUNT.private.match(/tprv[1-9A-HJ-NP-Za-km-z]{90,}/)[0];
+  const descriptor = `wsh(sortedmulti(1,${REF_ACCOUNT_TPUB}/0/*,${privKey}/0/*))`;
+  const unit = core.unitFromDescriptor(descriptor, { internal: false }, coreDeps);
+  assert.ok(!unit.descriptor.includes("tprv"), "the stored form is neutered");
+  const rows = core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME);
+  const reparsed = core.parseWalletDat(core.buildWalletDat(doc, rows));
+  const added = reparsed.descriptors.find((entry) => entry.descriptor === unit.descriptor);
+  assert.ok(added);
+  assert.equal(added.keys.length, 1, "one key record for the one xprv");
+  const expectedPubkey = publicKeyForPrivate(b58checkDecode(privKey).slice(46, 78));
+  assert.deepEqual(added.keys[0].pubkey, expectedPubkey, "the record belongs to the xprv, not the first xpub");
+  assert.deepEqual(badChecks(core.verifyWalletDoc(reparsed, coreDeps)), []);
+});
+
 test("a watch-only wallet refuses a private descriptor, like Core", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_WATCH_ONLY_RECORDS);
@@ -358,7 +473,9 @@ test("unknown record types survive a rebuild byte-for-byte", () => {
 const importDeps = {
   ...coreDeps,
   base58Encode: b58checkEncode,
-  hash160: (bytes) => ripemd160(sha256(bytes)).subarray(0, 4),
+  // Full HASH160, exactly as the app's has160 dep returns; the module takes
+  // the BIP32 fingerprint head itself.
+  hash160: (bytes) => ripemd160(sha256(bytes)),
 };
 const parseHex = (records) => loadModule().core.parseWalletDat(
   dbFromRecords(records.map(([key, value]) => [bytesToHex(hexToBytes(key)), bytesToHex(hexToBytes(value))])),
@@ -380,6 +497,7 @@ test("a Core-generated wallet imports as exactly one root key", () => {
   // the fixed fixture seed — assembly must reproduce it byte for byte.
   assert.equal(item.xprv, GENERATED_ROOT_TPRV);
   assert.equal(item.fingerprint, GENERATED_MASTER_FINGERPRINT);
+  assert.equal(item.fingerprint.length, 8, "the displayed fingerprint is the BIP32 4-byte head");
 });
 
 test("an imported account-key wallet imports as one account xprv per script type", () => {
@@ -402,8 +520,22 @@ test("an imported account-key wallet imports as one account xprv per script type
     // node fingerprint = the account key's HASH160 — independently computed
     // from the reference account xpub's pubkey.
     assert.equal(item.fingerprint, bytesToHex(ripemd160(sha256(b58checkDecode(REF_ACCOUNT_TPUB).slice(45, 78))).subarray(0, 4)));
+    assert.equal(item.fingerprint.length, 8);
   }
   assert.deepEqual(result.imports.map((item) => item.script).sort(), scripts);
+});
+
+test("a tr(NUMS, multi_a) script-path key is not imported as BIP86 key-path", () => {
+  const { core } = loadModule();
+  const nums = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+  const privKey = EXTRA_ACCOUNT.private.match(/tprv[1-9A-HJ-NP-Za-km-z]{90,}/)[0];
+  const unit = core.unitFromDescriptor(`tr(${nums},multi_a(1,${privKey}/0/*))`, {}, coreDeps);
+  const doc = parseRecords(REF_PRIVATE_RECORDS);
+  const rows = core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME);
+  const reparsed = core.parseWalletDat(core.buildWalletDat(doc, rows));
+  const result = core.stationImports(reparsed, importDeps);
+  assert.equal(result.imports.length, 4, "only the four account key-path imports remain");
+  assert.ok(result.skipped >= 1, "the script-path key is counted as skipped");
 });
 
 test("a watch-only wallet has nothing to import", () => {
