@@ -44,6 +44,16 @@ test("2-of-3 native sortedmulti becomes @0/** @1/** @2/**", () => {
   assert.equal(policy.keys[2], `[${fingerprint}/48'/0'/2'/2']${nodeC.publicExtendedKey}`);
 });
 
+test("a valid 2-of-3 with distinct keys keeps the exact template and keys", () => {
+  const policy = buildBip388Policy({ receiveDescriptor: receive, changeDescriptor: change });
+  assert.equal(policy.descriptorTemplate, "wsh(sortedmulti(2,@0/**,@1/**,@2/**))");
+  assert.deepEqual(policy.keys, [
+    `[${fingerprint}/48'/0'/0'/2']${nodeA.publicExtendedKey}`,
+    `[${fingerprint}/48'/0'/1'/2']${nodeB.publicExtendedKey}`,
+    `[${fingerprint}/48'/0'/2'/2']${nodeC.publicExtendedKey}`,
+  ]);
+});
+
 test("text export is watch-only and names the template", () => {
   const text = buildBip388PolicyText({ receiveDescriptor: receive, changeDescriptor: change });
   assert.match(text, /descriptor_template: wsh\(sortedmulti\(2,@0\/\*\*,@1\/\*\*,@2\/\*\*\)\)/);
@@ -82,6 +92,12 @@ test("BIP45 two-step tails are refused", () => {
   const inner = `sh(sortedmulti(2,${keyA}/0/0/*,${keyB}/0/0/*))`;
   const descriptor = `${inner}#${descriptorChecksum(inner)}`;
   assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /no \/0\/\* or \/1\/\*|BIP45/);
+});
+
+test("a key repeated in more than one slot is refused", () => {
+  const body = `wsh(sortedmulti(2,${keyA}/0/*,${keyA}/1/*,${keyC}/0/*))`;
+  const descriptor = `${body}#${descriptorChecksum(body)}`;
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /more than one slot/);
 });
 
 test("filename names the policy", () => {

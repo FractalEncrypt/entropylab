@@ -30,10 +30,9 @@ function extractRangedKeys(body) {
   let match;
   while ((match = RANGED_KEY.exec(body))) {
     const info = `${match[1] || ""}${match[2]}`;
-    if (!seen.has(info)) {
-      seen.set(info, keys.length);
-      keys.push(info);
-    }
+    if (seen.has(info)) throw new Error("BIP 388 export: a key appears in more than one slot.");
+    seen.set(info, keys.length);
+    keys.push(info);
   }
   if (!keys.length) throw new Error("BIP 388 export: no /0/* or /1/* xpub keys in the descriptor.");
   return keys;
