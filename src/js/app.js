@@ -2076,6 +2076,8 @@ function hodlWalletDatDeps() {
     sha256: (bytes) => hodlSha256(bytes),
     checksum: hodlDescriptorChecksum,
     base58Decode: (text) => hodlBase58Check.decode(text),
+    base58Encode: (bytes) => hodlBase58Check.encode(bytes),
+    hash160: (bytes) => hodlHash160(bytes),
     deriveBranchBody: (extendedKeyText, branch) => {
       // Any SLIP-132 prefix is accepted; it is re-versioned to plain xpub here.
       let node = hodlHDKey.fromExtendedKey(hodlReversionExtendedKey(extendedKeyText, hodlExtendedKeyVersions.mainnet.x.pub)).deriveChild(branch), body = new Uint8Array(74), view = new DataView(body.buffer);
@@ -2111,6 +2113,28 @@ function hodlWalletDatDeps() {
       return hodlReversionExtendedKey(node.publicExtendedKey, testnet ? hodlExtendedKeyVersions.testnet.x.pub : hodlExtendedKeyVersions.mainnet.x.pub);
     }
   };
+}
+// A proven key from a Core wallet.dat moves into the Key Station as reviewable
+// inputs — never a finished key. The lab is filled with the reconstructed
+// extended key and the wallet's own network family; deriving happens only when
+// the user presses Derive Key, the same contract as the journal's key manager
+// "Load inputs to derive" flow (hodlKeyManagerUseInStation).
+function hodlCoreImportIntoStation(item) {
+  if (!item?.xprv || typeof item.xprv !== "string") return;
+  let source = hodlNewKeyState();
+  source.mode = "seed";
+  source.fields.seed = item.xprv;
+  source.fields.network = /^xprv/.test(item.xprv) ? "mainnet" : "testnet";
+  source.fields.coinType = source.fields.network === "testnet" ? "1'" : "0'";
+  if (item.kind === "account" && item.script) {
+    source.fields.script = item.script;
+    source.accountId = item.script;
+  }
+  let labIndex = hodlFillLabFromKey(source);
+  hodlActiveKey = labIndex;
+  hodlRenderKeyTabs();
+  hodlShowWorkspace("calc");
+  hodlJournalLog("core-import", item.fingerprint || "wallet-dat", "core");
 }
 function hodlDownloadWalletDat() {
   if (!hodlWalletResult || !hodlWalletExport.hasDescriptors(hodlWalletResult)) return;
@@ -18207,7 +18231,7 @@ function hodlInitWorkspace() {
   hodlInitMsig();
   hodlInitPsbt();
   initPsbtEditor({ networkDefault: () => hodlInspectorNetwork(), copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup });
-  initCoreWallet({ deps: hodlWalletDatDeps() });
+  initCoreWallet({ deps: hodlWalletDatDeps(), onImportIntoStation: hodlCoreImportIntoStation });
   hodlInitBip85();
   hodlInitVanity();
   hodlInitSp();
