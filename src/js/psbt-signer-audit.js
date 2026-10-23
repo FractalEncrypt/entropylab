@@ -247,7 +247,18 @@ const computeChangeFindings = (afterDoc, wallet) => {
         findings.push(finding("CHANGE_UNVERIFIED", "warning", "output", index, null, { index, scriptPubKey, fingerprint }));
       }
     } else if (scriptMatches) {
-      findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint: null }));
+      // The script match is the authority, but a derivation from a fingerprint
+      // the wallet does not claim belongs in the evidence (SA-2).
+      const foreign = pairs.find((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
+        && pair.decoded && !pair.decodeError
+        && typeof pair.decoded.fingerprint === "string"
+        && !fingerprints.includes(lower(pair.decoded.fingerprint)));
+      findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, {
+        index,
+        scriptPubKey,
+        fingerprint: null,
+        ...(foreign ? { foreignFingerprint: lower(foreign.decoded.fingerprint) } : {}),
+      }));
       verified.add(index);
     }
   }
@@ -501,8 +512,8 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
       if (change.name === "PSBT_OUT_BIP32_DERIVATION" || change.name === "PSBT_OUT_TAP_BIP32_DERIVATION") {
         if (!verifiedChangeOutputs.has(change.index)) return false;
         const fingerprint = lower(afterPair?.decoded?.fingerprint);
-        const fingerprints = (options.wallet?.fingerprints ?? []).map(lower);
-        const scripts = (options.wallet?.scriptPubKeys ?? []).map(lower);
+        const fingerprints = Array.isArray(options.wallet?.fingerprints) ? options.wallet.fingerprints.map(lower) : [];
+        const scripts = Array.isArray(options.wallet?.scriptPubKeys) ? options.wallet.scriptPubKeys.map(lower) : [];
         const scriptPubKey = lower(afterDoc.tx?.outputs?.[change.index]?.scriptPubKey);
         if (fingerprints.length > 0) return fingerprints.includes(fingerprint);
         return scripts.length > 0 && scripts.includes(scriptPubKey);
@@ -737,7 +748,9 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   // Phase E — sighash evaluation of new signatures.
   for (const event of newSigEvents) {
     const parsed = parseAppendedSighash(event);
-    if (parsed.malformed) {
+    // A Taproot signature field only exists for a P2TR spent output; on any
+    // other input the field itself is malformed, whatever its length (SA-4).
+    if (parsed.malformed || (parsed.tap && !taprootish(beforeView, event.index))) {
       findings.push(finding("SIGNATURE_MALFORMED", "critical", "input-map", event.index, null, {
         index: event.index,
         name: event.name,
