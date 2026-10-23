@@ -88,8 +88,10 @@ const structurallyComplete = (doc) => isObject(doc)
   && doc.tx.outputs.every(isObject)
   && Array.isArray(doc.inputs)
   && doc.inputs.every(isPairArray)
+  && doc.inputs.length === doc.tx.inputs.length
   && Array.isArray(doc.outputs)
   && doc.outputs.every(isPairArray)
+  && doc.outputs.length === doc.tx.outputs.length
   && Array.isArray(doc.globals)
   && doc.globals.every(isObject);
 
@@ -278,6 +280,26 @@ const pubkeyForEvent = (event) => {
   return lower(event.pair?.decoded?.pubkey ?? lower(event.key).slice(2));
 };
 
+// BIP-174 PSBT_IN_PARTIAL_SIG is a DER-encoded ECDSA signature followed by a
+// one-byte sighash type. Shape only: no low-S, no minimal encoding, no crypto.
+// 0x30 <total> 0x02 <lenR> R 0x02 <lenS> S, R and S 1-33 bytes.
+const derSignatureShape = (der) => {
+  if (der.length < 16 || der.length % 2 !== 0) return false;
+  if (der.slice(0, 2) !== "30") return false;
+  const total = parseInt(der.slice(2, 4), 16);
+  if (total !== der.length / 2 - 2) return false;
+  let pos = 4;
+  for (let part = 0; part < 2; part++) {
+    if (der.slice(pos, pos + 2) !== "02") return false;
+    const length = parseInt(der.slice(pos + 2, pos + 4), 16);
+    if (!(length >= 1 && length <= 33)) return false;
+    pos += 4;
+    if (pos + length * 2 > der.length) return false;
+    pos += length * 2;
+  }
+  return pos === der.length;
+};
+
 const parseAppendedSighash = (event) => {
   const pair = event.pair;
   if (!pair || pair.decodeError || !pair.decoded) return { malformed: true, decodeError: pair?.decodeError };
@@ -285,7 +307,8 @@ const parseAppendedSighash = (event) => {
   if (!/^[0-9a-f]*$/.test(value) || value.length % 2 !== 0) return { malformed: true };
   const bytes = value.length / 2;
   if (event.name === "PSBT_IN_PARTIAL_SIG") {
-    if (bytes < 9) return { malformed: true };
+    if (bytes < 9 || bytes > 73) return { malformed: true };
+    if (!derSignatureShape(value.slice(0, -2))) return { malformed: true };
     return { appended: parseInt(value.slice(-2), 16), tap: false };
   }
   if (event.name === "PSBT_IN_TAP_KEY_SIG" || event.name === "PSBT_IN_TAP_SCRIPT_SIG") {
@@ -298,11 +321,6 @@ const parseAppendedSighash = (event) => {
     return { malformed: true };
   }
   return { malformed: true };
-};
-
-const samePubkey = (a, b) => {
-  if (a === null || a === undefined || b === null || b === undefined) return (a ?? null) === (b ?? null);
-  return lower(a) === lower(b);
 };
 
 export function auditSigner(beforeDoc, afterDoc, options = {}) {

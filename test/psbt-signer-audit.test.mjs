@@ -12,6 +12,9 @@ const DERIV_VALUE = "12345678" + "54000080" + "00000080" + "00000080" + "0000000
 const SCRIPT1 = "0014" + "22".repeat(20);
 const SCRIPT2 = "0014" + "33".repeat(20);
 const SCRIPT3 = "0014" + "44".repeat(20);
+// DER-shaped ECDSA signature (0x30 len 0x02 lenR R 0x02 lenS S), 71 bytes, so
+// the PSBT value plus its sighash byte is 72 bytes. Shape only: never verified.
+const derSig = (byte) => "3045" + "0221" + byte.repeat(33) + "0220" + byte.repeat(32);
 
 const pair = (key, value, name, decoded) => ({ key, value, name, ...(decoded ? { decoded } : {}) });
 
@@ -46,9 +49,10 @@ const changeDoc = (overrides = {}) => {
 
 const withSig = (doc, pubkey, lastByte) => {
   const d = structuredClone(doc);
-  d.inputs[0].push(pair("02" + pubkey, "11".repeat(71) + lastByte, "PSBT_IN_PARTIAL_SIG", {
+  const signature = derSig("11");
+  d.inputs[0].push(pair("02" + pubkey, signature + lastByte, "PSBT_IN_PARTIAL_SIG", {
     pubkey,
-    signature: "11".repeat(71),
+    signature,
     sighash: "SIGHASH_ALL",
   }));
   return d;
@@ -323,10 +327,10 @@ test("F15b a cosigner key named by the original PSBT is expected", () => {
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
   ]] });
   const after = structuredClone(before);
-  after.inputs[0].push(pair("02" + P2_HEX, "22".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: "22".repeat(71), sighash: "SIGHASH_ALL" }));
+  after.inputs[0].push(pair("02" + P2_HEX, derSig("22") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: derSig("22"), sighash: "SIGHASH_ALL" }));
   const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P2_HEX, key: "02" + P2_HEX, valid: true }] };
   const report = auditSigner(before, after, { verification });
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGNATURE_ADDED", "info"]]);
@@ -380,7 +384,7 @@ test("F18 a derivation for a new signature is enrichment", () => {
   ]] });
   const after = structuredClone(before);
   after.inputs[0].push(pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }));
-  after.inputs[0].push(pair("02" + P2_HEX, "22".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: "22".repeat(71), sighash: "SIGHASH_ALL" }));
+  after.inputs[0].push(pair("02" + P2_HEX, derSig("22") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: derSig("22"), sighash: "SIGHASH_ALL" }));
   const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P2_HEX, key: "02" + P2_HEX, valid: true }] };
   const report = auditSigner(before, after, { verification });
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [
@@ -417,7 +421,7 @@ test("F19 finalization-only change is a verified transition", () => {
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
   ]] });
   const after = baseDoc({ inputs: [[
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
@@ -459,7 +463,7 @@ test("F19c finalization never clears the UTXO, unknown pairs or final fields", (
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
   ]] });
   const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_FINAL_SCRIPTWITNESS", pubkey: P1_HEX, key: "08", valid: true }] };
 
@@ -474,7 +478,7 @@ test("F19c finalization never clears the UTXO, unknown pairs or final fields", (
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
     pair("fc01", "aa", null),
   ]] });
   const unknownAfter = baseDoc({ inputs: [[
@@ -500,7 +504,7 @@ test("F20 a pre-existing signature removed or changed fails", () => {
   const before = baseDoc({ inputs: [[
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
   ]] });
   const removed = baseDoc({ inputs: [[
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
@@ -512,7 +516,7 @@ test("F20 a pre-existing signature removed or changed fails", () => {
   assert.equal(removedReport.findings[0].evidence.name, "PSBT_IN_PARTIAL_SIG");
 
   const changed = structuredClone(before);
-  changed.inputs[0][2] = pair("02" + P1_HEX, "11".repeat(71) + "81", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" });
+  changed.inputs[0][2] = pair("02" + P1_HEX, derSig("11") + "81", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" });
   const changedReport = auditSigner(before, changed);
   assert.deepEqual(changedReport.findings.map((f) => [f.code, f.severity]), [["SIGNATURE_CHANGED", "critical"]]);
 });
@@ -522,8 +526,8 @@ test("F20b cosigner signatures unchanged produce no findings", () => {
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
-    pair("02" + P2_HEX, "22".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: "22".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
+    pair("02" + P2_HEX, derSig("22") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: derSig("22"), sighash: "SIGHASH_ALL" }),
   ]] });
   const after = structuredClone(before);
   const report = auditSigner(before, after);
@@ -724,7 +728,7 @@ test("F30 a finalizer may clear PSBT_IN_POR_COMMITMENT", () => {
     pair("01", "cc", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT1 }),
     pair("06" + P1_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P1_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/0" }),
     pair("03", "01000000", "PSBT_IN_SIGHASH_TYPE", { sighash: "SIGHASH_ALL", sighashType: 1 }),
-    pair("02" + P1_HEX, "11".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: "11".repeat(71), sighash: "SIGHASH_ALL" }),
+    pair("02" + P1_HEX, derSig("11") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX, signature: derSig("11"), sighash: "SIGHASH_ALL" }),
     pair("09", "aa".repeat(32), "PSBT_IN_POR_COMMITMENT"),
   ]] });
   const after = baseDoc({ inputs: [[
@@ -1047,7 +1051,7 @@ test("F48 a reorder attributes an added signature to the input that carries it",
     pair("01", "dd", "PSBT_IN_WITNESS_UTXO", { value: "150000", scriptPubKey: SCRIPT2 }),
     pair("06" + P2_HEX, DERIV_VALUE, "PSBT_IN_BIP32_DERIVATION", { pubkey: P2_HEX, fingerprint: "12345678", path: "m/84'/0'/0'/0/1" }),
   ];
-  const sigB = pair("02" + P2_HEX, "22".repeat(71) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: "22".repeat(71), sighash: "SIGHASH_ALL" });
+  const sigB = pair("02" + P2_HEX, derSig("22") + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P2_HEX, signature: derSig("22"), sighash: "SIGHASH_ALL" });
   const before = baseDoc({ tx: { ...base.tx, inputs: [inputs[0], inputs[1]] }, inputs: [mapA, mapB] });
   const after = baseDoc({ tx: { ...base.tx, inputs: [inputs[1], inputs[0]] }, inputs: [[...mapB, sigB], mapA] });
   const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P2_HEX, key: "02" + P2_HEX, valid: true }] };
@@ -1088,4 +1092,69 @@ test("F50 an injected weak sighash declaration is reflected in sighashPolicy", (
   const report = auditSigner(before, after);
   assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGHASH_DECLARATION_ADDED", "critical"]]);
   assert.equal(report.checks.sighashPolicy, "weak");
+});
+
+test("F51 a document whose maps do not line up with the transaction fails closed", () => {
+  const before = baseDoc();
+  const after = baseDoc();
+
+  const beforeInputs = auditSigner(baseDoc({ inputs: [] }), after);
+  assert.equal(beforeInputs.verdict, "fail");
+  assert.deepEqual(beforeInputs.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(beforeInputs.findings[0].evidence.side, "before");
+  assert.equal(beforeInputs.findings[0].evidence.reason, "malformed_document");
+
+  const afterInputs = auditSigner(before, baseDoc({ inputs: [[], []] }));
+  assert.equal(afterInputs.verdict, "fail");
+  assert.deepEqual(afterInputs.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(afterInputs.findings[0].evidence.side, "after");
+  assert.equal(afterInputs.findings[0].evidence.reason, "malformed_document");
+
+  const beforeOutputs = auditSigner(baseDoc({ outputs: [] }), after);
+  assert.equal(beforeOutputs.verdict, "fail");
+  assert.deepEqual(beforeOutputs.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(beforeOutputs.findings[0].evidence.side, "before");
+
+  const afterOutputs = auditSigner(before, baseDoc({ outputs: [[], []] }));
+  assert.equal(afterOutputs.verdict, "fail");
+  assert.deepEqual(afterOutputs.findings.map((f) => [f.code, f.severity]), [["DOC_UNDECODABLE", "critical"]]);
+  assert.equal(afterOutputs.findings[0].evidence.side, "after");
+});
+
+test("F52 a partial signature that is not DER-shaped is malformed", () => {
+  const before = baseDoc();
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P1_HEX, key: "02" + P1_HEX, valid: true }] };
+
+  const garbage = baseDoc({ inputs: [[
+    ...before.inputs[0],
+    pair("02" + P1_HEX, "00".repeat(8) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX }),
+  ]] });
+  const garbageReport = auditSigner(before, garbage, { verification });
+  assert.equal(garbageReport.verdict, "fail");
+  assert.deepEqual(garbageReport.findings.map((f) => [f.code, f.severity]), [
+    ["SIGNATURE_ADDED", "info"],
+    ["SIGNATURE_MALFORMED", "critical"],
+  ]);
+  assert.equal(garbageReport.checks.signatures, "unverified");
+
+  const truncated = baseDoc({ inputs: [[
+    ...before.inputs[0],
+    pair("02" + P1_HEX, "3045" + "0221" + "11".repeat(33) + "0220" + "11".repeat(10) + "01", "PSBT_IN_PARTIAL_SIG", { pubkey: P1_HEX }),
+  ]] });
+  const truncatedReport = auditSigner(before, truncated, { verification });
+  assert.equal(truncatedReport.verdict, "fail");
+  assert.deepEqual(truncatedReport.findings.map((f) => [f.code, f.severity]), [
+    ["SIGNATURE_ADDED", "info"],
+    ["SIGNATURE_MALFORMED", "critical"],
+  ]);
+});
+
+test("F53 a DER-shaped partial signature is accepted and its last byte is the sighash", () => {
+  const before = baseDoc();
+  const after = withSig(before, P1_HEX, "01");
+  const verification = { complete: true, signatures: [{ index: 0, name: "PSBT_IN_PARTIAL_SIG", pubkey: P1_HEX, key: "02" + P1_HEX, valid: true }] };
+  const report = auditSigner(before, after, { verification });
+  assert.equal(report.verdict, "pass");
+  assert.deepEqual(report.findings.map((f) => [f.code, f.severity]), [["SIGNATURE_ADDED", "info"]]);
+  assert.equal(report.findings[0].evidence.sighashAppended, 1);
 });
