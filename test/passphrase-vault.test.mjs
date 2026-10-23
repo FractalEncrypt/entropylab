@@ -65,6 +65,37 @@ test("edits land where they are made, and a long passphrase grows the store", ()
   assert.equal(vault.bytes().length, 0);
 });
 
+// Deep sweep of cb18b09: text() spread the whole store as call arguments, so
+// a very long passphrase (a large paste, past the engine's argument limit)
+// threw a RangeError — before unmask() and plain-mode setBytes could clear
+// the vault, and before any tool that takes text could derive from it.
+// Chunked fromCodePoint builds the same string for any length.
+test("a 300,000-code-point passphrase round-trips through text() and the field API", () => {
+  const long = "ab😀".repeat(100000); // 300,000 code points, ASCII and astral
+  assert.equal([...long].length, 300000);
+  const vault = new PassphraseVault();
+  vault.setText(long);
+  assert.equal(vault.length, 300000);
+  assert.equal(vault.text(), long);
+  const back = new PassphraseVault();
+  back.setBytes(utf8(long));
+  assert.equal(back.text(), long);
+  assert.equal(hex(back.bytes()), hex(utf8(long)));
+  // The field API: unmask() builds the text and clears the vault.
+  const { field, vault: boundVault, api } = bound();
+  boundVault.setText(long);
+  api.unmask();
+  assert.equal(field.value, long);
+  assert.equal(boundVault.length, 0, "unmask() clears the vault even for a very long passphrase");
+  // The same seam on the inactive (plain-mode) setBytes path.
+  let active = true;
+  const plain = bound(() => active);
+  active = false;
+  plain.api.setBytes(utf8(long));
+  assert.equal(plain.field.value, long);
+  assert.equal(plain.vault.length, 0, "plain-mode setBytes clears the vault even for a very long passphrase");
+});
+
 // A field that behaves as a browser's: listeners run in order, a cancelable
 // beforeinput that nobody cancels is applied, and composition and
 // uncancelable edits change the value before `input`.

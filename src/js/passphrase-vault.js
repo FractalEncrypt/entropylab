@@ -148,8 +148,16 @@ export class PassphraseVault {
   }
 
   // The passphrase as text: only to show it, or for a tool that takes text.
+  // Built in chunks: spreading the whole store as call arguments throws a
+  // RangeError past the engine's argument limit (a large paste, 100k+ code
+  // points), which left unmask() and plain-mode setBytes failing before
+  // vault.clear() ran.
   text() {
-    return String.fromCodePoint(...this.#points.subarray(0, this.#length));
+    let out = "";
+    for (let i = 0; i < this.#length; i += 4096) {
+      out += String.fromCodePoint(...this.#points.subarray(i, Math.min(i + 4096, this.#length)));
+    }
+    return out;
   }
 
   mask() {
