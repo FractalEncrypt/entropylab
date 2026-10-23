@@ -12764,16 +12764,18 @@ function hodlSchnorrReuseHtml(schnorrReused) {
     ? "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>"
     : "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce across different keys.") + "</strong> " + hodlT("The same R value appears on Taproot signatures under different keys, so their nonce was reused. If the keys are related, as a Taproot output key is to its internal key or as keys from one wallet are, the private key can be recovered. Do not broadcast this transaction.") + "</p>";
 }
-function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0) {
-  let label = hodlTText("Nonce analysis");
-  if (reused.length) return { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
-  if (schnorrReused.length) return { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
-  if (possible.length) return { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
-  if (nonceIncomplete) return { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
+function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0, rfc6979Note = "") {
+  let label = hodlTText("Nonce analysis"), row;
+  if (reused.length) row = { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
+  else if (schnorrReused.length) row = { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
+  else if (possible.length) row = { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
+  else if (nonceIncomplete) row = { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
   // The completed line names the signatures that were compared (DeepSeek's
   // red-team of #1051, F4).
-  if (schnorrCompared) return { label, state: "complete", detail: ecdsaCompared ? hodlTText("All ECDSA and Taproot signatures in this PSBT had comparable nonce values; no repeated nonce was found for the same key within this file.") : hodlTText("All Taproot signatures in this PSBT had comparable nonce values; no repeated R value was found for the same key within this file.") };
-  return { label, state: "complete", detail: hodlTText("All ECDSA signatures in this PSBT had comparable nonce values; no repeated r was found for the same key within this file.") };
+  else if (schnorrCompared) row = { label, state: "complete", detail: ecdsaCompared ? hodlTText("All ECDSA and Taproot signatures in this PSBT had comparable nonce values; no repeated nonce was found for the same key within this file.") : hodlTText("All Taproot signatures in this PSBT had comparable nonce values; no repeated R value was found for the same key within this file.") };
+  else row = { label, state: "complete", detail: hodlTText("All ECDSA signatures in this PSBT had comparable nonce values; no repeated r was found for the same key within this file.") };
+  if (rfc6979Note) row.detail += " " + rfc6979Note;
+  return row;
 }
 // One analysis, two views. "inspect" is the PSBT Inspector: everything but the
 // per-signature nonce detail, with the nonce verdict kept as a summary row.
@@ -12807,6 +12809,10 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     policyProblems = 0,
     policyIncomplete = 0,
     unsupportedNonceChecks = 0,
+    rfcTotal = 0,
+    rfcChecked = 0,
+    rfcMismatched = 0,
+    rfcKeyFound = false,
     feeInconsistent = 0,
     // One digest-reconstruction budget per render, shared by the partial
     // signatures and the finalized-field scan (audit C3-3); 256 mirrors the
@@ -13112,7 +13118,9 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             className = "psbt-bad";
           }
         } else {
+          rfcTotal += 1;
           privateKey = hodlPrivForPub(signature.pubkey) || hodlPrivFromPath(entries, signature.pubkey, inputDerivationBudget);
+          if (privateKey) rfcKeyFound = true;
           rValues.push({
             input: index,
             r: looseR,
@@ -13154,6 +13162,8 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
                 className = "psbt-warn";
                 if (privateKey && sighash) try {
                   let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+                  rfcChecked += 1;
+                  if (!cmp.ok) rfcMismatched += 1;
                   if (cmp.ok) {
                     message += " " + cmp.message;
                     className = cmp.className;
@@ -13168,6 +13178,8 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             }
           } else if (privateKey && sighash) try {
             let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+            rfcChecked += 1;
+            if (!cmp.ok) rfcMismatched += 1;
             message = cmp.message;
             className = cmp.className;
           } catch (exception) {
@@ -13285,6 +13297,18 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       : tapSignatureCount === 1
         ? hodlT("This PSBT also contains 1 Taproot / Schnorr signature. Its sighash policy is checked above. Only one Taproot signature is present, so nonce reuse cannot be judged from this file alone.")
         : hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above. No repeated BIP340 nonces were found among them.", { count: tapSignatureCount })) + "</p>");
+  let rfc6979Note = "";
+  if (rfcTotal > 0) {
+    rfc6979Note = rfcChecked === 0 && !rfcKeyFound
+      ? hodlTText("RFC 6979: not checked (no matching key in this session).")
+      : rfcChecked === rfcTotal && rfcTotal === 1
+        ? hodlTText("RFC 6979: checked for 1 of 1 ECDSA signature.")
+        : rfcChecked === rfcTotal && rfcTotal >= 2
+          ? hodlTText("RFC 6979: checked for all {total} ECDSA signatures.", { total: rfcTotal })
+          : hodlTText("RFC 6979: checked for {checked} of {total} ECDSA signatures.", { checked: rfcChecked, total: rfcTotal });
+    if (rfcMismatched > 0) rfc6979Note += " " + hodlTText("{n} did not match.", { n: rfcMismatched });
+  }
+  if (rfc6979Note) nonceHtml.push("<p class='edge-note is-muted' data-rfc6979-coverage>" + hodlEscapeHtml(rfc6979Note) + "</p>");
   nonceHtml.push("<p class='field-note'>" + hodlT("RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Jade anti-exfil is secp256k1-zkp sign-to-contract and needs the USB host nonce plus signer opening; QR / sign_psbt Jade does not run it yet. BitBox anti-klepto is a different construction. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.") + "</p>");
   // ECDSA r values and BIP340 R values are never compared with each other,
   // so each family needs two comparable signatures of its own: one of each
@@ -13319,7 +13343,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         ? hodlTText("Compared with the loaded session key only within accounts 0–2, 50 receive and 50 change addresses, and four supported script types; outputs outside that range remain unclassified.")
         : hodlTText("No session key was loaded, so output ownership and change derivation were not checked."),
     },
-    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared),
+    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared, rfc6979Note),
     {
       label: hodlTText("BIP-174 / consensus cross-check"),
       state: referenceVerdict.state,
