@@ -164,9 +164,9 @@ const modPow = (base, exp, mod) => {
   return result;
 };
 
-const signWithRecovery = () => {
-  const compact = noble.sign(RECOVER_MSG, RECOVER_PRIV, { prehash: false });
-  const z = BigInt("0x" + bytesToHex(RECOVER_MSG));
+const signWithRecovery = (msg = RECOVER_MSG) => {
+  const compact = noble.sign(msg, RECOVER_PRIV, { prehash: false });
+  const z = BigInt("0x" + bytesToHex(msg));
   const r = BigInt("0x" + bytesToHex(compact.slice(0, 32)));
   const s = BigInt("0x" + bytesToHex(compact.slice(32)));
   const sInv = modPow(s, CURVE_N - 2n, CURVE_N);
@@ -175,25 +175,52 @@ const signWithRecovery = () => {
   const raw = R.toBytes(false);
   const x = BigInt("0x" + bytesToHex(raw.slice(1, 33)));
   const recid = (raw[64] & 1) | (x >= CURVE_N ? 2 : 0);
-  return { compact, recid, expected: bytesToHex(noble.getPublicKey(RECOVER_PRIV, true)) };
+  return { msg, compact, recid, expected: bytesToHex(noble.getPublicKey(RECOVER_PRIV, true)) };
 };
 
-test("recover returns the compressed key noble recovers", () => {
-  const { compact, recid, expected } = signWithRecovery();
-  const actual = secp256k1.recover(RECOVER_MSG, compact, recid);
-  assert.ok(actual instanceof Uint8Array);
-  assert.equal(actual.length, 33);
-  assert.equal(bytesToHex(actual), expected);
+// Fixed, deterministic candidate messages (SHA-256 of a constant label; no
+// randomness). The fixtures are the first candidate of each recovery-id
+// parity, so both recid 0 and recid 1 are always exercised.
+const recoverCandidate = (i) =>
+  new Uint8Array(createHash("sha256").update(`entropylab recover fixture ${i}`).digest());
+
+const recoverFixtures = () => {
+  const fixtures = [];
+  const seen = new Set();
+  for (let i = 0; seen.size < 2 && i < 64; i++) {
+    const fixture = signWithRecovery(recoverCandidate(i));
+    if ((fixture.recid === 0 || fixture.recid === 1) && !seen.has(fixture.recid)) {
+      seen.add(fixture.recid);
+      fixtures.push(fixture);
+    }
+  }
+  return fixtures;
+};
+
+test("recover returns the compressed key noble recovers for each parity", () => {
+  const fixtures = recoverFixtures();
+  const recids = new Set(fixtures.map((f) => f.recid));
+  assert.ok(recids.has(0), "fixtures include recid 0");
+  assert.ok(recids.has(1), "fixtures include recid 1");
+  for (const { msg, compact, recid, expected } of fixtures) {
+    const actual = secp256k1.recover(msg, compact, recid);
+    assert.ok(actual instanceof Uint8Array);
+    assert.equal(actual.length, 33);
+    assert.equal(bytesToHex(actual), expected);
+    // Flipping the parity bit must never recover the expected key.
+    const flipped = secp256k1.recover(msg, compact, recid ^ 1);
+    assert.ok(flipped === null || bytesToHex(flipped) !== expected, "flipped parity must not recover the expected key");
+  }
 });
 
 test("recover refuses malformed input", () => {
-  const { compact, recid } = signWithRecovery();
-  assert.equal(secp256k1.recover(RECOVER_MSG, compact, 4), null);
-  assert.equal(secp256k1.recover(RECOVER_MSG, compact.slice(0, 63), recid), null);
-  assert.equal(secp256k1.recover(RECOVER_MSG.slice(0, 31), compact, recid), null);
+  const { msg, compact, recid } = signWithRecovery();
+  assert.equal(secp256k1.recover(msg, compact, 4), null);
+  assert.equal(secp256k1.recover(msg, compact.slice(0, 63), recid), null);
+  assert.equal(secp256k1.recover(msg.slice(0, 31), compact, recid), null);
   const zeroR = new Uint8Array(64);
   zeroR.set(compact.slice(32), 32);
-  assert.equal(secp256k1.recover(RECOVER_MSG, zeroR, recid), null);
+  assert.equal(secp256k1.recover(msg, zeroR, recid), null);
 });
 
 // ── Round 2: BIP-340 Schnorr verification ──────────────────────────────────
