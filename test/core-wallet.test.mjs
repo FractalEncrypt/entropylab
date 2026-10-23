@@ -430,6 +430,35 @@ test("adding the same descriptor twice is refused, as Core refuses it", () => {
   assert.throws(() => core.appendDescriptorRows(doc, unit, coreDeps, REF_CREATION_TIME), /already in this wallet/);
 });
 
+test("an added descriptor's keys must belong to the wallet's chain", () => {
+  const { core } = loadModule();
+  // BIP32 test vector 1 master keys (mainnet xpub/xprv versions).
+  const xpub = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+  const xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+  assert.equal(neuterExtendedKey(xprv), xpub, "the vector pair");
+  const mainnetUnit = core.unitFromDescriptor(`wpkh(${xpub}/0/*)`, {}, coreDeps);
+  const testUnit = core.unitFromDescriptor(EXTRA_ACCOUNT.public, {}, coreDeps);
+  // Core decodes keys with the chain's own prefixes, so a foreign one would
+  // make the rebuilt file fail to load: refused on every test chain…
+  for (const applicationId of [REGTEST_APP_ID, 0x0a03cf40]) {
+    const doc = parseRecords(REF_WATCH_ONLY_RECORDS, applicationId);
+    assert.throws(() => core.appendDescriptorRows(doc, mainnetUnit, coreDeps, REF_CREATION_TIME), /network/);
+    assert.ok(core.appendDescriptorRows(doc, testUnit, coreDeps, REF_CREATION_TIME).length > doc.rows.length);
+  }
+  // …and the other way round on mainnet.
+  const mainnet = parseRecords(REF_WATCH_ONLY_RECORDS, 0xf9beb4d9);
+  assert.throws(() => core.appendDescriptorRows(mainnet, testUnit, coreDeps, REF_CREATION_TIME), /network/);
+  assert.ok(core.appendDescriptorRows(mainnet, mainnetUnit, coreDeps, REF_CREATION_TIME).length > mainnet.rows.length);
+  // A private descriptor is checked too (its stored form is the neutered xpub).
+  const signing = parseRecords(REF_PRIVATE_RECORDS);
+  const privateUnit = core.unitFromDescriptor(`wpkh(${xprv}/0/*)`, {}, coreDeps);
+  assert.throws(() => core.appendDescriptorRows(signing, privateUnit, coreDeps, REF_CREATION_TIME), /network/);
+  // A file whose chain is unknown has no prefix a key could match.
+  const unknown = parseRecords(REF_WATCH_ONLY_RECORDS, 0x12345678);
+  assert.equal(unknown.network, null);
+  assert.throws(() => core.appendDescriptorRows(unknown, testUnit, coreDeps, REF_CREATION_TIME), /network/);
+});
+
 test("a private descriptor joins a signing wallet and verifies", () => {
   const { core } = loadModule();
   const doc = parseRecords(REF_PRIVATE_RECORDS);

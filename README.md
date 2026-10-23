@@ -211,9 +211,10 @@ an explicit error before those pairs are allocated.
   Private key material is listed but redacted unless a reveal toggle is on.
   Additional ranged descriptors (watch-only or, into a wallet that already
   signs, private) can be appended; the rebuilt database is re-parsed and
-  re-verified before it downloads, and records the tool does not decode are
-  preserved byte-for-byte. As with Core, a private descriptor is refused by a
-  disable-private-keys wallet. A signing wallet's proven key material can also
+  re-verified before it downloads (an edited file that fails any check is not
+  offered), and records the tool does not decode are preserved byte-for-byte.
+  As with Core, a private descriptor is refused by a disable-private-keys
+  wallet, and a descriptor whose keys belong to another network is refused. A signing wallet's proven key material can also
   move into a Key Station slot for review: the private key records are
   reassembled into the exact root or account xprv they belong to (given the
   descriptor's own public bookkeeping) — only when the secret provably matches

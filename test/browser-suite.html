@@ -4303,6 +4303,30 @@
     equal(document.getElementById("core-error").textContent, "", "descriptor addition failed");
     assert(!coreChecks().querySelector('[data-tone="bad"]'), "a verification check failed after adding a descriptor");
     equal(document.getElementById("core-out").dataset.added, "1", "added count");
+    // The same rows filed as mainnet: their tpub keys fail the network check.
+    // A tpub addition is refused outright; a valid mainnet one is added, but
+    // the rebuilt file still fails a check, so it is not offered for download.
+    document.getElementById("core-wipe").click();
+    await until(() => coreOut() === "", "wipe before the mainnet-filed wallet");
+    const mainnetBytes = hodlSqliteWriter.createDatabase({
+      applicationId: 0xf9beb4d9,
+      tables: [{ name: "main", sql: "CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL)", primaryKey: 0, rows: rows.map(([key, value]) => [fromHex(key), fromHex(value)]) }],
+    });
+    Object.defineProperty(fileInput, "files", { configurable: true, value: [new File([mainnetBytes], "wallet.dat", { type: "application/octet-stream" })] });
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await until(() => coreChecks()?.querySelector('[data-tone="bad"]'), "the mainnet-filed wallet to fail a check");
+    assert(coreOut().includes("mainnet"), "the wallet was not read as mainnet");
+    input(document.getElementById("core-add-text"), "pkh([420c9ea3/44h/1h/0h]tpubDCHZAX9rt6AMCqXFKo8DTQj3moR5fEozbLupqHq6GrA9s44DdnPSpuNv3fZPR8nAK7mGQFpdGSSF1Ky6Rqjb29JYzaDU998qiv99SWG1pAM/0/*)#789zdhaw");
+    document.getElementById("core-add-go").click();
+    await until(() => document.getElementById("core-error").textContent, "a foreign-network addition to be refused");
+    equal(coreDescriptors(), 2, "a refused addition changed the wallet");
+    // BIP32 test vector 1 master xpub: mainnet, so the add itself is accepted.
+    input(document.getElementById("core-add-text"), "wpkh(xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8/0/*)");
+    document.getElementById("core-add-go").click();
+    await until(() => coreDescriptors() === 3 || document.getElementById("core-error").textContent, "the mainnet descriptor to be added");
+    equal(document.getElementById("core-error").textContent, "", "the mainnet addition failed");
+    assert(coreChecks().querySelector('[data-tone="bad"]'), "the rebuilt mainnet-filed wallet should still fail a check");
+    assert(document.getElementById("core-download").disabled, "download offered for an edited wallet that fails a check");
     // A malformed file reports an error and keeps the controls disabled.
     document.getElementById("core-wipe").click();
     await until(() => coreOut() === "" && document.getElementById("core-download").disabled && document.getElementById("core-wipe").disabled, "wipe to clear the editor");

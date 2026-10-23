@@ -264,7 +264,9 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
     out.dataset.added = String(added);
     bindImportButtons(imports);
     addSection.hidden = false;
-    setEnabled(download, true);
+    // A file this page has edited is offered only once every check passes:
+    // an addition must never hand out a wallet that verification refuses.
+    setEnabled(download, !(added > 0 && failed));
     setEnabled(wipe, true);
     syncAddGo();
   };

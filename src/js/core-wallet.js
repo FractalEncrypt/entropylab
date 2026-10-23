@@ -618,6 +618,14 @@ var hodlCoreWallet = (() => {
     if (unit.privateDescriptor && isEncrypted(doc)) {
       throw new Error("This wallet is encrypted; the added private descriptor would sit in the file unencrypted. Add its watch-only form instead.");
     }
+    // Core decodes extended keys with the chain's own prefixes (xpub/xprv on
+    // mainnet, tpub/tprv on every test chain): a foreign key fails at load.
+    if (!doc.network) throw new Error("This wallet's network is unknown, so no descriptor key can be checked against it.");
+    const [pub, prv] = doc.network === "mainnet" ? ["xpub", "xprv"] : ["tpub", "tprv"];
+    const keys = [...(unit.descriptor.match(EXTENDED_PUB_GLOBAL) ?? []), ...(unit.privateDescriptor?.match(EXTENDED_PRV_GLOBAL) ?? [])];
+    if (keys.some((key) => !key.startsWith(pub) && !key.startsWith(prv))) {
+      throw new Error(`That descriptor's keys are not ${pub}/${prv}, the ${doc.network} network's; Bitcoin Core would not load the wallet.`);
+    }
     const unitRows = hodlWalletExport.descriptorUnitRecords(unit, deps, creationTime);
     const descriptorKey = bytesToHex(unitRows[0][0]);
     if (rows.some(([key]) => bytesToHex(key) === descriptorKey)) {
