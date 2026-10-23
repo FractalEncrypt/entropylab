@@ -6736,6 +6736,63 @@
     }
   });
 
+  // A v1.0.0 paste could leave a trailing newline in the passphrase. The
+  // single-line field cannot hold one, so BIP39-word mode refuses to take
+  // the passphrase as text, and the note under the switch says why; the
+  // wallet stays the one the stored bytes derive.
+  await test("a passphrase with a line break refuses BIP39-word mode and keeps its wallet", async () => {
+    const pass = document.getElementById("pass");
+    const key = (data, inputType = "insertText") => pass.dispatchEvent(new InputEvent("beforeinput", { inputType, data, cancelable: true, bubbles: true }));
+    const warning = () => document.getElementById("passphrase-linebreak-warning");
+    const words = () => document.getElementById("passphrase-bip39-words");
+    let keyDerived = false;
+    try {
+      document.querySelector('#workspace [data-workspace="calc"]').click();
+      await until(() => !document.getElementById("key-manager").hidden, "key workspace");
+      chooseSeedWords(12);
+      await chooseMode("Seed phrase");
+      input(document.getElementById("seed"), vectors[0].mnemonic);
+      input(pass, "");
+      pass.focus();
+      // Typing a line break into the single-line field drops it.
+      key("pass\n");
+      equal(window.__entropyLabPassphrase(), "pass", "typing drops the line break");
+      input(pass, "");
+      // The bytes a v1.0.0 paste left behind: "pass\n".
+      window.__entropyLabShowStoredPassphrase("pass\n");
+      equal(window.__entropyLabPassphrase(), "pass\n", "the vault kept the line break");
+      assert(warning() && warning().hidden, "the note started hidden");
+      await until(() => !document.getElementById("go").disabled, "Derive Key to enable");
+      document.getElementById("go").click();
+      keyDerived = true;
+      await until(() => document.getElementById("reveal"), "the derived wallet's privacy switch");
+      if (!document.getElementById("reveal").checked) document.getElementById("reveal").click();
+      const wallet = document.getElementById("out").textContent;
+      // Turning the switch on would write the passphrase into the field and
+      // drop the break, so it is refused and the vault is left alone.
+      words().click();
+      assert(!words().checked, "the BIP39-words switch stayed off");
+      assert(!warning().hidden, "the note said why");
+      equal(window.__entropyLabPassphrase(), "pass\n", "the passphrase kept its line break");
+      equal(document.getElementById("out").textContent, wallet, "the wallet did not change");
+      // Once the passphrase has no line break the note goes and the switch works.
+      input(pass, "");
+      input(pass, "pass");
+      assert(warning().hidden, "the note went away");
+      words().click();
+      assert(words().checked, "the BIP39-words switch turned on");
+      equal(pass.value, "pass", "word mode edits the field's text");
+    } finally {
+      if (document.getElementById("reveal")?.checked) document.getElementById("reveal").click();
+      input(pass, "");
+      if (keyDerived) {
+        await until(() => !document.getElementById("delete-key").disabled, "Delete current key to enable");
+        document.getElementById("delete-key").click();
+      }
+      chooseSeedWords(24);
+    }
+  });
+
   // The same vault on the station passphrase fields. Typing is cancelable
   // beforeinput, as a browser delivers it. The SP tab name is the master
   // fingerprint of the published xprv above (vectors[0].xprv), and the PSBT

@@ -736,6 +736,7 @@ function hodlQrSvg(e, t = "#111111", r = "#ffffff") {
 // the browser harness stages a --test-hooks variant instead.
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabCrypto = { entropyToMnemonic: (hex) => hodlEntropyToMnemonic(hodlHex.decode(hex), hodlBip39Wordlist), mnemonicToEntropy: (mnemonic) => hodlHex.encode(hodlMnemonicToEntropy(mnemonic, hodlBip39Wordlist)), mnemonicToSeed: (mnemonic, passphrase) => hodlHex.encode(hodlMnemonicToSeed(mnemonic, passphrase)), validateMnemonic: (mnemonic) => hodlValidateMnemonic(mnemonic).ok, masterXprv: (mnemonic, passphrase) => hodlHDKey.fromMasterSeed(hodlMnemonicToSeed(mnemonic, passphrase)).privateExtendedKey, privateKeyInputIsValid: () => hodlPrivateKeyInputIsValid(), computeTargetLastWords: (words, targetWords) => hodlComputeTargetLastWords(words, targetWords), clearLastWordCache: () => hodlLastWordCache.clear(), validateTargetMnemonic: (value, targetWords) => hodlValidateTargetMnemonic(value, targetWords), bruteTargetLastWords: (value) => hodlLastWordCandidates(value) };
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabPassphrase = () => hodlPassphraseText(hodlPassphraseFieldBytes());
+if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabShowStoredPassphrase = (text) => { const bytes = new TextEncoder().encode(text); try { hodlShowStoredPassphrase(bytes); } finally { bytes.fill(0); } };
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabWasmMemory = () => [hodlWasm().memory.buffer, hodlPsbtLoaderHeap().buffer];
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabStationRoot = () => hodlStationSessionXprv();
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabI18n = { sanitizeCatalogHtml: hodlSanitizeCatalogHtml, tHtml: hodlT, tAttr: hodlTAttr };
@@ -4590,6 +4591,31 @@ function hodlPassphraseAutocompleteEnabled() {
 // can be wiped. BIP39-word mode edits the field's own text (autocomplete,
 // highlighting), so there the field is ordinary.
 var hodlPassphraseVault = new PassphraseVault(), hodlPassphraseVaultField = null, hodlPassphraseShown = false;
+// A passphrase with a line break cannot be edited as BIP39 words: the
+// single-line field drops the break, so the wallet would change. The note
+// under the switch says so, and is shown only while the passphrase has one.
+function hodlShowPassphraseLineBreakWarning(show) {
+  let warning = document.getElementById("passphrase-linebreak-warning");
+  if (warning) warning.hidden = !show;
+}
+// True when the bytes hold a line break. In UTF-8 only LF and CR encode as
+// 0x0A and 0x0D, so the test is exact and never decodes the passphrase.
+function hodlPassphraseBytesHaveLineBreak(bytes) {
+  if (!ArrayBuffer.isView(bytes)) return false;
+  for (let i = 0; i < bytes.length; i++) if (bytes[i] === 0x0a || bytes[i] === 0x0d) return true;
+  return false;
+}
+function hodlPassphraseHasLineBreak() {
+  // The vault holds the passphrase in vault mode, including while the switch
+  // is being turned on (before unmask runs); in word mode unmask cleared it
+  // and the field's plain text cannot hold a break.
+  let held = hodlPassphraseVault.length ? hodlPassphraseVault.bytes() : hodlPassphraseFieldBytes();
+  try {
+    return hodlPassphraseBytesHaveLineBreak(held);
+  } finally {
+    if (ArrayBuffer.isView(held)) held.fill(0);
+  }
+}
 function hodlPassphraseVaultActive() {
   return !hodlPassphraseBip39Enabled();
 }
@@ -4623,6 +4649,17 @@ function hodlShowStoredPassphrase(value) {
   hodlPassphraseShown = false;
   let bytes = hodlStoredPassphraseBytes(value);
   try {
+    // A stored passphrase with a line break cannot be edited as BIP39 words:
+    // the field would drop the break. Keep the exact bytes in the vault.
+    let lineBreak = hodlPassphraseBytesHaveLineBreak(bytes);
+    if (lineBreak && hodlPassphraseBip39Enabled()) {
+      let state = hodlKeys[hodlActiveKey];
+      if (state) state.passphraseBip39Words = false;
+      let toggle = document.getElementById("passphrase-bip39-words");
+      if (toggle) toggle.checked = false;
+      hodlPassphraseVaultField?.mask();
+      hodlShowPassphraseLineBreakWarning(true);
+    } else if (!lineBreak) hodlShowPassphraseLineBreakWarning(false);
     if (hodlPassphraseVaultField) hodlPassphraseVaultField.setBytes(bytes || new Uint8Array(0));
     else {
       let field = document.getElementById("pass");
@@ -4814,7 +4851,7 @@ function hodlPassphraseBip39ToggleMarkup(checked = hodlPassphraseBip39Enabled())
   // Showing the passphrase is its own choice; in word mode the field shows
   // its text anyway, so the switch steps aside.
   let reveal = hodlSwitchRowMarkup("passphrase-reveal", hodlT("Show passphrase"), { note: hodlT("Hidden by default: a passphrase on screen can be captured or seen"), checked: hodlPassphraseShown, hidden: checked, privateReveal: true });
-  return `<div class="passphrase-bip39-options"><div class="switch-row"><label class="switch-toggle passphrase-bip39-toggle"><input type="checkbox" id="passphrase-bip39-words" aria-describedby="passphrase-bip39-note" ${checked ? "checked" : ""} /><span class="label">${hodlT("Build passphrase from BIP39 words")}</span></label><p class="switch-note" id="passphrase-bip39-note">${hodlT("Use complete lowercase English BIP39 words separated by single spaces")}</p></div><label class="switch-toggle passphrase-autocomplete-toggle" id="passphrase-autocomplete-control"${checked ? "" : " hidden"}><input type="checkbox" id="passphrase-autocomplete" ${autocomplete ? "checked" : ""} /><span class="label">${hodlT("Autocomplete BIP39 words")}</span></label></div>${reveal}`;
+  return `<div class="passphrase-bip39-options"><div class="switch-row"><label class="switch-toggle passphrase-bip39-toggle"><input type="checkbox" id="passphrase-bip39-words" aria-describedby="passphrase-bip39-note" ${checked ? "checked" : ""} /><span class="label">${hodlT("Build passphrase from BIP39 words")}</span></label><p class="switch-note" id="passphrase-bip39-note">${hodlT("Use complete lowercase English BIP39 words separated by single spaces")}</p></div><p class="edge-note is-private" id="passphrase-linebreak-warning" data-passphrase-linebreak-warning hidden>${hodlT("This passphrase contains a hidden line break, so it can't be edited as BIP39 words without changing your wallet.")}</p><label class="switch-toggle passphrase-autocomplete-toggle" id="passphrase-autocomplete-control"${checked ? "" : " hidden"}><input type="checkbox" id="passphrase-autocomplete" ${autocomplete ? "checked" : ""} /><span class="label">${hodlT("Autocomplete BIP39 words")}</span></label></div>${reveal}`;
 }
 function hodlBrainWalletTrimEnabled() {
   return Boolean(document.getElementById("brain-wallet-trim")?.checked);
@@ -5491,6 +5528,7 @@ function hodlBindPassphraseKeyboard(inputId = "pass", toggleId = "passphrase-key
   }
   refresh();
 }
+const hodlPassphraseLineBreakBound = new WeakSet();
 function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
   let input = document.getElementById("pass"), bip39Toggle = document.getElementById("passphrase-bip39-words"), autocompleteToggle = document.getElementById("passphrase-autocomplete"), autocompleteControl = document.getElementById("passphrase-autocomplete-control"), keyboard = document.getElementById(keyboardId), modeButton = keyboard?.querySelector("[data-seed-keyboard-mode]");
   if (!input || !bip39Toggle || !autocompleteToggle || !autocompleteControl) return;
@@ -5501,13 +5539,34 @@ function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
     if (reveal) reveal.checked = hodlPassphraseShown;
     hodlRenderPassphraseInputState(input, bip39Toggle.checked);
     hodlUpdatePassphraseKeyboardKeys(input, keyboardId);
+    if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
   };
   if (reveal) reveal.onchange = () => {
     hodlPassphraseShown = reveal.checked;
     refresh();
   };
+  // The note goes away as soon as the passphrase no longer has a line break.
+  // Bind once per field: the field outlives the form and this runs on every render.
+  if (!hodlPassphraseLineBreakBound.has(input)) {
+    hodlPassphraseLineBreakBound.add(input);
+    input.addEventListener("input", () => {
+      if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
+    });
+  }
   bip39Toggle.onchange = () => {
     let state = hodlKeys[hodlActiveKey];
+    // A passphrase with a line break cannot be edited as words: the field
+    // would drop the break and the wallet would change. Refuse, keep the
+    // vault exactly as it is, and say why.
+    if (bip39Toggle.checked && hodlPassphraseHasLineBreak()) {
+      bip39Toggle.checked = false;
+      if (state) state.passphraseBip39Words = false;
+      refresh();
+      hodlShowPassphraseLineBreakWarning(true);
+      hodlSyncKeyClearButton();
+      hodlSyncDeriveButton();
+      return;
+    }
     if (state) state.passphraseBip39Words = bip39Toggle.checked;
     hodlPassphraseShown = false;
     if (bip39Toggle.checked) hodlPassphraseVaultField?.unmask();
