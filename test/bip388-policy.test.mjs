@@ -100,6 +100,38 @@ test("a key repeated in more than one slot is refused", () => {
   assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /more than one slot/);
 });
 
+test("a receive key on the change branch is refused", () => {
+  const body = `wsh(sortedmulti(2,${keyA}/0/*,${keyB}/1/*))`;
+  const descriptor = `${body}#${descriptorChecksum(body)}`;
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /every receive key must end in \/0\/\*/);
+});
+
+test("receive and change with swapped branches are refused", () => {
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: change, changeDescriptor: receive }), /every receive key must end in \/0\/\*/);
+});
+
+test("a change key on the receive branch is refused", () => {
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: receive, changeDescriptor: receive }), /every receive key must end in \/0\/\*/);
+});
+
+test("the same xpub with a different origin in two slots is refused", () => {
+  const body = `wsh(sortedmulti(2,${keyA}/0/*,[01234567/48h/0h/0h/2h]${nodeA.publicExtendedKey}/1/*,${keyC}/0/*))`;
+  const descriptor = `${body}#${descriptorChecksum(body)}`;
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /more than one slot/);
+});
+
+test("the same xpub with a missing origin in two slots is refused", () => {
+  const body = `wsh(sortedmulti(2,${nodeA.publicExtendedKey}/0/*,${keyA}/1/*,${keyC}/0/*))`;
+  const descriptor = `${body}#${descriptorChecksum(body)}`;
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /more than one slot/);
+});
+
+test("the same key twice in one branch is refused", () => {
+  const body = `wsh(sortedmulti(2,${keyA}/0/*,${keyA}/0/*,${keyC}/0/*))`;
+  const descriptor = `${body}#${descriptorChecksum(body)}`;
+  assert.throws(() => buildBip388Policy({ receiveDescriptor: descriptor }), /more than one slot/);
+});
+
 test("filename names the policy", () => {
   assert.equal(bip388PolicyFilename({ m: 2, n: 3 }), "entropylab-msig-2of3-bip388.txt");
   assert.equal(bip388PolicyFilename({}), "entropylab-bip388.txt");
