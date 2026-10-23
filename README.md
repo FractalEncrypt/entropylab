@@ -357,13 +357,6 @@ an explicit error before those pairs are allocated.
   wallet looks empty, repair it with `rescanblockchain 0` in Bitcoin Core.
   Generated database files match Bitcoin Core's own record layout
   byte-for-byte (verified against Bitcoin Core v28.3.0).
-- Key Station can save or copy Bitcoin Core `importdescriptors` JSON for the
-  selected script type's displayed public branches, including custom and hardened
-  branch windows. Branch roles and active descriptors follow the wallet.dat export.
-  It uses the wallet birthday selection and watches beyond each displayed address
-  window, just like multisig. This JSON stays watch-only even while private data is revealed.
-  Export refuses an unavailable account selection or hardened derivation after a
-  public key; hardened branches are supported through their already-derived public keys.
 - A derived multisig can export a watch-only Bitcoin Core `wallet.dat` (same
   SQLite descriptor wallet as Key Station, never with private keys) and the
   `importdescriptors` JSON for a blank `disable_private_keys` wallet. Drop the

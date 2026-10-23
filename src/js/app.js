@@ -2248,6 +2248,9 @@ function hodlCoreImportDescriptorsNote(wallet) {
     : hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress is this wallet's receive index 0, which is not in the address window shown above — display from index 0 or verify it on a signer before funding.");
 }
 function hodlKeyCoreImportDescriptorsMarkup(account) {
+  // Hidden in release builds until the team opens the Key Station Core export.
+  // typeof keeps the standalone Node extraction working; every shipped build defines the flag.
+  if (typeof __ENTROPYLAB_TEST_HOOKS__ !== "undefined" && !__ENTROPYLAB_TEST_HOOKS__) return "";
   if (!account?.receiveDescriptor && !account?.changeDescriptor && !account?.addressBranches?.some(entry => entry.publicDescriptor)) return "";
   return `<div class="wallet-data-actions no-print" id="key-core-importdescriptors">
     <p class="edge-note is-public" id="key-core-importdescriptors-help">${hodlCoreImportDescriptorsNote(account)} ${hodlT("Exports the selected script type's displayed branches, using the wallet birthday under Downloads below.")}</p>
