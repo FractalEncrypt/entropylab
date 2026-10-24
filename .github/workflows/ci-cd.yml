@@ -847,9 +847,11 @@ jobs:
           # the command line, which outranks every config file. Hooks are
           # disabled: this runner never ran the OTS client, but a hook could
           # still arrive with the checkout.
+          AUTH_B64=$(echo -n x-access-token:$PUSH_TOKEN | base64)
+          echo "::add-mask::$AUTH_B64"
           push_proof() {
             git -c http.https://github.com/.extraheader= \
-                -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(echo -n x-access-token:$PUSH_TOKEN | base64)" \
+                -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH_B64" \
                 -c core.hooksPath=/dev/null push origin HEAD:rock
           }
           # The walker is this checkout's, not the fetched rock's: a rebase
@@ -857,6 +859,9 @@ jobs:
           # must never run code from the commits it fetched.
           WALKER="$RUNNER_TEMP/attestations.py"
           cp scripts/ots-attestations.py "$WALKER"
+          # The validated proof's blob id: a rebase must replay exactly these
+          # bytes, never a conflict resolution or a different proof.
+          PROOF_BLOB=$(git rev-parse HEAD:entropylab.html.ots)
           # The translation bot pushes in a burst right after a merge, so rock
           # can move between this job's fetch and its push. Re-fetch and
           # decide instead of failing the run; retry a bounded number of times.
@@ -869,7 +874,7 @@ jobs:
             fi
             printf '%s\n' "$OUT"
             # Only a rejected push is retried; an auth or network error fails now.
-            if ! printf '%s\n' "$OUT" | grep -Eq 'rejected|non-fast-forward|fetch first|cannot lock ref'; then
+            if ! printf '%s\n' "$OUT" | grep -Eq 'rejected|non-fast-forward|fetch first'; then
               echo "::error::pushing the proof failed for a reason other than a moved rock"
               exit 1
             fi
@@ -883,7 +888,7 @@ jobs:
             # checkout is the rock this job started from.
             ON_ROCK=$(git show origin/rock:entropylab.html | sha256sum | cut -d' ' -f1)
             if [ "$ON_ROCK" != "$EXPECTED" ]; then
-              echo "Rock's entropylab.html is now $ON_ROCK, not the $EXPECTED this run stamped; a newer site build superseded this proof. Pushing nothing."
+              echo "::notice title=Proof superseded::Rock's entropylab.html is now $ON_ROCK, not the $EXPECTED this run stamped; a newer site build superseded this proof. Pushing nothing."
               exit 0
             fi
             # Another run may have pushed a well-formed proof for this HTML
@@ -892,7 +897,7 @@ jobs:
               git show origin/rock:entropylab.html.ots > "$RUNNER_TEMP/rock.ots"
               if [ "$(head -c 65 "$RUNNER_TEMP/rock.ots" | tail -c 32 | od -An -v -tx1 | tr -d ' \n')" = "$EXPECTED" ] \
                  && python3 "$WALKER" "$RUNNER_TEMP/rock.ots" > /dev/null 2>&1; then
-                echo "Rock already has a proof for $EXPECTED; not replacing it."
+                echo "::notice title=Proof kept::Rock already has a proof for $EXPECTED; not replacing it."
                 exit 0
               fi
             fi
@@ -911,6 +916,10 @@ jobs:
             CHANGED=$(git diff --name-only origin/rock..HEAD)
             if [ "$CHANGED" != "entropylab.html.ots" ]; then
               echo "::error::the proof commit changes more than entropylab.html.ots after rebase: $CHANGED"
+              exit 1
+            fi
+            if [ "$(git rev-parse HEAD:entropylab.html.ots)" != "$PROOF_BLOB" ]; then
+              echo "::error::the rebased proof differs from the validated one"
               exit 1
             fi
           done

@@ -360,3 +360,51 @@ test("the proof push survives a rock that moved: bounded retry, re-checked commi
   assert.doesNotMatch(push, /--force|force-with-lease|\+HEAD:rock/, "no force push");
   assert.doesNotMatch(push, /push\s+-f\b/, "no short force flag");
 });
+
+test("the proof push re-checks the rebased proof's blob, annotates a superseded or kept proof, retries only a moved rock and masks the auth header", () => {
+  // Round 2 of #1127: the retry loop re-checked the commit's shape but not the
+  // proof's bytes, so a rebase that resolved a conflict could push a proof
+  // this job never validated; a green run that pushed nothing said so only in
+  // the log; "cannot lock ref" is a local lock error, not a moved rock; and
+  // the base64 auth header was never masked.
+  const all = steps(jobBlock(read(".github/workflows/ci-cd.yml"), "timestamp-push"));
+  const push = all.find((step) => step.includes("push origin HEAD:rock"));
+  assert.ok(push, "the push step exists");
+  // 1. The validated proof's blob id is recorded before the loop, and every
+  //    rebase must replay exactly those bytes.
+  const blob = push.indexOf("PROOF_BLOB=$(git rev-parse HEAD:entropylab.html.ots)");
+  assert.ok(blob > 0, "the validated proof's blob id is recorded");
+  assert.ok(blob < push.indexOf("while :; do"), "before the retry loop");
+  const rebase = push.indexOf("rebase origin/rock");
+  assert.ok(
+    push.indexOf('if [ "$(git rev-parse HEAD:entropylab.html.ots)" != "$PROOF_BLOB" ]; then', rebase) > rebase,
+    "the rebased proof must be the validated blob",
+  );
+  assert.match(
+    push,
+    /if \[ "\$\(git rev-parse HEAD:entropylab\.html\.ots\)" != "\$PROOF_BLOB" \]; then\n\s+echo "::error::[^"]*differs from the validated[^"]*"\n\s+exit 1/,
+    "a rebased proof that differs from the validated one fails",
+  );
+  // 2. A green run that pushed nothing says why, as an annotation.
+  assert.match(
+    push,
+    /echo "::notice title=Proof superseded::[^"]*superseded[^"]*"/,
+    "a superseded proof is annotated",
+  );
+  assert.match(
+    push,
+    /echo "::notice title=Proof kept::[^"]*"/,
+    "a kept proof on rock is annotated",
+  );
+  // 3. Only a moved rock is retried; a local lock error fails at once.
+  assert.doesNotMatch(push, /cannot lock ref/, "a local lock error is not a moved rock");
+  assert.match(push, /grep -Eq '[^']*rejected[^']*'/, "only a rejected push is retried");
+  // 4. The base64 auth header is masked before any push.
+  const auth = push.indexOf("AUTH_B64=$(echo -n x-access-token:$PUSH_TOKEN | base64)");
+  const mask = push.indexOf('echo "::add-mask::$AUTH_B64"');
+  assert.ok(auth > 0, "the base64 value is computed once");
+  assert.ok(mask > auth, "the base64 value is masked");
+  assert.ok(mask < push.indexOf("while :; do"), "before any push");
+  assert.match(push, /AUTHORIZATION: basic \$AUTH_B64/, "the header uses the variable");
+  assert.doesNotMatch(push, /AUTHORIZATION: basic \$\(echo -n x-access-token:\$PUSH_TOKEN \| base64\)/, "the header is not recomputed inline");
+});
