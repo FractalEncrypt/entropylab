@@ -769,3 +769,110 @@ test("a record naming a node the descriptor's embedded key is not is refused", (
   assert.equal(result.reason, "unsupported-key-records");
   assert.deepEqual(result.imports, []);
 });
+
+// --- Core Wallet UI (src/js/core-wallet-ui.js) ------------------------------
+// The UI module is an ES module; strip its imports and provide the app's
+// helpers so the handlers can be exercised against a minimal fake DOM.
+
+const loadCoreWalletUi = () => {
+  const source = read("src/js/core-wallet-ui.js")
+    .replace(/^import .*$/gm, "")
+    .replace(/^export /gm, "");
+  const t = (text, params) => text.replace(/\{(\w+)\}/g, (_, key) => params?.[key] ?? `{${key}}`);
+  const tAttr = t;
+  const tHtml = t;
+  const expandableHtml = (text) => text;
+  const initExpandable = () => {};
+  const hodlCoreWallet = loadModule().core;
+  const factory = new Function(
+    "t", "tAttr", "tHtml", "expandableHtml", "initExpandable", "hodlCoreWallet",
+    `${source}\nreturn { initCoreWallet };`,
+  );
+  return factory(t, tAttr, tHtml, expandableHtml, initExpandable, hodlCoreWallet);
+};
+
+const makeFakeElement = (id) => ({
+  id,
+  value: "",
+  checked: false,
+  hidden: false,
+  disabled: false,
+  textContent: "",
+  innerHTML: "",
+  dataset: {},
+  files: [],
+  listeners: {},
+  addEventListener(type, handler) { this.listeners[type] = handler; },
+  setAttribute(name, value) { this[name] = value; },
+  querySelectorAll() { return this.buttons ?? []; },
+});
+
+const setupCoreWalletUi = () => {
+  const originalDocument = globalThis.document;
+  const originalAddEventListener = globalThis.addEventListener;
+  const ids = [
+    "core-upload", "core-file", "core-download", "core-wipe", "core-error",
+    "core-out", "core-reveal", "core-add", "core-add-text", "core-add-internal",
+    "core-add-active", "core-add-go",
+  ];
+  const elements = Object.fromEntries(ids.map((id) => [id, makeFakeElement(id)]));
+  const documentListeners = {};
+  globalThis.document = {
+    getElementById: (id) => elements[id] ?? null,
+    addEventListener: (type, handler) => { documentListeners[type] = handler; },
+  };
+  globalThis.addEventListener = () => {};
+  const { initCoreWallet } = loadCoreWalletUi();
+  const imported = [];
+  initCoreWallet({
+    deps: importDeps,
+    onImportIntoStation: (item) => imported.push(item),
+    copyIcon: "",
+    copiedIcon: "",
+  });
+  const cleanup = () => {
+    globalThis.document = originalDocument;
+    globalThis.addEventListener = originalAddEventListener;
+  };
+  return { elements, documentListeners, imported, cleanup };
+};
+
+test("hodl:conceal clears a pasted private descriptor but leaves a watch-only one", (t) => {
+  const { elements, documentListeners, cleanup } = setupCoreWalletUi();
+  t.after(cleanup);
+  const addText = elements["core-add-text"];
+  const xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+  const yprv = "Yprv" + xprv.slice(4);
+  const xpub = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+  addText.value = xprv;
+  documentListeners["hodl:conceal"]();
+  assert.equal(addText.value, "", "a pasted xprv must be cleared on conceal");
+  addText.value = yprv;
+  documentListeners["hodl:conceal"]();
+  assert.equal(addText.value, "", "a pasted Yprv must be cleared on conceal");
+  addText.value = xpub;
+  documentListeners["hodl:conceal"]();
+  assert.equal(addText.value, xpub, "a watch-only xpub is harmless and stays");
+});
+
+test("a failed verification refuses the import handler even if the button is clicked", async (t) => {
+  const { elements, imported, cleanup } = setupCoreWalletUi();
+  t.after(cleanup);
+  const out = elements["core-out"];
+  out.buttons = [0, 1, 2, 3].map((index) => {
+    const button = makeFakeElement(`import-${index}`);
+    button.dataset.coreImportGo = String(index);
+    return button;
+  });
+  const records = REF_PRIVATE_RECORDS.map(([key, value]) => [key, value]);
+  const version = records.find(([key]) => key === "0776657273696f6e");
+  version[1] = "ff"; // u32le truncated to one byte
+  const bytes = dbFromRecords(records);
+  const file = elements["core-file"];
+  file.files = [{ size: bytes.length, arrayBuffer: async () => bytes.slice().buffer }];
+  file.listeners.change();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  out.buttons[0].listeners.click();
+  assert.equal(imported.length, 0, "a failed document must not import");
+  assert.equal(elements["core-error"].textContent, "Import unlocks when every check above passes or warns.");
+});
