@@ -196,6 +196,36 @@ an explicit error before those pairs are allocated.
   scanning, and an **Insane editing** switch lifts the consensus-layer checks
   for deliberately broken files while still listing their problems. The
   editor never signs anything.
+- Verifies and extends Bitcoin Core descriptor wallets (Core Wallet tab,
+  hidden from release navigation until the team opens it; test builds show it):
+  upload a SQLite `wallet.dat` (Bitcoin Core 23+; legacy Berkeley DB wallets
+  are refused) and every record is decoded — client versions, wallet flags,
+  sync locators, descriptors with their cached branch parents and private-key
+  records, and the active scriptPubKey pointers — then re-checked claim by
+  claim: descriptor checksums and recomputed DescriptorIDs, cache parents
+  re-derived from the account keys (an honest warning where a descriptor
+  shape sits outside that re-derivation, never a silent pass), private-key
+  records against their pubkeys
+  and record hashes, the network magic against the chain's genesis hash, and
+  every descriptor key's xpub/tpub version against that network.
+  Private key material is listed but redacted unless a reveal toggle is on.
+  Additional ranged descriptors (watch-only or, into a wallet that already
+  signs, private) can be appended; the rebuilt database is re-parsed and
+  re-verified before it downloads (an edited file that fails any check is not
+  offered), and records the tool does not decode are preserved byte-for-byte.
+  As with Core, a private descriptor is refused by a disable-private-keys
+  wallet, and a descriptor whose keys belong to another network is refused. A signing wallet's proven key material can also
+  move into a Key Station slot for review: the private key records are
+  reassembled into the exact root or account xprv they belong to (given the
+  descriptor's own public bookkeeping) — only when the secret provably matches
+  the record's pubkey and the embedded extended key — and the Key Station
+  opens with the key filled in for the user to derive and compare by hand,
+  on the wallet's own chain (a regtest wallet derives `bcrt1…`).
+  Only the standard path the Key Station derives is accepted (a master key
+  with its purpose/coin/account-0 tail, or an account key on `/0/*` or
+  `/1/*`); a non-standard path is skipped, because the fingerprint would
+  still match while every address would not. Watch-only and Core-encrypted
+  wallets are refused outright.
 - Derives BIP-85 child entropy from the active key's BIP32 root (or a pasted
   root xprv): English BIP-39 mnemonics (12–24 words), HD-seed WIF, XPRV, HEX,
   and Base64/Base85 passwords. Same parent, application, and index always

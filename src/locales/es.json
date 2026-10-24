@@ -1657,5 +1657,14 @@
   "Node key derived. Decoded key material stays in page memory until you clear it.": "Clave del nodo derivada. El material de clave decodificado permanece en la memoria de la página hasta que lo borres.",
   "A 12 to 24 word BIP-39 seed phrase, as used by ldk-node.": "Una frase semilla BIP-39 de 12 a 24 palabras, como la usada por ldk-node.",
   "Transactions": "Transacciones",
-  "Txns": "Txns"
+  "Txns": "Txns",
+  "The selected account is unavailable. Select a script type and export again.": "La cuenta seleccionada no está disponible. Selecciona un tipo de script y exporta de nuevo.",
+  "Imports the displayed public branches. Bitcoin Core uses branch {branch} for new receiving addresses, starting at address index 0. Verify that address on another trusted wallet or signer before funding.": "Importa las ramas públicas mostradas. Bitcoin Core usa la rama {branch} para nuevas direcciones de recepción, comenzando en el índice de dirección 0. Verifica esa dirección en otra billetera o firmante de confianza antes de financiar.",
+  "Exports the selected script type's displayed branches, using the wallet birthday under Downloads below.": "Exporta las ramas mostradas del tipo de script seleccionado, usando el cumpleaños de la billetera en Descargas abajo.",
+  "RFC 6979: checked for 1 of 1 ECDSA signature.": "RFC 6979: verificado para 1 de 1 firma ECDSA.",
+  "RFC 6979: checked for all {total} ECDSA signatures.": "RFC 6979: verificado para todas las {total} firmas ECDSA.",
+  "RFC 6979: checked for {checked} of {total} ECDSA signatures.": "RFC 6979: verificado para {checked} de {total} firmas ECDSA.",
+  "{n} did not match.": "{n} no coincidió.",
+  "RFC 6979: not checked (no matching key in this session).": "RFC 6979: no verificado (no hay clave coincidente en esta sesión).",
+  "This passphrase contains a hidden line break, so it can't be edited as BIP39 words without changing your wallet.": "Esta frase secreta contiene un salto de línea oculto, por lo que no se puede editar como palabras BIP39 sin cambiar tu billetera."
 }

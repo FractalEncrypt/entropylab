@@ -1,5 +1,90 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+test("passphrase line-break input listener binds once per field element", async () => {
+  const { readFileSync } = await import("node:fs");
+  const vm = await import("node:vm");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlBindPassphraseOptions(");
+  assert.notEqual(start, -1, "hodlBindPassphraseOptions is present");
+  let depth = 0, end = start;
+  for (; end < source.length; end++) {
+    if (source[end] === "{") depth++;
+    else if (source[end] === "}" && --depth === 0) { end++; break; }
+  }
+  const fnSource = source.slice(start, end);
+  const inputListeners = [];
+  const input = {
+    addEventListener(type, listener) {
+      if (type === "input") inputListeners.push(listener);
+    },
+  };
+  const bip39Toggle = { checked: false, onchange: null };
+  const autocompleteToggle = { checked: false, onchange: null };
+  const autocompleteControl = { hidden: false };
+  const reveal = { checked: false, closest: () => null, onchange: null };
+  const keyboard = { querySelector: () => null };
+  const elements = {
+    pass: input,
+    "passphrase-bip39-words": bip39Toggle,
+    "passphrase-autocomplete": autocompleteToggle,
+    "passphrase-autocomplete-control": autocompleteControl,
+    "passphrase-reveal": reveal,
+    "passphrase-keyboard": keyboard,
+  };
+  const sandbox = {
+    document: { getElementById: (id) => elements[id] ?? null },
+    hodlPassphraseShown: false,
+    hodlRenderPassphraseInputState() {},
+    hodlUpdatePassphraseKeyboardKeys() {},
+    hodlPassphraseHasLineBreak: () => false,
+    hodlShowPassphraseLineBreakWarning() {},
+    hodlKeys: {},
+    hodlActiveKey: "key",
+    hodlPassphraseVaultField: null,
+    hodlSetSeedKeyboardLayout() {},
+    hodlSyncKeyClearButton() {},
+    hodlSyncDeriveButton() {},
+    hodlPassphraseLineBreakBound: new WeakSet(),
+  };
+  vm.runInNewContext(`${fnSource}\nhodlBindPassphraseOptions();\nhodlBindPassphraseOptions();`, sandbox);
+  assert.equal(inputListeners.length, 1);
+});
+
+test("hodlPassphraseHasLineBreak reads the vault, not the field API", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlPassphraseHasLineBreak()");
+  assert.ok(start >= 0, "hodlPassphraseHasLineBreak is defined");
+  const end = source.indexOf("\n}", start);
+  assert.ok(end > start, "hodlPassphraseHasLineBreak has a body");
+  const body = source.slice(start, end);
+  assert.ok(!body.includes("hodlPassphraseVaultField.bytes"), "must not call the field API's bytes()");
+  assert.ok(body.includes("hodlPassphraseVault.bytes()"), "must read the vault's bytes");
+});
+
+// The line-break check must read the held bytes, never decode them to text:
+// a string of the passphrase cannot be wiped.
+test("passphrase line-break check does not decode the passphrase to text", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlPassphraseHasLineBreak(");
+  assert.ok(start >= 0, "hodlPassphraseHasLineBreak is defined");
+  const end = source.indexOf("\n}", start);
+  assert.ok(end > start, "hodlPassphraseHasLineBreak has a body");
+  assert.doesNotMatch(source.slice(start, end), /hodlPassphraseText|hodlTypedText/);
+});
+
+// The Key Station says why a passphrase with a line break cannot be edited as
+// BIP39 words: a private note under the switch, hidden until it applies.
+test("the passphrase line-break warning is a hidden private note", async () => {
+  const { readFileSync } = await import("node:fs");
+  const app = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const note = app.match(/<p class="edge-note is-private" id="passphrase-linebreak-warning"[^>]*>/);
+  assert.ok(note, "the warning note is in the BIP39-words markup");
+  assert.match(note[0], /data-passphrase-linebreak-warning/);
+  assert.match(note[0], /\bhidden\b/);
+});
 import { readFileSync } from "node:fs";
 import { transformSync } from "esbuild";
 import { hodlKeyModeLabels } from "../src/js/i18n-labels.js";
@@ -1628,17 +1713,25 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs retain the Journal only in test builds", () => {
+test("workspace tabs retain Core Wallet and the Journal only in test builds", () => {
   for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
     /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
+    /\["core", "Core Wallet", "Core"\]/,
     /\["journal", "Journal", "Journal"\]/]) {
     assert.match(appSource, entry);
   }
   assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["journal", "Journal", "Journal"\]\] : \[\]/);
+  assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["core", "Core Wallet", "Core"\]\] : \[\]/);
+  // Release first paint and no-JS show the static strip: a held-back tool has no button there.
+  assert.doesNotMatch(shell, /aria-controls="core-card"/);
   for (const markup of [shell]) {
     assert.match(markup, /id="bip85-card"/);
     assert.match(markup, /id="bip85-go"/);
   }
+});
+
+test("Key Station Core export markup stays hidden outside test builds", () => {
+  assert.match(appSource, /function hodlKeyCoreImportDescriptorsMarkup\(account\) \{\s*(?:\/\/[^\n]*\n\s*)*if \(typeof __ENTROPYLAB_TEST_HOOKS__ !== "undefined" && !__ENTROPYLAB_TEST_HOOKS__\) return "";/);
 });
 
 test("one PSBT workspace contains PSBT Inspector, PSBT Editor and Nonce Inspector tabs", () => {
@@ -1935,6 +2028,7 @@ test("Key Station keeps derivation actions focused and BIP-85 remains its own wo
   assert.doesNotMatch(appSource, /getElementById\("journal-open"\)|getElementById\("journal-use-calc"\)|hodlJournalUseActiveKey|hodlJournalApplySnapshot/);
   for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
     /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
+    /\["core", "Core Wallet", "Core"\]/,
     /\["journal", "Journal", "Journal"\]/]) {
     assert.match(appSource, entry);
   }
@@ -1950,6 +2044,7 @@ test("Silent Payments is a registered tool with its own card", () => {
   }
   for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
     /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
+    /\["core", "Core Wallet", "Core"\]/,
     /\["journal", "Journal", "Journal"\]/]) {
     assert.match(appSource, entry);
   }
@@ -2037,7 +2132,7 @@ test("the workspace switcher keeps every tool on screen as a tab strip", () => {
   // Every tool panel lives inside it, and the closing Sources card does not.
   for (const markup of [shell]) {
     const panel = markup.slice(markup.indexOf('<div class="workspace-panel"'), markup.indexOf('class="card muted sources"'));
-    for (const id of ["calc-card", "bip85-card", "msig-card", "sp-card", "psbt-card", "ln-card", "journal-card", "journal-notes-card", "journal-keymanager-card", "journal-state-card", "journal-log-card"]) {
+    for (const id of ["calc-card", "bip85-card", "msig-card", "sp-card", "psbt-card", "core-card", "ln-card", "journal-card", "journal-notes-card", "journal-keymanager-card", "journal-state-card", "journal-log-card"]) {
       assert.ok(panel.includes(`id="${id}"`), `${id} must sit inside the workspace panel`);
     }
     assert.ok(panel.includes('<div id="out">'), "the results region must sit inside the workspace panel");
@@ -2384,7 +2479,7 @@ test("the vanity grinder is a workspace tab that ships collapsed and never auto-
   // The tab rides the same show/hide plumbing as every other tool. Leaving
   // it only hides the controls; the focused behavior test pins the live run.
   assert.match(appSource, /getElementById\("vanity-card"\)\.hidden = id !== "vanity"/);
-  assert.match(appSource, /\["bip85", "sp", "msig", "calc", "vanity", "ln"\]\.forEach/);
+  assert.match(appSource, /\["bip85", "sp", "msig", "calc", "vanity", "ln", "core"\]\.forEach/);
   assert.doesNotMatch(appSource, /else if \(hodlWorkspace === "vanity"\) hodlVanityCancel\(\);/);
   assert.match(appSource, /function hodlInitWorkspace\(\) \{[\s\S]*?hodlInitVanity\(\);/);
   // The workers spawn only from the button handler; nothing starts on boot,
