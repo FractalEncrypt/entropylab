@@ -6,9 +6,11 @@ import {
   verificationPackageFilename,
 } from "../src/js/verification-package.js";
 import { hashesReady } from "../src/js/hashes.js";
+import { psbtWasmReady } from "../src/js/psbt-wasm.js";
 
 // base58.js runs in the WASM module.
 await hashesReady;
+await psbtWasmReady;
 
 // BIP-84 test vector: account 0 of "abandon … about" in both serialisations,
 // so the SLIP-132 rewrite has an expected value that does not come from the
@@ -24,7 +26,8 @@ const CORE_DESCRIPTOR_CHECKSUM = "cjjspncu";
 const RECEIVE_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const CHANGE_ADDRESS = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g";
 
-const PSBT_BASE64 = "cHNidP8BAH0CAAAAAA==";
+// A real one-input PSBT (key 0x01*32), the fixture of the signer-audit captures.
+const PSBT_BASE64 = "cHNidP8BAFICAAAAARERERERERERERERERERERERERERERERERERERERERERAAAAAAD/////AZBfAQAAAAAAFgAUebAAiHYmspSpFFAaTNImtYsjWYMAAAAAAAEBH6CGAQAAAAAAFgAUebAAiHYmspSpFFAaTNImtYsjWYMiBgMbhMVWexJkQJldPtWqugVl1x4YNGBIGf+cF/Xp1d0HjxgSNFZ4VAAAgAAAAIAAAACAAAAAAAAAAAAAAA==";
 const WALLET_DAT_SHA256 = "0123456789abcdef".repeat(4);
 
 const FULL_INPUT = {
@@ -71,7 +74,7 @@ const NETWORK_CASES = [
   ["mainnet", "main"],
   ["testnet", "test"],
   ["testnet3", "test"],
-  ["testnet4", "test"],
+  ["testnet4", "testnet4"],
   ["signet", "signet"],
   ["regtest", "regtest"],
 ];
@@ -80,7 +83,7 @@ for (const [entropylabName, expected] of NETWORK_CASES) {
   test(`maps the ${entropylabName} network to ${expected}`, () => {
     const parsed = JSON.parse(buildVerificationPackage({
       network: entropylabName,
-      receiveAddresses: [{ index: 0, address: RECEIVE_ADDRESS }],
+      descriptors: [`wpkh(${BIP84_XPUB}/0/*)`],
     }));
     assert.equal(parsed.network, expected);
   });
@@ -145,7 +148,9 @@ for (const [formName, material] of Object.entries(PRIVATE_FORMS)) {
       assert.throws(
         () => buildVerificationPackage({ network: "mainnet", ...place(material) }),
         (error) => {
-          assert.match(error.message, /^private:/);
+          // The PSBT field accepts only a real PSBT, so material placed there
+          // is refused as not-a-PSBT; every other field refuses it as private.
+          assert.match(error.message, placeName === "psbt" ? /^(private|psbt):/ : /^private:/);
           assert.equal(error.message.includes(material), false, "the refusal must not echo the material");
           return true;
         },
@@ -177,4 +182,57 @@ test("sanitises the filename label", () => {
   assert.equal(verificationPackageFilename("my-wallet-2"), "entropylab-verification-my-wallet-2.json");
   assert.equal(verificationPackageFilename(""), "entropylab-verification-wallet.json");
   assert.equal(verificationPackageFilename(undefined), "entropylab-verification-wallet.json");
+});
+
+// Red-team on bea059f (VP-1/VP-3): the scanners recognise known private
+// forms; the xpub field and every key position must instead PROVE they hold
+// a public extended key, so unknown forms are refused too.
+const BIP38 = "6PRVWUbkzzsbcVac2qwfssoUJAN1Xhrg6bNk8J7Nzm5H7kxEbn2Nh2ZoGg"; // BIP-38 test vector
+
+test("xpubs must be verifiable public extended keys", () => {
+  const base = { network: "mainnet", descriptors: [`wpkh([d34db33f/84h/0h/0h]${BIP84_XPUB}/0/*)`] };
+  for (const bad of [BIP38, "deadbeef".repeat(8), `${BIP84_XPUB.slice(0, -1)}X`, `${BIP84_XPUB} extra`]) {
+    assert.throws(() => buildVerificationPackage({ ...base, xpubs: [bad] }), (error) => error.message.startsWith("private:") && !error.message.includes(bad.slice(0, 20)));
+  }
+  const parsed = JSON.parse(buildVerificationPackage({ ...base, xpubs: [BIP84_ZPUB] }));
+  assert.deepEqual(parsed.xpubs, [BIP84_XPUB], "a zpub is emitted in its xpub form");
+});
+
+test("every key position in a descriptor must be a public extended key", () => {
+  assert.throws(() => buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP38}/0/*)`] }), (error) => error.message.startsWith("private:") && !error.message.includes(BIP38));
+});
+
+test("the emitted descriptor's checksum pins the emitted body (VP-2)", () => {
+  const parsed = JSON.parse(buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh([d34db33f/84h/0h/0h]${BIP84_ZPUB}/0/*)`] }));
+  const [body, checksum] = parsed.descriptors[0].split("#");
+  assert.ok(body.includes(BIP84_XPUB));
+  assert.equal(checksum.length, 8);
+  // Re-feeding the emitted descriptor must be accepted unchanged.
+  assert.equal(JSON.parse(buildVerificationPackage({ network: "mainnet", descriptors: [parsed.descriptors[0]] })).descriptors[0], parsed.descriptors[0]);
+});
+
+// Reviews of bea059f (GLM, MiniMax, Muse): every field is strictly typed, so
+// a secret cannot hide in a field's free text or be split across fields.
+test("the PSBT field takes a real PSBT and is not scanned as base58 text (GLM)", () => {
+  const parsed = JSON.parse(buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`], psbtBase64: PSBT_BASE64 }));
+  assert.equal(parsed.psbt, PSBT_BASE64);
+  // Base64 that is not PSBT data (here a WIF-shaped run after the prefix) is refused as not a PSBT.
+  for (const bad of ["cHNidP8 not base64", `cHNidP8${"B".repeat(44)}+AAAA`]) {
+    assert.throws(() => buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`], psbtBase64: bad }), /^Error: psbt:/);
+  }
+});
+
+test("raw hex keys are refused in descriptors; only the NUMS point is allowed", () => {
+  const hexKey = "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35";
+  assert.throws(() => buildVerificationPackage({ network: "mainnet", descriptors: [`tr(${hexKey})`] }), (error) => error.message.startsWith("private:") && !error.message.includes(hexKey));
+  const nums = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+  const parsed = JSON.parse(buildVerificationPackage({ network: "mainnet", descriptors: [`tr(${nums},sortedmulti_a(1,${BIP84_XPUB}/0/*))`] }));
+  assert.ok(parsed.descriptors[0].startsWith(`tr(${nums},`));
+});
+
+test("addresses must be valid addresses of the declared network", () => {
+  const base = { network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`] };
+  for (const bad of ["e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35", "abandon abandon abandon abandon abandon abandon", "tb1qcr8te4kr609gcawutmrza0j4xv80jy8zn4ydx6", `${RECEIVE_ADDRESS.slice(0, -1)}q`]) {
+    assert.throws(() => buildVerificationPackage({ ...base, receiveAddresses: [{ index: 0, address: bad }] }), /^Error: receiveAddresses: not a valid/);
+  }
 });
