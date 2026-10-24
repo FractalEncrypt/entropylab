@@ -452,8 +452,11 @@ const decoderCaps = (doc) => {
     if (!match || !kind) continue;
     const [family, verdict] = kind, index = Number(match[1]), message = String(problem.message ?? "");
     const cap = caps.get(index) ?? { keyed: [], keyPath: null, unattributed: new Set() };
-    // Exactly the decoder's form: 16 hex digits then "…" (verify.rs `short`).
-    const named = /\((?:pubkey|xonly) ([0-9a-fA-F]{16})…\)/.exec(message);
+    // Exactly the decoder's form, anchored at the start of its own sentence
+    // ("[ECDSA ]partial signature (pubkey <16 hex>…)" or "script-path
+    // signature (xonly <16 hex>…)", verify.rs `short`), so text later in a
+    // message can never pass for a key name.
+    const named = /^(?:ECDSA )?(?:partial|script-path) signature \((?:pubkey|xonly) ([0-9a-fA-F]{16})…\)/.exec(message);
     if (named) cap.keyed.push({ family, prefix: named[1].toLowerCase(), verdict });
     else if (family === "tap" && /^key-path\b/.test(message)) cap.keyPath = verdict;
     else cap.unattributed.add(family);
