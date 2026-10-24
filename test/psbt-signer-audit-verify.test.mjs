@@ -479,21 +479,91 @@ test("a script that cannot execute never yields a valid signature; an executable
   }
 });
 
-test("the Inspector's own verdict caps the audit's: invalid stays invalid, unchecked is never valid", () => {
+test("the Inspector's own verdict caps the signature it names, and only that one", () => {
   const { before, after } = segwitFixture();
   const beforeDoc = psbtInspectDoc(before);
-  const withProblem = (code, scope = "input 0") => {
+  // The decoder names a partial signature by its pubkey's first 16 hex digits.
+  const mine = `partial signature (pubkey ${hexOf(PUB).slice(0, 16)}…) does not verify`;
+  const other = `partial signature (pubkey ${"02" + "ab".repeat(7)}…) does not verify`;
+  const withProblem = (code, message, scope = "input 0") => {
     const doc = structuredClone(psbtInspectDoc(after));
-    doc.problems = [...(doc.problems ?? []), { scope, code, severity: "error", message: "fixture" }];
+    doc.problems = [...(doc.problems ?? []), { scope, code, severity: "warning", message }];
     return doc;
   };
-  assert.equal(psbtSignerAuditVerification(beforeDoc, psbtInspectDoc(after)).signatures[0].valid, true, "uncapped, the fixture verifies");
-  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_invalid")).signatures[0].valid, false);
-  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_unchecked")).signatures[0].valid, null);
-  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_invalid", "input 1")).signatures[0].valid, true, "another input's problem does not cap this one");
-  const budget = psbtSignerAuditVerification(beforeDoc, withProblem("verification_budget", "psbt"));
+  const validOf = (doc) => psbtSignerAuditVerification(beforeDoc, doc).signatures[0].valid;
+  assert.equal(validOf(psbtInspectDoc(after)), true, "uncapped, the fixture verifies");
+  assert.equal(validOf(withProblem("partial_sig_invalid", mine)), false, "named invalid: invalid");
+  assert.equal(validOf(withProblem("partial_sig_unchecked", mine)), null, "named unchecked: never valid");
+  assert.equal(validOf(withProblem("partial_sig_invalid", other)), true, "another signer's invalid signature does not blame this one");
+  assert.equal(validOf(withProblem("partial_sig_invalid", "unattributed")), null, "a problem naming no key leaves the input uncertain, never invalid");
+  assert.equal(validOf(withProblem("partial_sig_invalid", mine, "input 1")), true, "another input's problem does not cap this one");
+  const budget = psbtSignerAuditVerification(beforeDoc, withProblem("verification_budget", "budget exhausted", "psbt"));
   assert.equal(budget.signatures[0].valid, null);
   assert.equal(budget.complete, false);
+});
+
+test("a 2-of-2 multisig with one signer's invalid signature does not blame the other's valid one", () => {
+  // Wicked's reproduction: the sent PSBT carries an invalid key-1 signature,
+  // the returned one keeps it and adds a valid key-2 signature. The decoder
+  // names key 1; the audit must not report key 2's signature invalid.
+  const PRIV2 = hex("05".repeat(32)), PUB2 = nobleSecp256k1.getPublicKey(PRIV2, true);
+  const script = concat(Uint8Array.of(0x52, 0x21), PUB, Uint8Array.of(0x21), PUB2, Uint8Array.of(0x52, 0xae)); // 2 <k1> <k2> 2 CHECKMULTISIG
+  const tx = new btc.Transaction(SCURE_ANY);
+  tx.addInput({ txid: "77".repeat(32), index: 0, witnessUtxo: { script: concat(Uint8Array.of(0x00, 0x20), hodlSha256(script)), amount: 100_000n }, witnessScript: script });
+  tx.addOutput({ script: DEST, amount: 90_000n });
+  const digest = tx.preimageWitnessV0(0, script, btc.SigHash.ALL, 100_000n);
+  const bad1 = derSig(digest);
+  bad1[10] ^= 1;
+  tx.updateInput(0, { partialSig: [[PUB, bad1]] }, true);
+  const before = tx.toPSBT();
+  const sig2 = concat(nobleSecp256k1.sign(digest, PRIV2, { prehash: false, format: "der" }), Uint8Array.of(0x01));
+  tx.updateInput(0, { partialSig: [[PUB, bad1], [PUB2, sig2]] }, true);
+  const after = tx.toPSBT();
+  const afterDoc = psbtInspectDoc(after);
+  assert.ok((afterDoc.problems ?? []).some((p) => p.code === "partial_sig_invalid" && p.message.includes(hexOf(PUB).slice(0, 16))), "fixture: the decoder names key 1");
+  const { verification } = auditOf({ before, after });
+  const entry = verification.signatures.find((s) => s.pubkey === hexOf(PUB2));
+  assert.ok(entry, "key 2's signature is the new one");
+  assert.equal(entry.valid, true, "key 2's valid signature is not blamed for key 1's");
+});
+
+// One output whose script is `scriptBytes` long, and one P2TR key-path
+// signature per input (64 garbage bytes: verification runs and fails).
+const taprootDoc = (inputs, scriptBytes) => {
+  // A real x-only key, so the facade verifies (and rejects) the garbage
+  // signatures rather than refusing the key.
+  const spk = "5120" + hexOf(TAP_INTERNAL);
+  const utxo = { key: "01", value: "a086010000000000" + "22" + spk, name: "PSBT_IN_WITNESS_UTXO", decoded: { value: "100000", scriptPubKey: spk } };
+  const keySig = { key: "13", value: "44".repeat(64), name: "PSBT_IN_TAP_KEY_SIG", decoded: {} };
+  const doc = (withSig) => ({
+    psbtVersion: 0,
+    tx: {
+      version: 2, locktime: 0,
+      inputs: Array.from({ length: inputs }, (_, i) => ({ txid: (i + 1).toString(16).padStart(64, "0"), vout: 0, scriptSig: "", sequence: 4294967295 })),
+      outputs: [{ value: "1000", scriptPubKey: "6a" + "00".repeat(scriptBytes - 1) }],
+    },
+    globals: [],
+    inputs: Array.from({ length: inputs }, () => (withSig ? [utxo, keySig] : [utxo])),
+    outputs: [[]],
+  });
+  return { beforeDoc: doc(false), afterDoc: doc(true) };
+};
+
+test("Taproot hashing counts against the digest budget, and the shared hashes are computed once", () => {
+  // Wicked's review: every key-path signature re-hashed the transaction's
+  // outputs without charging the budget. One 33 MiB output is now refused
+  // before it is hashed...
+  const huge = taprootDoc(1, 33 * 1024 * 1024);
+  const refused = psbtSignerAuditVerification(huge.beforeDoc, huge.afterDoc);
+  assert.equal(refused.complete, false);
+  assert.equal(refused.signatures[0].valid, null);
+  // ...and a 2 MiB output shared by 64 signatures is hashed once: charged per
+  // signature it would be 128 MiB, past the 32 MiB budget.
+  const repeated = taprootDoc(64, 2 * 1024 * 1024);
+  const shared = psbtSignerAuditVerification(repeated.beforeDoc, repeated.afterDoc);
+  assert.equal(shared.signatures.length, 64);
+  assert.equal(shared.complete, true, "the shared hashes are charged once, not per signature");
+  assert.ok(shared.signatures.every((entry) => entry.valid === false), "garbage signatures were checked and failed");
 });
 
 // A hand-built document (as in the budget test above): one P2WSH input with

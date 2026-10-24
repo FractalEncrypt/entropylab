@@ -304,7 +304,12 @@ test("the app-wide session wipe also retires a shown signer-audit verdict", () =
 const fakeOutput = () => {
   const output = { innerHTML: "", childElementCount: 1 };
   output.insertAdjacentHTML = (where, html) => { output.innerHTML = html + output.innerHTML; };
-  output.querySelector = () => (output.innerHTML.startsWith("AUDIT") ? { remove: () => { output.innerHTML = output.innerHTML.replace(/^AUDIT[^|]*\|/, ""); } } : null);
+  // Only the audit section is ever found: Show more's tail and "next" lookups
+  // get nothing, as on a page whose lists are fully shown.
+  output.querySelector = (selector = "[data-audit-section]") =>
+    selector.includes("data-audit-section") && output.innerHTML.startsWith("AUDIT")
+      ? { remove: () => { output.innerHTML = output.innerHTML.replace(/^AUDIT[^|]*\|/, ""); } }
+      : null;
   return output;
 };
 
@@ -430,6 +435,43 @@ test("an audit upload that finishes after the session ends writes nothing back, 
   await load;
   assert.deepEqual(errors, []);
   assert.equal(cleared, 1, "only the uninterrupted upload retired a verdict");
+});
+
+test("Show more's full repaint keeps the audit; an edit after a repaint retires the cached one too", async () => {
+  // Wicked's recheck: a full Show-more repaint dropped the audit from the
+  // page while its report stayed cached, so an edit could not retire it and a
+  // language change painted the obsolete verdict back.
+  const output = fakeOutput();
+  Object.assign(output, { hasAttribute: () => true, setAttribute() {}, focus() {} });
+  const app = await loadAppFunctions(["hodlPsbtShowMore", "hodlPsbtClearSignerAudit", "hodlRefreshPsbtLocale"], { settable: ["hodlPsbtLast", "hodlNonceLast", "hodlPsbtInspected"], stubs: {
+    document: { getElementById: (id) => (id === "psbt-out" ? output : null) },
+    // A string, not a block: Show more paints the whole run again.
+    hodlRenderPsbt: () => "inspection",
+    hodlRenderRawTx: () => "inspection",
+    hodlPsbtSignerAuditHtml: (report) => `AUDIT ${report.verdict}|`,
+    hodlPsbtSignerAuditErrorHtml: (message) => `AUDIT error ${message}|`,
+    hodlSyncPsbtControls: () => {},
+    hodlPaintPsbtSession: () => {},
+    hodlPaintPsbtKeyNotes: () => {},
+    hodlSetPsbtError: () => {},
+    hodlSetNonceError: () => {},
+    hodlPsbtSyncNonceHistoryControls: () => {},
+  } });
+  const last = { kind: "psbt", parsed: {}, sourceTag: new Uint8Array([1]), checkedAt: "t", network: "mainnet", limits: { inputs: 50, outputs: 50, step: 50 }, audit: { report: { verdict: "fail" }, beforeDoc: {}, afterDoc: {}, network: "mainnet" } };
+  app.__set.hodlPsbtLast(last);
+  app.__set.hodlNonceLast(null);
+  app.__set.hodlPsbtInspected({});
+  output.innerHTML = "AUDIT fail|inspection";
+  app.hodlPsbtShowMore({ target: { closest: () => ({ dataset: { psbtMore: "inputs" } }) } });
+  assert.equal(output.innerHTML, "AUDIT fail|inspection", "the full repaint keeps the verdict above the inspection");
+
+  // A repaint that left the verdict off the page, then an edit: the cached
+  // report is retired anyway, so a language change cannot bring it back.
+  output.innerHTML = "inspection";
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(last.audit, null, "the cached verdict is retired even when it is not on screen");
+  app.hodlRefreshPsbtLocale();
+  assert.equal(output.innerHTML, "inspection");
 });
 
 test("both session wipes retire pending audit uploads", () => {

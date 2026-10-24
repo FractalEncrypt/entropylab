@@ -276,13 +276,21 @@ const taggedHash = (tag, ...messages) => {
   return hodlSha256(concatBytes([tagHash, tagHash, ...messages]));
 };
 
-// BIP-341 SigMsg digest for SIGHASH_DEFAULT/ALL (the only full-commitment
-// taproot types; anything else is refused and the engine's sighash-policy
-// phase names it). Key path (ext null) and BIP-342 script path with no
-// executed OP_CODESEPARATOR (codesep_pos 0xffffffff). Every input needs a
-// resolved claim — the message commits to all of them.
-const bip341Digest = (tx, claims, index, sighashType, ext) => {
-  if (sighashType !== 0 && sighashType !== 1) return null;
+// The bytes the transaction-wide BIP-341 hashes cover (prevouts, amounts,
+// scriptPubKeys, sequences, outputs), counted before any hashing so the
+// digest budget can refuse them first. Null when a field cannot be read.
+const bip341SharedBytes = (tx, claims) => {
+  if (!claims.every(Boolean)) return null;
+  let bytes = tx.inputs.length * (36 + 8 + 4);
+  for (const claim of claims) bytes += 9 + claim.scriptPubKey.length;
+  for (const output of tx.outputs) bytes += 8 + 9 + String(output?.scriptPubKey ?? "").length / 2;
+  return bytes;
+};
+
+// The transaction-wide BIP-341 hashes, computed once per audit: every
+// Taproot signature in a transaction shares them, so recomputing them per
+// signature repeats the outputs' hashing (Wicked's review of #1118).
+const bip341Shared = (tx, claims) => {
   if (!claims.every(Boolean)) return null;
   const prevouts = [], amounts = [], scriptPubKeys = [], sequences = [], outputs = [];
   for (let i = 0; i < tx.inputs.length; i++) {
@@ -298,15 +306,26 @@ const bip341Digest = (tx, claims, index, sighashType, ext) => {
     if (value === null || !script) return null;
     outputs.push(u64le(value), varintBytes(script.length), script);
   }
+  return {
+    version: i32le(Number(tx.version)),
+    locktime: u32le(Number(tx.locktime)),
+    hashes: [prevouts, amounts, scriptPubKeys, sequences, outputs].map((parts) => hodlSha256(concatBytes(parts))),
+  };
+};
+
+// BIP-341 SigMsg digest for SIGHASH_DEFAULT/ALL (the only full-commitment
+// taproot types; anything else is refused and the engine's sighash-policy
+// phase names it). Key path (ext null) and BIP-342 script path with no
+// executed OP_CODESEPARATOR (codesep_pos 0xffffffff). Every input needs a
+// resolved claim — the message commits to all of them, through `shared`.
+const bip341Digest = (shared, index, sighashType, ext) => {
+  if (sighashType !== 0 && sighashType !== 1) return null;
+  if (!shared) return null;
   const message = concatBytes([
     Uint8Array.of(sighashType),
-    i32le(Number(tx.version)),
-    u32le(Number(tx.locktime)),
-    hodlSha256(concatBytes(prevouts)),
-    hodlSha256(concatBytes(amounts)),
-    hodlSha256(concatBytes(scriptPubKeys)),
-    hodlSha256(concatBytes(sequences)),
-    hodlSha256(concatBytes(outputs)),
+    shared.version,
+    shared.locktime,
+    ...shared.hashes,
     Uint8Array.of(ext ? 2 : 0), // spend_type: ext_flag << 1, no annex
     u32le(index),
   ]);
@@ -381,7 +400,7 @@ const verifyTapKeySig = (ctx, index, pair) => {
   if (!claim) return null;
   if (!isP2tr(claim.scriptPubKey)) return false;
   if (!ctx.takeBudget()) return null;
-  const digest = bip341Digest(ctx.tx, ctx.beforeClaims, index, parsed.sighash, null);
+  const digest = bip341Digest(ctx.bip341Shared(), index, parsed.sighash, null);
   if (!digest) return null;
   return schnorrVerify(parsed.signature, digest, claim.scriptPubKey.slice(2));
 };
@@ -400,38 +419,64 @@ const verifyTapScriptSig = (ctx, index, pair) => {
   if (!ctx.takeBudget()) return null;
   const leaf = ctx.tapLeafFor(index, leafHash);
   if (!leaf || leaf.codeSeparator) return null;
-  const digest = bip341Digest(ctx.tx, ctx.beforeClaims, index, parsed.sighash, { leafHash });
+  const digest = bip341Digest(ctx.bip341Shared(), index, parsed.sighash, { leafHash });
   if (!digest) return null;
   return schnorrVerify(parsed.signature, digest, xonly);
 };
 
 // The Inspector's own verdicts cap this module's (Wicked's review of #1118).
 // psbt-wasm/src/verify.rs applies Core's script and scriptCode rules, so
-// where it found an input's signature invalid, or could not check it (an
-// unsupported witness program, a script that cannot execute, an ECDSA
-// signature on a Taproot input, an exhausted budget), no signature in that
-// input may be reported valid here. "No problem" still proves nothing (the
-// header), so the recomputation above stays the only source of `true`; the
-// cap can only lower a result, never raise one.
+// where it found a signature invalid, or could not check it (an unsupported
+// witness program, a script that cannot execute, an ECDSA signature on a
+// Taproot input), that signature is never reported valid here. Each problem
+// names its signature's key ("pubkey <16 hex>…", "xonly <16 hex>…", or a
+// key-path one), and the cap applies to that signature only: another
+// signer's signature in the same input is not blamed. A problem that names
+// no key, or an exhausted decoder budget, makes the input's other results
+// uncertain (never valid, never invalid). "No problem" still proves nothing
+// (the header), so the recomputation above stays the only source of `true`;
+// a cap can only lower a result, never raise one.
+const SIG_PROBLEMS = {
+  partial_sig_invalid: ["partial", "invalid"],
+  partial_sig_unchecked: ["partial", "unchecked"],
+  partial_sig_on_taproot: ["partial", "unchecked"],
+  tap_sig_invalid: ["tap", "invalid"],
+};
 const decoderCaps = (doc) => {
   const caps = new Map(), problems = Array.isArray(doc?.problems) ? doc.problems : [];
   let budget = false;
   for (const problem of problems) {
     if (problem?.code === "verification_budget") budget = true;
     const match = /^input (\d+)$/.exec(String(problem?.scope ?? ""));
-    if (!match) continue;
-    const index = Number(match[1]), cap = caps.get(index) ?? { partial: null, tap: null };
-    if (problem.code === "partial_sig_invalid") cap.partial = "invalid";
-    else if ((problem.code === "partial_sig_unchecked" || problem.code === "partial_sig_on_taproot") && cap.partial !== "invalid") cap.partial = "unchecked";
-    else if (problem.code === "tap_sig_invalid") cap.tap = "invalid";
+    const kind = SIG_PROBLEMS[problem?.code];
+    if (!match || !kind) continue;
+    const [family, verdict] = kind, index = Number(match[1]), message = String(problem.message ?? "");
+    const cap = caps.get(index) ?? { keyed: [], keyPath: null, unattributed: new Set() };
+    const named = /\((?:pubkey|xonly) ([0-9a-fA-F]{8,})/.exec(message);
+    if (named) cap.keyed.push({ family, prefix: named[1].toLowerCase(), verdict });
+    else if (family === "tap" && /^key-path\b/.test(message)) cap.keyPath = verdict;
+    else cap.unattributed.add(family);
     caps.set(index, cap);
   }
   return { caps, budget };
 };
+// The cap for one signature: the verdict of a problem that names its key
+// (invalid wins over unchecked), else "uncertain" when an unattributed
+// problem touches its family in this input, else none.
+const capFor = (cap, pair) => {
+  if (!cap) return null;
+  const family = pair.name === "PSBT_IN_PARTIAL_SIG" ? "partial" : "tap";
+  if (pair.name === "PSBT_IN_TAP_KEY_SIG" && cap.keyPath) return cap.keyPath;
+  const pubkey = entryPubkey(pair);
+  const verdicts = pubkey ? cap.keyed.filter((k) => k.family === family && pubkey.startsWith(k.prefix)).map((k) => k.verdict) : [];
+  if (verdicts.includes("invalid")) return "invalid";
+  if (verdicts.length) return "unchecked";
+  return cap.unattributed.has(family) ? "uncertain" : null;
+};
 const capped = (valid, cap, decoderBudget) => {
   if (cap === "invalid") return false;
   if (cap === "unchecked") return null;
-  return decoderBudget && valid === true ? null : valid;
+  return (cap === "uncertain" || decoderBudget) && valid === true ? null : valid;
 };
 
 // The pubkey the engine's Phase F reports: the partial signature's keydata,
@@ -510,6 +555,17 @@ export function psbtSignerAuditVerification(beforeDoc, afterDoc) {
     }
     return tapLeaves.get(index).get(lower(hodlHex.encode(leafHash))) ?? null;
   };
+  // The transaction-wide BIP-341 hashes, once per audit, charged to the
+  // digest budget before any of them is computed; each signature's own
+  // SigMsg is charged as it is built.
+  let bip341 = undefined;
+  ctx.bip341Shared = () => {
+    if (bip341 === undefined) {
+      const bytes = bip341SharedBytes(tx, beforeClaims);
+      bip341 = bytes !== null && ctx.takeDigestBytes(bytes) ? bip341Shared(tx, beforeClaims) : null;
+    }
+    return bip341 && ctx.takeDigestBytes(256) ? bip341 : null;
+  };
   const { caps, budget: decoderBudget } = decoderCaps(afterDoc);
   if (decoderBudget) complete = false;
   for (let index = 0; index < inputCount; index++) {
@@ -520,8 +576,7 @@ export function psbtSignerAuditVerification(beforeDoc, afterDoc) {
         : pair.name === "PSBT_IN_PARTIAL_SIG" ? verifyPartialSig(ctx, index, pair)
         : pair.name === "PSBT_IN_TAP_KEY_SIG" ? verifyTapKeySig(ctx, index, pair)
         : verifyTapScriptSig(ctx, index, pair);
-      const cap = caps.get(index);
-      const valid = capped(recomputed, pair.name === "PSBT_IN_PARTIAL_SIG" ? cap?.partial : cap?.tap, decoderBudget);
+      const valid = capped(recomputed, capFor(caps.get(index), pair), decoderBudget);
       if (ctx.budgetExhausted) complete = false;
       signatures.push({ index, name: pair.name, key: lower(pair.key), pubkey: entryPubkey(pair), valid });
     }

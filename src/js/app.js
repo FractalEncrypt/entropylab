@@ -11345,6 +11345,12 @@ function hodlPsbtShowMore(event) {
   let limits = { ...last.limits, [kind]: from + last.limits.step };
   let render = (options) => last.kind === "psbt" ? hodlRenderPsbt(last.parsed, last.sourceTag, last.checkedAt, "inspect", options) : hodlRenderRawTx(last.parsed, last.sourceTag, last.checkedAt, "inspect", options);
   let options = { network: last.network, record: false, limits };
+  // A full repaint keeps the signer audit above the inspection (Wicked's
+  // review of #1118): it would otherwise vanish while its report stays cached.
+  let paintAll = () => {
+    output.innerHTML = render(options);
+    if (last.audit) output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(last.audit));
+  };
   // Only the new block is rendered and inserted above the list's tail, so a
   // click costs one block however much is already shown. When the render
   // cannot give a block (see hodlRenderPsbt) the whole run is painted again.
@@ -11362,10 +11368,10 @@ function hodlPsbtShowMore(event) {
     if (otherTail) {
       let other = render({ ...options, only: { kind: otherKind, from: limits[otherKind] } });
       if (other && typeof other === "object" && !other.chunk) otherTail.innerHTML = other.tail;
-      else output.innerHTML = render(options);
+      else paintAll();
     }
   } else {
-    output.innerHTML = render(options);
+    paintAll();
     last.limits = limits;
   }
   let next = output.querySelector("[data-psbt-more='" + kind + "']");
@@ -12054,8 +12060,10 @@ async function hodlPsbtLoadAuditUpload(chosen) {
 // stale verdict is never left on screen. The next Inspect re-runs it.
 function hodlPsbtClearSignerAudit() {
   const section = document.getElementById("psbt-out")?.querySelector("[data-audit-section]");
-  if (!section) return;
-  section.remove();
+  // The cached report counts as a shown verdict even when a repaint left it
+  // out of the DOM: both are retired together (Wicked's review of #1118).
+  if (!section && !hodlPsbtLast?.audit) return;
+  section?.remove();
   // Nor may a language change paint the retired verdict again.
   if (hodlPsbtLast) hodlPsbtLast.audit = null;
   // The verdict belonged to the exact pair of PSBTs it was computed from, so
