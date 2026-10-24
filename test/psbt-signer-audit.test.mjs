@@ -6,6 +6,138 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { auditSigner, SIGNER_AUDIT_CODES } from "../src/js/psbt-signer-audit.js";
 
+// --- follow-up hardening: SA-4, SA-2, wallet-list guard ---
+
+const FU_P2WPKH = `0014${"11".repeat(20)}`;
+const FU_P2TR = `5120${"22".repeat(32)}`;
+const FU_CHANGE_SCRIPT = `0014${"33".repeat(20)}`;
+
+const fuDoc = (inputPairs, outputPairs, outScript = FU_CHANGE_SCRIPT) => ({
+  tx: {
+    version: 2,
+    locktime: 0,
+    inputs: [{ txid: "aa".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 }],
+    outputs: [{ value: "10000", scriptPubKey: outScript }],
+  },
+  inputs: [inputPairs],
+  outputs: [outputPairs],
+  globals: [],
+});
+
+const fuWitnessUtxo = (scriptPubKey) => ({
+  key: "01",
+  name: "PSBT_IN_WITNESS_UTXO",
+  value: "50c3000000000000",
+  decoded: { value: "50000", scriptPubKey },
+});
+
+const fuTapKeySig = () => ({
+  key: "13",
+  name: "PSBT_IN_TAP_KEY_SIG",
+  value: "44".repeat(64),
+  decoded: { signature: "44".repeat(64) },
+});
+
+const fuOutDerivation = (fingerprint) => ({
+  key: "02" + "55".repeat(33),
+  name: "PSBT_OUT_BIP32_DERIVATION",
+  value: "deadbeef" + "80000000",
+  decoded: { pubkey: "55".repeat(33), fingerprint, path: "m/84'/0'/0'/0/0" },
+});
+
+const fuOutDerivationFor = (fingerprint, byte) => ({
+  key: "02" + byte.repeat(33),
+  name: "PSBT_OUT_BIP32_DERIVATION",
+  value: "deadbeef" + "80000000",
+  decoded: { pubkey: byte.repeat(33), fingerprint, path: "m/84'/0'/0'/0/0" },
+});
+
+test("SA-4: a Taproot signature field on a non-Taproot input is malformed", () => {
+  const before = fuDoc([fuWitnessUtxo(FU_P2WPKH)], []);
+  const after = fuDoc([fuWitnessUtxo(FU_P2WPKH), fuTapKeySig()], []);
+  const result = auditSigner(before, after, {});
+  const malformed = result.findings.filter((f) => f.code === "SIGNATURE_MALFORMED");
+  assert.equal(malformed.length, 1);
+  assert.equal(malformed[0].severity, "critical");
+  assert.equal(malformed[0].scope, "input-map");
+  assert.equal(malformed[0].index, 0);
+  assert.equal(malformed[0].evidence.name, "PSBT_IN_TAP_KEY_SIG");
+  assert.equal(result.verdict, "fail");
+
+  // Control: the same field on a P2TR spent output is not malformed.
+  const tapBefore = fuDoc([fuWitnessUtxo(FU_P2TR)], []);
+  const tapAfter = fuDoc([fuWitnessUtxo(FU_P2TR), fuTapKeySig()], []);
+  const tapResult = auditSigner(tapBefore, tapAfter, {});
+  assert.equal(tapResult.findings.some((f) => f.code === "SIGNATURE_MALFORMED"), false);
+});
+
+test("SA-4: a Taproot signature field on an unknown spent output is not malformed", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([fuTapKeySig()], []);
+  const result = auditSigner(before, after, {});
+  assert.equal(result.findings.some((f) => f.code === "SIGNATURE_MALFORMED"), false);
+  const unverified = result.findings.filter((f) => f.code === "SIGNATURE_UNVERIFIED");
+  assert.equal(unverified.length, 1);
+  assert.equal(unverified[0].severity, "critical");
+  assert.equal(unverified[0].evidence.name, "PSBT_IN_TAP_KEY_SIG");
+  assert.equal(result.verdict, "fail");
+});
+
+test("a malformed new signature does not count toward full_commitment", () => {
+  const before = fuDoc([fuWitnessUtxo(FU_P2WPKH)], []);
+  const after = fuDoc([fuWitnessUtxo(FU_P2WPKH), fuTapKeySig()], []);
+  const result = auditSigner(before, after, {});
+  assert.equal(result.findings.some((f) => f.code === "SIGNATURE_MALFORMED" && f.severity === "critical"), true);
+  assert.equal(result.checks.sighashPolicy, "none");
+});
+
+test("SA-2: CHANGE_VERIFIED evidence carries a foreign fingerprint", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([], [fuOutDerivation("deadbeef")]);
+  const result = auditSigner(before, after, {
+    wallet: { fingerprints: ["aabbccdd"], scriptPubKeys: [FU_CHANGE_SCRIPT] },
+  });
+  const verified = result.findings.filter((f) => f.code === "CHANGE_VERIFIED");
+  assert.equal(verified.length, 1);
+  assert.equal(verified[0].severity, "info");
+  assert.equal(verified[0].evidence.fingerprint, null);
+  assert.equal(verified[0].evidence.foreignFingerprint, "deadbeef");
+  // The script match is the authority; the metadata warning still fires.
+  assert.equal(result.findings.some((f) => f.code === "METADATA_ADDED" && f.severity === "warning"), true);
+});
+
+test("SA-2: foreignFingerprint requires a non-empty wallet fingerprint list", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([], [fuOutDerivation("deadbeef")]);
+  const scriptOnly = auditSigner(before, after, { wallet: { scriptPubKeys: [FU_CHANGE_SCRIPT] } });
+  const verified = scriptOnly.findings.filter((f) => f.code === "CHANGE_VERIFIED");
+  assert.equal(verified.length, 1);
+  assert.equal("foreignFingerprint" in verified[0].evidence, false);
+
+  const mixed = fuDoc([], [fuOutDerivationFor("aabbccdd", "55"), fuOutDerivationFor("deadbeef", "66")]);
+  const mixedResult = auditSigner(before, mixed, { wallet: { fingerprints: ["aabbccdd"], scriptPubKeys: [FU_CHANGE_SCRIPT] } });
+  const mixedVerified = mixedResult.findings.filter((f) => f.code === "CHANGE_VERIFIED");
+  assert.equal(mixedVerified.length, 1);
+  assert.equal(mixedVerified[0].evidence.fingerprint, "aabbccdd");
+  assert.equal(mixedVerified[0].evidence.foreignFingerprint, "deadbeef");
+});
+
+test("malformed wallet lists are ignored entirely (fail closed)", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([], [fuOutDerivation("deadbeef")]);
+  const noWallet = auditSigner(before, after, {});
+  for (const wallet of [
+    { fingerprints: "aabbccdd", scriptPubKeys: [FU_CHANGE_SCRIPT] },
+    { fingerprints: ["aabbccdd"], scriptPubKeys: FU_CHANGE_SCRIPT },
+  ]) {
+    const result = auditSigner(before, after, { wallet });
+    assert.deepEqual(result.findings, noWallet.findings);
+    assert.equal(result.findings.some((f) => f.code === "CHANGE_VERIFIED"), false);
+    assert.equal(result.findings.some((f) => f.code === "METADATA_ENRICHMENT"), false);
+    assert.equal(result.checks.changeOutputs, noWallet.checks.changeOutputs);
+  }
+});
+
 const P1_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const P2_HEX = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
 const DERIV_VALUE = "12345678" + "54000080" + "00000080" + "00000080" + "00000000" + "00000000";

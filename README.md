@@ -196,8 +196,7 @@ an explicit error before those pairs are allocated.
   scanning, and an **Insane editing** switch lifts the consensus-layer checks
   for deliberately broken files while still listing their problems. The
   editor never signs anything.
-- Verifies and extends Bitcoin Core descriptor wallets (Core Wallet tab,
-  hidden from release navigation until the team opens it; test builds show it):
+- Verifies and extends Bitcoin Core descriptor wallets (Core Wallet tab):
   upload a SQLite `wallet.dat` (Bitcoin Core 23+; legacy Berkeley DB wallets
   are refused) and every record is decoded — client versions, wallet flags,
   sync locators, descriptors with their cached branch parents and private-key

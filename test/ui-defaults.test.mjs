@@ -1713,29 +1713,26 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs ship the Journal, keep Core Wallet to test builds and hold back Lightning", () => {
-  // The release tab list is unconditional apart from Core Wallet, which stays
-  // test-build-only until its follow-up opens it: exactly seven release
-  // entries, in order, with the Journal released and Lightning held back.
+test("workspace tabs ship Core Wallet and the Journal and hold back only Lightning", () => {
+  // The release tab list is unconditional: exactly eight entries, in order,
+  // with Core Wallet and the Journal released and Lightning held back.
   const declaration = appSource.match(/^var hodlWorkspaceTabs = (\[.*\]);$/m);
   assert.ok(declaration, "the workspace tab list is missing");
-  const coreGate = '...(__ENTROPYLAB_TEST_HOOKS__ ? [["core", "Core Wallet", "Core"]] : []), ';
-  assert.ok(declaration[1].includes(coreGate), "Core Wallet stays behind the test-build gate");
-  const release = declaration[1].replace(coreGate, "");
-  assert.doesNotMatch(release, /__ENTROPYLAB_TEST_HOOKS__|\.\.\./, "no other release tab may be gated behind test hooks");
-  const entries = [...release.matchAll(/\["([a-z0-9]+)", "([^"]*)", "([^"]*)"\]/g)].map((match) => [match[1], match[2], match[3]]);
+  assert.doesNotMatch(declaration[1], /__ENTROPYLAB_TEST_HOOKS__|\.\.\./, "no release tab may be gated behind test hooks");
+  const entries = [...declaration[1].matchAll(/\["([a-z0-9]+)", "([^"]*)", "([^"]*)"\]/g)].map((match) => [match[1], match[2], match[3]]);
   assert.deepEqual(entries, [
     ["calc", "Keys", "Keys"],
     ["msig", "Multi Signature", "MultiSig"],
     ["psbt", "Transactions", "Txns"],
+    ["core", "Core Wallet", "Core"],
     ["bip85", "BIP-85 Child", "BIP-85"],
     ["sp", "Silent Payments", "SP"],
     ["vanity", "Vanity Address", "Vanity"],
     ["journal", "Journal", "Journal"],
   ]);
   assert.equal(entries.some((entry) => entry[0] === "ln"), false, "Lightning stays held back from the release tab list");
-  // Release first paint and no-JS show the static strip: a held-back tool has no button there.
-  assert.doesNotMatch(shell, /aria-controls="core-card"/);
+  // Release first paint and no-JS show the static strip: every release tool has its button there.
+  assert.match(shell, /aria-controls="core-card"/);
   for (const markup of [shell]) {
     assert.match(markup, /id="bip85-card"/);
     assert.match(markup, /id="bip85-go"/);
@@ -2096,7 +2093,7 @@ test("the workspace switcher keeps every tool on screen as a tab strip", () => {
   // Every tool with a tab ships in the static markup, each with a full name
   // and the
   // short form narrow screens show instead.
-  for (const [full, short] of [["Keys", "Keys"], ["Vanity Address", "Vanity"], ["BIP-85 Child", "BIP-85"], ["Multi Signature", "MultiSig"], ["Silent Payments", "SP"], ["Transactions", "Txns"]]) {
+  for (const [full, short] of [["Keys", "Keys"], ["Vanity Address", "Vanity"], ["BIP-85 Child", "BIP-85"], ["Multi Signature", "MultiSig"], ["Silent Payments", "SP"], ["Transactions", "Txns"], ["Core Wallet", "Core"]]) {
     assert.ok(
       shell.includes(`<span class="workspace-tab-full">${full}</span><span class="workspace-tab-short">${short}</span>`),
       `${full} is missing from the workspace strip`,
@@ -2108,7 +2105,7 @@ test("the workspace switcher keeps every tool on screen as a tab strip", () => {
   // Hidden text leaves the accessibility tree, so the full name is stated on
   // the tab itself and assistive tech hears it at every width.
   assert.match(appSource, /button\.setAttribute\("aria-label", hodlTText\(label\)\);/);
-  for (const full of ["Keys", "Vanity Address", "BIP-85 Child", "Multi Signature", "Silent Payments", "Transactions"]) {
+  for (const full of ["Keys", "Vanity Address", "BIP-85 Child", "Multi Signature", "Silent Payments", "Transactions", "Core Wallet"]) {
     assert.match(shell, new RegExp(`aria-label="${full.replace("/", "\\/")}">[\\s\\S]*?<span class="workspace-tab-full">${full.replace("/", "\\/")}</span>`), `${full} tab needs its accessible name`);
   }
   // A tablist owes arrow keys; the key and multisig strips already answer them.
@@ -2182,7 +2179,7 @@ test("each static tool tab points at a tab panel the shell has", () => {
   const start = shell.indexOf('id="workspace-tabs"');
   const strip = shell.slice(start, shell.indexOf("</div>", start));
   const tabs = strip.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
-  assert.equal(tabs.length, 6, "the static strip carries the six release tools");
+  assert.equal(tabs.length, 7, "the static strip carries the seven release tools");
   for (const tab of tabs) {
     const ids = tab.match(/aria-controls="([^"]*)"/)?.[1].split(" ").filter(Boolean) ?? [];
     assert.ok(ids.length, `${tab} names no panel`);

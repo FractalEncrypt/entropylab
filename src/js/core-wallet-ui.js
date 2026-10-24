@@ -15,6 +15,10 @@ const escapeHtml = (text) =>
 
 const bytesToHex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 
+// The same pattern core-wallet.js uses: every extended private key form,
+// including SLIP-132 and its uppercase variants.
+const PRIVATE_KEY = /\b(?:[xyztuv]prv|[YZUV]prv)[1-9A-HJ-NP-Za-km-z]{90,}/;
+
 // wallet.dat files of used wallets carry their transaction history; the cap
 // keeps a hostile or accidental multi-gigabyte file from stalling the tab.
 export const CORE_WALLET_MAX_BYTES = 64 * 1024 * 1024;
@@ -221,10 +225,15 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
     return `${sectionHeadHtml(tHtml("Import into Key Station"), result?.imports?.length || undefined, tHtml("Move this wallet’s proven key material into the Key Station to review and derive there"))}${body}`;
   };
 
-  const bindImportButtons = (result) => {
+  const bindImportButtons = (result, failed) => {
     if (!result?.imports?.length) return;
     out.querySelectorAll("[data-core-import-go]").forEach((button) => {
       button.addEventListener("click", () => {
+        // Defense in depth: a disabled button is not a guard; refuse here too.
+        if (failed) {
+          setError(t("Import unlocks when every check above passes or warns."));
+          return;
+        }
         const item = result.imports[Number(button.dataset.coreImportGo)];
         if (item && typeof onImportIntoStation === "function") onImportIntoStation(item);
       });
@@ -262,7 +271,7 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
       ${doc.descriptors.map((entry, index) => descriptorHtml(entry, index)).join("")}
       ${otherRecordsHtml()}`;
     out.dataset.added = String(added);
-    bindImportButtons(imports);
+    bindImportButtons(imports, failed);
     addSection.hidden = false;
     // A file this page has edited is offered only once every check passes:
     // an addition must never hand out a wallet that verification refuses.
@@ -353,6 +362,12 @@ export const initCoreWallet = ({ deps, onImportIntoStation, copyIcon, copiedIcon
   // a pagehide drops the parsed wallet entirely, so neither a bfcache restore
   // nor a screen capture after leaving shows old key material.
   const concealing = () => {
+    // A pasted private descriptor can sit in the field before any wallet is
+    // loaded or while nothing is revealed; clear it whenever it carries a key.
+    if (PRIVATE_KEY.test(addText.value)) {
+      addText.value = "";
+      syncAddGo();
+    }
     if (!doc || !reveal.checked) return;
     reveal.checked = false;
     render();
