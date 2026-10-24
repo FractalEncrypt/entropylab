@@ -737,6 +737,7 @@ function hodlQrSvg(e, t = "#111111", r = "#ffffff") {
 // the browser harness stages a --test-hooks variant instead.
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabCrypto = { entropyToMnemonic: (hex) => hodlEntropyToMnemonic(hodlHex.decode(hex), hodlBip39Wordlist), mnemonicToEntropy: (mnemonic) => hodlHex.encode(hodlMnemonicToEntropy(mnemonic, hodlBip39Wordlist)), mnemonicToSeed: (mnemonic, passphrase) => hodlHex.encode(hodlMnemonicToSeed(mnemonic, passphrase)), validateMnemonic: (mnemonic) => hodlValidateMnemonic(mnemonic).ok, masterXprv: (mnemonic, passphrase) => hodlHDKey.fromMasterSeed(hodlMnemonicToSeed(mnemonic, passphrase)).privateExtendedKey, privateKeyInputIsValid: () => hodlPrivateKeyInputIsValid(), computeTargetLastWords: (words, targetWords) => hodlComputeTargetLastWords(words, targetWords), clearLastWordCache: () => hodlLastWordCache.clear(), validateTargetMnemonic: (value, targetWords) => hodlValidateTargetMnemonic(value, targetWords), bruteTargetLastWords: (value) => hodlLastWordCandidates(value) };
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabPassphrase = () => hodlPassphraseText(hodlPassphraseFieldBytes());
+if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabShowStoredPassphrase = (text) => { const bytes = new TextEncoder().encode(text); try { hodlShowStoredPassphrase(bytes); } finally { bytes.fill(0); } };
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabWasmMemory = () => [hodlWasm().memory.buffer, hodlPsbtLoaderHeap().buffer];
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabStationRoot = () => hodlStationSessionXprv();
 if (__ENTROPYLAB_TEST_HOOKS__ && globalThis.__entropyLabTest) globalThis.__entropyLabI18n = { sanitizeCatalogHtml: hodlSanitizeCatalogHtml, tHtml: hodlT, tAttr: hodlTAttr };
@@ -1776,7 +1777,8 @@ function hodlShowAccount(id) {
         ${hodlSlip132WatchFields(account, hodlWalletResult)}
         ${hodlImportedCoreRecoveryExport(hodlWalletResult, account)}
         ${hodlRenderMultisigCosignerExport(hodlWalletResult.multisigCosignerExports, account.def.id)}
-        ${hodlWatchOnlyDescriptorExport(account.receiveDescriptor, account.changeDescriptor, branches, { collapsible: false })}`, "account-watch-section")}`;
+        ${hodlWatchOnlyDescriptorExport(account.receiveDescriptor, account.changeDescriptor, branches, { collapsible: false })}
+        ${hodlKeyCoreImportDescriptorsMarkup(account)}`, "account-watch-section")}`;
   hodlBindAddressVirtualization(hodlAddressBranchVirtualConfigs(branches, hasPrivate, "hd"));
   hodlBindAddressMatch();
   hodlBindWalletResultActions();
@@ -2231,46 +2233,85 @@ function hodlMsigCoreImportCodec() {
     encode: (bytes) => hodlBase58Check.encode(bytes)
   };
 }
-// The deepest address index the result displays on the two branches the Core
-// exports watch (receive/change): the importdescriptors JSON must see past
-// it, exactly as the wallet.dat writer does (wallet-export.js
-// branchRangeFromRows). Reads the same rows that lookup reads.
-function hodlMsigDisplayedAddressEnd(wallet) {
-  let end = null;
-  for (const branch of [0, 1]) {
-    const branchRows = wallet?.addressBranches?.find((entry) => entry?.branch === branch)?.rows;
-    const rows = Array.isArray(branchRows) ? branchRows : branch === 0 ? wallet?.receive : wallet?.change;
-    for (const row of rows ?? []) if (Number.isSafeInteger(row?.index) && row.index >= 0) end = end === null ? row.index : Math.max(end, row.index);
-  }
-  return end;
+// Read public descriptors directly; the private wallet export view is never used.
+function hodlCoreImportDescriptorsWallet(scope) {
+  if (scope === "msig") return hodlWalletResult?.kind === "msig" ? hodlWalletResult : null;
+  if (hodlWalletResult?.kind !== "hd") return null;
+  const accounts = hodlWalletResult.accounts;
+  const account = accounts.find((account) => account.def?.id === hodlAccountId);
+  if (!account) throw hodlError("The selected account is unavailable. Select a script type and export again.");
+  return account;
 }
-function hodlMsigCoreImportDescriptorsJson() {
-  if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
-  if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor) return "";
+// Never spread the source account, branches, or rows: they may own private
+// getters. Copy only the fields needed by the shared branch/active mapping.
+function hodlCoreImportDescriptorsPublicWallet(wallet, scope) {
+  const indexes = rows => Array.isArray(rows) ? rows.map(row => ({ index: row?.index })) : [];
+  const publicAccount = {
+    def: wallet.def, script: wallet.script, branchStart: wallet.branchStart,
+    receiveDescriptor: wallet.receiveDescriptor, changeDescriptor: wallet.changeDescriptor,
+    receive: indexes(wallet.receive), change: indexes(wallet.change),
+    addressBranches: wallet.addressBranches?.map(entry => ({
+      branch: entry.branch, publicDescriptor: entry.publicDescriptor,
+      rows: Array.isArray(entry.rows) ? indexes(entry.rows) : indexes(entry.branch === 0 ? wallet.receive : entry.branch === 1 ? wallet.change : [])
+    }))
+  };
+  // A displayed branch without a public representation cannot be silently
+  // dropped. Legacy receive/change descriptors may supply rows-only entries.
+  for (const entry of publicAccount.addressBranches ?? []) {
+    const descriptor = entry.publicDescriptor ?? (entry.branch === 0 ? wallet.receiveDescriptor : entry.branch === 1 ? wallet.changeDescriptor : null);
+    if (!descriptor) throw new Error("A displayed branch has no public descriptor. Core watch-only export refused.");
+  }
+  return scope === "msig" ? { ...publicAccount, kind: "msig" } : { kind: "hd", accounts: [publicAccount] };
+}
+function hodlCoreImportDescriptorsJson(scope = "msig") {
+  const wallet = hodlCoreImportDescriptorsWallet(scope);
+  if (!wallet) return "";
   const codec = hodlMsigCoreImportCodec();
+  const publicWallet = hodlCoreImportDescriptorsPublicWallet(wallet, scope);
+  const units = hodlWalletExport.walletDescriptorUnits(publicWallet, false);
+  if (!units.length) return "";
+  for (const unit of units) {
+    hodlWalletExport.assertDescriptorShape(unit.descriptor, "watch-only", {
+      checksum: hodlDescriptorChecksum, base58Decode: codec.decode
+    }, unit.type, Boolean(unit.multiKey));
+  }
   return buildImportDescriptorsJson({
-    receiveDescriptor: hodlWalletResult.receiveDescriptor,
-    changeDescriptor: hodlWalletResult.changeDescriptor,
-    // "now" is for unused keys; a shape the wallet.dat writer refuses (a
-    // BIP 45 recovery wallet) must still scan from genesis even though the
-    // birthday picker stays visible for this JSON.
-    timestamp: hodlWalletDatBirthday === "now" && hodlWalletExport.walletDatSupported(hodlWalletResult) ? "now" : 0,
+    descriptorUnits: units,
+    branchHardened: wallet.branchHardened === true,
+    // Recovery-only multisig shapes still scan from genesis even when the
+    // shared birthday picker says "now". Key Station uses its chosen birthday.
+    timestamp: hodlWalletDatBirthday === "now" && (scope !== "msig" || hodlWalletExport.walletDatSupported(publicWallet)) ? "now" : 0,
     decode: codec.decode,
-    encode: codec.encode,
-    rangeEnd: hodlMsigDisplayedAddressEnd(hodlWalletResult)
+    encode: codec.encode
   });
+}
+function hodlCoreImportDescriptorsButtons(prefix) {
+  return `<button class="btn secondary green" id="${prefix}-save-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Save Core Watch-only JSON")}</button>
+    <button class="btn secondary" id="${prefix}-copy-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Copy Core importdescriptors")}</button>`;
+}
+function hodlCoreImportDescriptorsNote(wallet) {
+  if (wallet.branchStart > 0) return hodlT("Imports the displayed public branches. Bitcoin Core uses branch {branch} for new receiving addresses, starting at address index 0. Verify that address on another trusted wallet or signer before funding.", { branch: wallet.branchStart });
+  // Core starts at index 0 even when the displayed address window starts later.
+  const receiveRows = wallet.addressBranches?.find((entry) => entry.branch === 0)?.rows ?? wallet.receive ?? [];
+  return receiveRows.some((row) => row.index === 0)
+    ? hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress must match receive index 0 here.")
+    : hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress is this wallet's receive index 0, which is not in the address window shown above — display from index 0 or verify it on a signer before funding.");
+}
+function hodlKeyCoreImportDescriptorsMarkup(account) {
+  // Hidden in release builds until the team opens the Key Station Core export.
+  // typeof keeps the standalone Node extraction working; every shipped build defines the flag.
+  if (typeof __ENTROPYLAB_TEST_HOOKS__ !== "undefined" && !__ENTROPYLAB_TEST_HOOKS__) return "";
+  if (!account?.receiveDescriptor && !account?.changeDescriptor && !account?.addressBranches?.some(entry => entry.publicDescriptor)) return "";
+  return `<div class="wallet-data-actions no-print" id="key-core-importdescriptors">
+    <p class="edge-note is-public" id="key-core-importdescriptors-help">${hodlCoreImportDescriptorsNote(account)} ${hodlT("Exports the selected script type's displayed branches, using the wallet birthday under Downloads below.")}</p>
+    ${hodlCoreImportDescriptorsButtons("key")}
+    <p class="edge-note is-private" id="key-core-importdescriptors-error" role="alert"></p>
+  </div>`;
 }
 function hodlMsigCoreImportDescriptorsMarkup() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
-  if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor) return "";
-  // A fresh Core wallet's first getnewaddress is this wallet's receive index
-  // 0. When the displayed window starts deeper, that index is not in the
-  // table — say so rather than pointing at a table that cannot show it.
-  const receiveRows = hodlWalletResult.addressBranches?.find((entry) => entry?.branch === 0)?.rows ?? hodlWalletResult.receive ?? [];
-  const showsIndexZero = (receiveRows ?? []).some((row) => row?.index === 0);
-  const coreNote = showsIndexZero
-    ? hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress must match receive index 0 here.")
-    : hodlT("Online node: createwallet disable_private_keys=true blank=true, then importdescriptors. First getnewaddress is this wallet's receive index 0, which is not in the address window shown above — display from index 0 or verify it on a signer before funding.");
+  if (!hodlWalletResult.receiveDescriptor && !hodlWalletResult.changeDescriptor && !hodlWalletResult.addressBranches?.some(entry => entry.publicDescriptor)) return "";
+  const coreNote = hodlCoreImportDescriptorsNote(hodlWalletResult);
   const walletDat = hodlWalletExport.walletDatSupported(hodlWalletResult);
   // The footer the key view uses: the Downloads title, what the export is, the
   // birthday titled the way a field is, then the two saves splitting the row.
@@ -2283,8 +2324,7 @@ function hodlMsigCoreImportDescriptorsMarkup() {
     <div class="msig-downloads-head"><p class="label">${hodlT("Downloads")}</p><p class="muted label-description">${hodlT("Import the watch-only wallet descriptor into Sparrow or another wallet.")}</p></div>
     <p class="edge-note is-public" id="msig-core-importdescriptors-help">${coreNote}</p>
     <div class="wallet-birthday-field"><p class="label" id="msig-birthday-label">${hodlT("Wallet birthday")}</p><p class="muted label-description wallet-dat-birthday-help" id="msig-birthday-help">${hodlT("Bitcoin Core only auto-scans history back to the birthday. Choose “New keys” only for entropy created right now; recovering older keys with today's birthday can look empty until you run <code>rescanblockchain 0</code> in Bitcoin Core.")}</p><select data-wallet-dat-birthday aria-labelledby="msig-birthday-label" aria-describedby="msig-birthday-help msig-core-importdescriptors-help"><option value="genesis"${hodlWalletDatBirthday === "genesis" ? " selected" : ""}>${hodlT("Recovering keys · scan from genesis")}</option><option value="now"${hodlWalletDatBirthday === "now" ? " selected" : ""}>${hodlT("New keys · created today")}</option></select></div>
-    <button class="btn secondary green" id="msig-save-importdescriptors" type="button">${hodlT("Save Core Watch-only JSON")}</button>
-    <button class="btn secondary" id="msig-copy-importdescriptors" type="button">${hodlT("Copy Core importdescriptors")}</button>
+    ${hodlCoreImportDescriptorsButtons("msig")}
     ${walletDat ? `<button class="btn secondary green save-wallet-dat" id="msig-download-wallet-dat" type="button" aria-describedby="msig-core-importdescriptors-help msig-birthday-help">${hodlWalletExport.walletDatButtonLabel(false)}</button>` : ""}
   </div>`;
 }
@@ -2301,16 +2341,22 @@ function hodlMsigBip388Markup() {
     <p class="muted" id="msig-bip388-help">${hodlT("BIP 388 wallet policy (template and co-signer xpubs) for wallets that register policies. Watch-only; no private keys.")}</p>
   </div>`;
 }
-function hodlCopyMsigCoreImportDescriptors() {
+function hodlCoreImportDescriptorsError(scope, spec) {
+  if (scope === "msig") return hodlSetWorkspaceError(scope, spec);
+  const error = document.getElementById("key-core-importdescriptors-error");
+  if (error) error.textContent = hodlFormatErrorSpec(spec);
+}
+function hodlCopyCoreImportDescriptors(scope = "msig") {
+  hodlCoreImportDescriptorsError(scope, null);
   let json = "";
   try {
-    json = hodlMsigCoreImportDescriptorsJson();
+    json = hodlCoreImportDescriptorsJson(scope);
   } catch (error) {
-    hodlSetWorkspaceError("msig", hodlErrorSpecFrom(error));
+    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
     return;
   }
   if (!json) return;
-  let button = document.getElementById("msig-copy-importdescriptors");
+  let button = document.getElementById(`${scope === "calc" ? "key" : "msig"}-copy-importdescriptors`);
   let label = hodlTText("Copy Core importdescriptors");
   let done = (copied) => {
     json = "";
@@ -2326,12 +2372,13 @@ function hodlCopyMsigCoreImportDescriptors() {
   };
   copyText(json).then(done);
 }
-function hodlDownloadMsigCoreImportDescriptors() {
+function hodlDownloadCoreImportDescriptors(scope = "msig") {
+  hodlCoreImportDescriptorsError(scope, null);
   let json = "";
   try {
-    json = hodlMsigCoreImportDescriptorsJson();
+    json = hodlCoreImportDescriptorsJson(scope);
   } catch (error) {
-    hodlSetWorkspaceError("msig", hodlErrorSpecFrom(error));
+    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
     return;
   }
   if (!json) return;
@@ -2380,6 +2427,16 @@ function hodlDownloadMsigBip388Policy() {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1e3);
 }
+function hodlBindCoreImportDescriptors(scope) {
+  const prefix = scope === "calc" ? "key" : "msig";
+  for (const [action, handler] of [["copy", hodlCopyCoreImportDescriptors], ["save", hodlDownloadCoreImportDescriptors]]) {
+    const button = document.getElementById(`${prefix}-${action}-importdescriptors`);
+    if (!button) continue;
+    const clean = button.cloneNode(true);
+    button.replaceWith(clean);
+    clean.addEventListener("click", () => handler(scope));
+  }
+}
 function hodlBindMsigCoreImportDescriptors() {
   document.querySelectorAll("#msig-out [data-wallet-dat-birthday]").forEach((select) => {
     select.value = hodlWalletDatBirthday;
@@ -2387,18 +2444,7 @@ function hodlBindMsigCoreImportDescriptors() {
       hodlWalletDatBirthday = select.value === "now" ? "now" : "genesis";
     };
   });
-  let copy = document.getElementById("msig-copy-importdescriptors");
-  if (copy) {
-    let clean = copy.cloneNode(true);
-    copy.replaceWith(clean);
-    clean.addEventListener("click", hodlCopyMsigCoreImportDescriptors);
-  }
-  let save = document.getElementById("msig-save-importdescriptors");
-  if (save) {
-    let clean = save.cloneNode(true);
-    save.replaceWith(clean);
-    clean.addEventListener("click", hodlDownloadMsigCoreImportDescriptors);
-  }
+  hodlBindCoreImportDescriptors("msig");
   let walletDat = document.getElementById("msig-download-wallet-dat");
   if (walletDat) {
     let clean = walletDat.cloneNode(true);
@@ -2431,6 +2477,7 @@ function hodlBindMsigCoreImportDescriptors() {
   }
 }
 function hodlBindWalletResultActions() {
+  hodlBindCoreImportDescriptors("calc");
   let reveal = document.getElementById("reveal");
   if (reveal) reveal.onchange = () => {
     hodlRevealPrivate = reveal.checked;
@@ -4593,6 +4640,31 @@ function hodlPassphraseAutocompleteEnabled() {
 // can be wiped. BIP39-word mode edits the field's own text (autocomplete,
 // highlighting), so there the field is ordinary.
 var hodlPassphraseVault = new PassphraseVault(), hodlPassphraseVaultField = null, hodlPassphraseShown = false;
+// A passphrase with a line break cannot be edited as BIP39 words: the
+// single-line field drops the break, so the wallet would change. The note
+// under the switch says so, and is shown only while the passphrase has one.
+function hodlShowPassphraseLineBreakWarning(show) {
+  let warning = document.getElementById("passphrase-linebreak-warning");
+  if (warning) warning.hidden = !show;
+}
+// True when the bytes hold a line break. In UTF-8 only LF and CR encode as
+// 0x0A and 0x0D, so the test is exact and never decodes the passphrase.
+function hodlPassphraseBytesHaveLineBreak(bytes) {
+  if (!ArrayBuffer.isView(bytes)) return false;
+  for (let i = 0; i < bytes.length; i++) if (bytes[i] === 0x0a || bytes[i] === 0x0d) return true;
+  return false;
+}
+function hodlPassphraseHasLineBreak() {
+  // The vault holds the passphrase in vault mode, including while the switch
+  // is being turned on (before unmask runs); in word mode unmask cleared it
+  // and the field's plain text cannot hold a break.
+  let held = hodlPassphraseVault.length ? hodlPassphraseVault.bytes() : hodlPassphraseFieldBytes();
+  try {
+    return hodlPassphraseBytesHaveLineBreak(held);
+  } finally {
+    if (ArrayBuffer.isView(held)) held.fill(0);
+  }
+}
 function hodlPassphraseVaultActive() {
   return !hodlPassphraseBip39Enabled();
 }
@@ -4626,6 +4698,17 @@ function hodlShowStoredPassphrase(value) {
   hodlPassphraseShown = false;
   let bytes = hodlStoredPassphraseBytes(value);
   try {
+    // A stored passphrase with a line break cannot be edited as BIP39 words:
+    // the field would drop the break. Keep the exact bytes in the vault.
+    let lineBreak = hodlPassphraseBytesHaveLineBreak(bytes);
+    if (lineBreak && hodlPassphraseBip39Enabled()) {
+      let state = hodlKeys[hodlActiveKey];
+      if (state) state.passphraseBip39Words = false;
+      let toggle = document.getElementById("passphrase-bip39-words");
+      if (toggle) toggle.checked = false;
+      hodlPassphraseVaultField?.mask();
+      hodlShowPassphraseLineBreakWarning(true);
+    } else if (!lineBreak) hodlShowPassphraseLineBreakWarning(false);
     if (hodlPassphraseVaultField) hodlPassphraseVaultField.setBytes(bytes || new Uint8Array(0));
     else {
       let field = document.getElementById("pass");
@@ -4817,7 +4900,7 @@ function hodlPassphraseBip39ToggleMarkup(checked = hodlPassphraseBip39Enabled())
   // Showing the passphrase is its own choice; in word mode the field shows
   // its text anyway, so the switch steps aside.
   let reveal = hodlSwitchRowMarkup("passphrase-reveal", hodlT("Show passphrase"), { note: hodlT("Hidden by default: a passphrase on screen can be captured or seen"), checked: hodlPassphraseShown, hidden: checked, privateReveal: true });
-  return `<div class="passphrase-bip39-options"><div class="switch-row"><label class="switch-toggle passphrase-bip39-toggle"><input type="checkbox" id="passphrase-bip39-words" aria-describedby="passphrase-bip39-note" ${checked ? "checked" : ""} /><span class="label">${hodlT("Build passphrase from BIP39 words")}</span></label><p class="switch-note" id="passphrase-bip39-note">${hodlT("Use complete lowercase English BIP39 words separated by single spaces")}</p></div><label class="switch-toggle passphrase-autocomplete-toggle" id="passphrase-autocomplete-control"${checked ? "" : " hidden"}><input type="checkbox" id="passphrase-autocomplete" ${autocomplete ? "checked" : ""} /><span class="label">${hodlT("Autocomplete BIP39 words")}</span></label></div>${reveal}`;
+  return `<div class="passphrase-bip39-options"><div class="switch-row"><label class="switch-toggle passphrase-bip39-toggle"><input type="checkbox" id="passphrase-bip39-words" aria-describedby="passphrase-bip39-note" ${checked ? "checked" : ""} /><span class="label">${hodlT("Build passphrase from BIP39 words")}</span></label><p class="switch-note" id="passphrase-bip39-note">${hodlT("Use complete lowercase English BIP39 words separated by single spaces")}</p></div><p class="edge-note is-private" id="passphrase-linebreak-warning" data-passphrase-linebreak-warning hidden>${hodlT("This passphrase contains a hidden line break, so it can't be edited as BIP39 words without changing your wallet.")}</p><label class="switch-toggle passphrase-autocomplete-toggle" id="passphrase-autocomplete-control"${checked ? "" : " hidden"}><input type="checkbox" id="passphrase-autocomplete" ${autocomplete ? "checked" : ""} /><span class="label">${hodlT("Autocomplete BIP39 words")}</span></label></div>${reveal}`;
 }
 function hodlBrainWalletTrimEnabled() {
   return Boolean(document.getElementById("brain-wallet-trim")?.checked);
@@ -5494,6 +5577,7 @@ function hodlBindPassphraseKeyboard(inputId = "pass", toggleId = "passphrase-key
   }
   refresh();
 }
+const hodlPassphraseLineBreakBound = new WeakSet();
 function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
   let input = document.getElementById("pass"), bip39Toggle = document.getElementById("passphrase-bip39-words"), autocompleteToggle = document.getElementById("passphrase-autocomplete"), autocompleteControl = document.getElementById("passphrase-autocomplete-control"), keyboard = document.getElementById(keyboardId), modeButton = keyboard?.querySelector("[data-seed-keyboard-mode]");
   if (!input || !bip39Toggle || !autocompleteToggle || !autocompleteControl) return;
@@ -5504,13 +5588,34 @@ function hodlBindPassphraseOptions(keyboardId = "passphrase-keyboard") {
     if (reveal) reveal.checked = hodlPassphraseShown;
     hodlRenderPassphraseInputState(input, bip39Toggle.checked);
     hodlUpdatePassphraseKeyboardKeys(input, keyboardId);
+    if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
   };
   if (reveal) reveal.onchange = () => {
     hodlPassphraseShown = reveal.checked;
     refresh();
   };
+  // The note goes away as soon as the passphrase no longer has a line break.
+  // Bind once per field: the field outlives the form and this runs on every render.
+  if (!hodlPassphraseLineBreakBound.has(input)) {
+    hodlPassphraseLineBreakBound.add(input);
+    input.addEventListener("input", () => {
+      if (!hodlPassphraseHasLineBreak()) hodlShowPassphraseLineBreakWarning(false);
+    });
+  }
   bip39Toggle.onchange = () => {
     let state = hodlKeys[hodlActiveKey];
+    // A passphrase with a line break cannot be edited as words: the field
+    // would drop the break and the wallet would change. Refuse, keep the
+    // vault exactly as it is, and say why.
+    if (bip39Toggle.checked && hodlPassphraseHasLineBreak()) {
+      bip39Toggle.checked = false;
+      if (state) state.passphraseBip39Words = false;
+      refresh();
+      hodlShowPassphraseLineBreakWarning(true);
+      hodlSyncKeyClearButton();
+      hodlSyncDeriveButton();
+      return;
+    }
     if (state) state.passphraseBip39Words = bip39Toggle.checked;
     hodlPassphraseShown = false;
     if (bip39Toggle.checked) hodlPassphraseVaultField?.unmask();
@@ -12813,16 +12918,18 @@ function hodlSchnorrReuseHtml(schnorrReused) {
     ? "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>"
     : "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce across different keys.") + "</strong> " + hodlT("The same R value appears on Taproot signatures under different keys, so their nonce was reused. If the keys are related, as a Taproot output key is to its internal key or as keys from one wallet are, the private key can be recovered. Do not broadcast this transaction.") + "</p>";
 }
-function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0) {
-  let label = hodlTText("Nonce analysis");
-  if (reused.length) return { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
-  if (schnorrReused.length) return { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
-  if (possible.length) return { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
-  if (nonceIncomplete) return { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
+function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0, rfc6979Note = "") {
+  let label = hodlTText("Nonce analysis"), row;
+  if (reused.length) row = { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
+  else if (schnorrReused.length) row = { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
+  else if (possible.length) row = { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
+  else if (nonceIncomplete) row = { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
   // The completed line names the signatures that were compared (DeepSeek's
   // red-team of #1051, F4).
-  if (schnorrCompared) return { label, state: "complete", detail: ecdsaCompared ? hodlTText("All ECDSA and Taproot signatures in this PSBT had comparable nonce values; no repeated nonce was found for the same key within this file.") : hodlTText("All Taproot signatures in this PSBT had comparable nonce values; no repeated R value was found for the same key within this file.") };
-  return { label, state: "complete", detail: hodlTText("All ECDSA signatures in this PSBT had comparable nonce values; no repeated r was found for the same key within this file.") };
+  else if (schnorrCompared) row = { label, state: "complete", detail: ecdsaCompared ? hodlTText("All ECDSA and Taproot signatures in this PSBT had comparable nonce values; no repeated nonce was found for the same key within this file.") : hodlTText("All Taproot signatures in this PSBT had comparable nonce values; no repeated R value was found for the same key within this file.") };
+  else row = { label, state: "complete", detail: hodlTText("All ECDSA signatures in this PSBT had comparable nonce values; no repeated r was found for the same key within this file.") };
+  if (rfc6979Note) row.detail += " " + rfc6979Note;
+  return row;
 }
 // One analysis, two views. "inspect" is the PSBT Inspector: everything but the
 // per-signature nonce detail, with the nonce verdict kept as a summary row.
@@ -12856,6 +12963,10 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     policyProblems = 0,
     policyIncomplete = 0,
     unsupportedNonceChecks = 0,
+    rfcTotal = 0,
+    rfcChecked = 0,
+    rfcMismatched = 0,
+    rfcKeyFound = false,
     feeInconsistent = 0,
     // One digest-reconstruction budget per render, shared by the partial
     // signatures and the finalized-field scan (audit C3-3); 256 mirrors the
@@ -13032,6 +13143,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       }
       signatures = signatures.concat(finalMaterial.signatures);
       uninspected += finalMaterial.uninspected + (finalMaterial.malformed ? 1 : 0);
+      // Every ECDSA signature the finalized fields carry but this analysis
+      // could not attribute is still an ECDSA signature the coverage line
+      // must count as unchecked (Kimi K3's review of #1074): otherwise it
+      // claims "checked for all N" while N + k are present. Taproot material
+      // stays in tapUninspected.
+      rfcTotal += finalMaterial.uninspected + (finalMaterial.malformed && !hodlFinalIsTaproot(entries, claim) ? 1 : 0);
     }
     // Only a Schnorr signature that parses under BIP341 counts as present: an
     // unparseable one is flagged as a policy problem below, not silently
@@ -13151,6 +13268,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // hodlPsbtWipeMem.
       let privateKey = null;
       try {
+        rfcTotal += 1;
         if (!parts && !looseR) {
           uninspected += 1;
           policyIncomplete += 1;
@@ -13162,6 +13280,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
           }
         } else {
           privateKey = hodlPrivForPub(signature.pubkey) || hodlPrivFromPath(entries, signature.pubkey, inputDerivationBudget);
+          if (privateKey) rfcKeyFound = true;
           rValues.push({
             input: index,
             r: looseR,
@@ -13203,6 +13322,8 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
                 className = "psbt-warn";
                 if (privateKey && sighash) try {
                   let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+                  rfcChecked += 1;
+                  if (!cmp.ok) rfcMismatched += 1;
                   if (cmp.ok) {
                     message += " " + cmp.message;
                     className = cmp.className;
@@ -13217,6 +13338,8 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             }
           } else if (privateKey && sighash) try {
             let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+            rfcChecked += 1;
+            if (!cmp.ok) rfcMismatched += 1;
             message = cmp.message;
             className = cmp.className;
           } catch (exception) {
@@ -13334,6 +13457,18 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       : tapSignatureCount === 1
         ? hodlT("This PSBT also contains 1 Taproot / Schnorr signature. Its sighash policy is checked above. Only one Taproot signature is present, so nonce reuse cannot be judged from this file alone.")
         : hodlT("This PSBT also contains {count} Taproot / Schnorr signature(s). Their sighash policies are checked above. No repeated BIP340 nonces were found among them.", { count: tapSignatureCount })) + "</p>");
+  let rfc6979Note = "";
+  if (rfcTotal > 0) {
+    rfc6979Note = rfcChecked === 0 && !rfcKeyFound
+      ? hodlTText("RFC 6979: not checked (no matching key in this session).")
+      : rfcChecked === rfcTotal && rfcTotal === 1
+        ? hodlTText("RFC 6979: checked for 1 of 1 ECDSA signature.")
+        : rfcChecked === rfcTotal && rfcTotal >= 2
+          ? hodlTText("RFC 6979: checked for all {total} ECDSA signatures.", { total: rfcTotal })
+          : hodlTText("RFC 6979: checked for {checked} of {total} ECDSA signatures.", { checked: rfcChecked, total: rfcTotal });
+    if (rfcMismatched > 0) rfc6979Note += " " + hodlTText("{n} did not match.", { n: rfcMismatched });
+  }
+  if (rfc6979Note) nonceHtml.push("<p class='edge-note is-muted' data-rfc6979-coverage>" + hodlEscapeHtml(rfc6979Note) + "</p>");
   nonceHtml.push("<p class='field-note'>" + hodlT("RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Jade anti-exfil is secp256k1-zkp sign-to-contract and needs the USB host nonce plus signer opening; QR / sign_psbt Jade does not run it yet. BitBox anti-klepto is a different construction. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.") + "</p>");
   // ECDSA r values and BIP340 R values are never compared with each other,
   // so each family needs two comparable signatures of its own: one of each
@@ -13368,7 +13503,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         ? hodlTText("Compared with the loaded session key only within accounts 0–2, 50 receive and 50 change addresses, and four supported script types; outputs outside that range remain unclassified.")
         : hodlTText("No session key was loaded, so output ownership and change derivation were not checked."),
     },
-    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared),
+    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared, rfc6979Note),
     {
       label: hodlTText("BIP-174 / consensus cross-check"),
       state: referenceVerdict.state,

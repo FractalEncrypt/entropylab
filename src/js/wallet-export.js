@@ -732,6 +732,7 @@ var hodlWalletExport = (() => {
 
   return {
     walletDescriptorUnits,
+    assertDescriptorShape,
     hasDescriptors,
     hasPrivateDescriptors,
     walletDatSupported,
