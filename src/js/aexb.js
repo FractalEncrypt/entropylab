@@ -32,20 +32,21 @@ export function aexbDecode(input) {
   throw new AexbError("INVALID_MESSAGE", "not an AEXB or AEXT message");
 }
 
-export function aexbVerify(decoded, reveal = null) {
+export function aexbVerify(decoded, reveal = null, commitment = null) {
   if (decoded && decoded.signatures && decoded.reveal) {
     reveal = decoded.reveal;
     decoded = decoded.signatures;
   }
   if (decoded && decoded.message4 && decoded.message3) {
     reveal = decoded.message3;
+    commitment = decoded.message2 ?? decoded.message1 ?? commitment;
     decoded = decoded.message4;
   }
   if (!decoded || typeof decoded !== "object") return fail("INVALID_MESSAGE");
-  if (decoded.stage === 3) return verifyReveal(decoded);
+  if (decoded.stage === 3) return verifyReveal(decoded, commitment);
   if (decoded.stage === 4) {
     if (!reveal) return fail("MISSING_REVEAL");
-    return verifySignatures(decoded, reveal);
+    return verifySignatures(decoded, reveal, commitment);
   }
   return fail("UNSUPPORTED_STAGE");
 }
@@ -106,14 +107,21 @@ function fail(reason) {
   return { ok: false, verdict: "fail", reason, slots: [] };
 }
 
-function verifyReveal(reveal) {
+function verifyReveal(reveal, commitment) {
   if (!reveal || reveal.stage !== 3 || !Array.isArray(reveal.slots)) return fail("INVALID_MESSAGE");
+  if (reveal.slots.length === 0) return fail("EMPTY_SLOT_SET");
+  const binding = checkCommitmentBinding(reveal, commitment);
+  if (binding.fail) return binding.fail;
+  const originalSlots = binding.slots;
   const slots = reveal.slots.map((slot, index) => {
+    if (!equalBytes(slot.commitment, originalSlots[index].commitment)) {
+      return { slot: index, ok: false, reason: "COMMITMENT_MISMATCH" };
+    }
     if (!slot.rho || slot.rho.length !== 32) {
       return { slot: index, ok: false, reason: "COMMITMENT_MISMATCH" };
     }
     const expected = taggedHash(DATA_TAG, slot.rho);
-    if (!equalBytes(expected, slot.commitment)) {
+    if (!equalBytes(expected, originalSlots[index].commitment)) {
       return { slot: index, ok: false, reason: "COMMITMENT_MISMATCH" };
     }
     return { slot: index, ok: true, reason: null };
@@ -122,12 +130,15 @@ function verifyReveal(reveal) {
   return { ok, verdict: ok ? "ok" : "fail", slots };
 }
 
-function verifySignatures(signatures, reveal) {
+function verifySignatures(signatures, reveal, commitment) {
   if (!signatures || signatures.stage !== 4 || !Array.isArray(signatures.slots)) {
     return fail("INVALID_MESSAGE");
   }
   if (!reveal || reveal.stage !== 3 || !Array.isArray(reveal.slots)) {
     return fail("TRANSCRIPT_MISMATCH");
+  }
+  if (signatures.slots.length === 0 || reveal.slots.length === 0) {
+    return fail("EMPTY_SLOT_SET");
   }
   if (
     signatures.network !== reveal.network ||
@@ -137,11 +148,18 @@ function verifySignatures(signatures, reveal) {
   ) {
     return fail("TRANSCRIPT_MISMATCH");
   }
+  const binding = checkCommitmentBinding(reveal, commitment);
+  if (binding.fail) return binding.fail;
+  const originalSlots = binding.slots;
 
   const slots = [];
   for (let index = 0; index < signatures.slots.length; index++) {
     const sigSlot = signatures.slots[index];
     const revealSlot = reveal.slots[index];
+    if (!equalBytes(revealSlot.commitment, originalSlots[index].commitment)) {
+      slots.push({ slot: index, ok: false, reason: "COMMITMENT_MISMATCH" });
+      continue;
+    }
     if (
       sigSlot.inputIndex !== revealSlot.inputIndex ||
       !equalBytes(sigSlot.signerPubkey, revealSlot.signerPubkey) ||
@@ -158,7 +176,7 @@ function verifySignatures(signatures, reveal) {
       continue;
     }
     const expectedCommitment = taggedHash(DATA_TAG, revealSlot.rho);
-    if (!equalBytes(expectedCommitment, sigSlot.commitment)) {
+    if (!equalBytes(expectedCommitment, originalSlots[index].commitment)) {
       slots.push({ slot: index, ok: false, reason: "COMMITMENT_MISMATCH" });
       continue;
     }
@@ -195,9 +213,18 @@ function verifySignatures(signatures, reveal) {
       slots.push({ slot: index, ok: false, reason: "OPENING_MISMATCH" });
       continue;
     }
+    if (!(sigSlot.signature instanceof Uint8Array) || sigSlot.signature.length !== 64) {
+      slots.push({ slot: index, ok: false, reason: "SIGNATURE_INVALID" });
+      continue;
+    }
     const r = bytesToBigInt(sigSlot.signature.slice(0, 32));
     if (x !== r) {
       slots.push({ slot: index, ok: false, reason: "OPENING_MISMATCH" });
+      continue;
+    }
+    const s = bytesToBigInt(sigSlot.signature.slice(32));
+    if (!(r >= 1n && r < GROUP_N && s >= 1n && s <= GROUP_N / 2n)) {
+      slots.push({ slot: index, ok: false, reason: "NON_LOW_S" });
       continue;
     }
     if (!ecdsaVerify(sigSlot.signerPubkey, sigSlot.messageHash, sigSlot.signature)) {
@@ -211,9 +238,50 @@ function verifySignatures(signatures, reveal) {
   return { ok, verdict: ok ? "ok" : "fail", slots };
 }
 
+// The Python reference binds the reveal to the earlier commitment through
+// validate_transition(): each adjacent stage must repeat the same commitment,
+// and the stage-3 reveal is checked against that repeated commitment. This
+// module has no transition validator, so the caller supplies the stage-1/2
+// message and we perform the equivalent binding explicitly.
+function checkCommitmentBinding(message, commitment) {
+  if (!commitment || typeof commitment !== "object") {
+    return { fail: fail("MISSING_COMMITMENT") };
+  }
+  if (commitment.stage !== 1 && commitment.stage !== 2) {
+    return { fail: fail("INVALID_COMMITMENT") };
+  }
+  if (!Array.isArray(commitment.slots)) {
+    return { fail: fail("INVALID_COMMITMENT") };
+  }
+  if (
+    message.network !== commitment.network ||
+    !equalBytes(message.sessionId, commitment.sessionId) ||
+    !equalBytes(message.psbtDigest, commitment.psbtDigest) ||
+    message.slots.length !== commitment.slots.length
+  ) {
+    return { fail: fail("TRANSCRIPT_MISMATCH") };
+  }
+  for (let index = 0; index < message.slots.length; index++) {
+    const slot = message.slots[index];
+    const original = commitment.slots[index];
+    if (
+      slot.inputIndex !== original.inputIndex ||
+      !equalBytes(slot.signerPubkey, original.signerPubkey) ||
+      !equalBytes(slot.messageHash, original.messageHash) ||
+      slot.sighashType !== original.sighashType
+    ) {
+      return { fail: fail("TRANSCRIPT_MISMATCH") };
+    }
+    if (commitment.stage === 2 && !equalBytes(slot.opening, original.opening)) {
+      return { fail: fail("TRANSCRIPT_MISMATCH") };
+    }
+  }
+  return { slots: commitment.slots };
+}
+
 function ecdsaVerify(pub, msg, sig) {
   try {
-    return secp256k1.verify(sig, msg, pub, { prehash: false, lowS: false }) === true;
+    return secp256k1.verify(sig, msg, pub, { prehash: false, lowS: true }) === true;
   } catch {
     return false;
   }
@@ -472,8 +540,11 @@ export function aextEncodePackage(pkg) {
 }
 
 function decodePackage(encoded) {
+  // Decode the embedded AEXB message before the AEXT PSBT checks so that a
+  // message-level failure keeps its specific error code instead of being
+  // masked by an AEXT framing error.
+  const message = decodeMessage(packageMessageBytes(encoded));
   const pkg = aextDecodePackage(encoded);
-  const message = decodeMessage(pkg.message);
   if (message.network !== pkg.network) throw new AexbError("INVALID_MESSAGE", "AEXT network does not match AEXB");
   if (message.stage !== pkg.stage) throw new AexbError("WRONG_STAGE", "AEXT stage does not match AEXB");
   if (pkg.stage === 1 || pkg.stage === 3) {
@@ -494,6 +565,21 @@ function decodePackage(encoded) {
       psbtDigest: pkg.psbtDigest
     }
   };
+}
+
+function packageMessageBytes(encoded) {
+  if (!(encoded instanceof Uint8Array) || encoded.length < 48) {
+    throw new AexbError("INVALID_MESSAGE", "package is shorter than the AEXT header");
+  }
+  if (!startsWith(encoded, MAGIC_AEXT)) {
+    throw new AexbError("INVALID_MESSAGE", "package has the wrong AEXT magic");
+  }
+  const messageLength = readU32(encoded, 8);
+  const psbtLength = readU32(encoded, 12);
+  if (encoded.length !== 48 + messageLength + psbtLength) {
+    throw new AexbError("INVALID_MESSAGE", "AEXT length does not match payload");
+  }
+  return encoded.slice(48, 48 + messageLength);
 }
 
 function requireBytes(name, value, length) {
