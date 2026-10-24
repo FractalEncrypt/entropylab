@@ -45,6 +45,13 @@ const fuOutDerivation = (fingerprint) => ({
   decoded: { pubkey: "55".repeat(33), fingerprint, path: "m/84'/0'/0'/0/0" },
 });
 
+const fuOutDerivationFor = (fingerprint, byte) => ({
+  key: "02" + byte.repeat(33),
+  name: "PSBT_OUT_BIP32_DERIVATION",
+  value: "deadbeef" + "80000000",
+  decoded: { pubkey: byte.repeat(33), fingerprint, path: "m/84'/0'/0'/0/0" },
+});
+
 test("SA-4: a Taproot signature field on a non-Taproot input is malformed", () => {
   const before = fuDoc([fuWitnessUtxo(FU_P2WPKH)], []);
   const after = fuDoc([fuWitnessUtxo(FU_P2WPKH), fuTapKeySig()], []);
@@ -64,6 +71,26 @@ test("SA-4: a Taproot signature field on a non-Taproot input is malformed", () =
   assert.equal(tapResult.findings.some((f) => f.code === "SIGNATURE_MALFORMED"), false);
 });
 
+test("SA-4: a Taproot signature field on an unknown spent output is not malformed", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([fuTapKeySig()], []);
+  const result = auditSigner(before, after, {});
+  assert.equal(result.findings.some((f) => f.code === "SIGNATURE_MALFORMED"), false);
+  const unverified = result.findings.filter((f) => f.code === "SIGNATURE_UNVERIFIED");
+  assert.equal(unverified.length, 1);
+  assert.equal(unverified[0].severity, "critical");
+  assert.equal(unverified[0].evidence.name, "PSBT_IN_TAP_KEY_SIG");
+  assert.equal(result.verdict, "fail");
+});
+
+test("a malformed new signature does not count toward full_commitment", () => {
+  const before = fuDoc([fuWitnessUtxo(FU_P2WPKH)], []);
+  const after = fuDoc([fuWitnessUtxo(FU_P2WPKH), fuTapKeySig()], []);
+  const result = auditSigner(before, after, {});
+  assert.equal(result.findings.some((f) => f.code === "SIGNATURE_MALFORMED" && f.severity === "critical"), true);
+  assert.equal(result.checks.sighashPolicy, "none");
+});
+
 test("SA-2: CHANGE_VERIFIED evidence carries a foreign fingerprint", () => {
   const before = fuDoc([], []);
   const after = fuDoc([], [fuOutDerivation("deadbeef")]);
@@ -79,15 +106,36 @@ test("SA-2: CHANGE_VERIFIED evidence carries a foreign fingerprint", () => {
   assert.equal(result.findings.some((f) => f.code === "METADATA_ADDED" && f.severity === "warning"), true);
 });
 
-test("isEnrichment treats a non-array wallet list as empty", () => {
+test("SA-2: foreignFingerprint requires a non-empty wallet fingerprint list", () => {
   const before = fuDoc([], []);
   const after = fuDoc([], [fuOutDerivation("deadbeef")]);
-  const wallet = { fingerprints: "aabbccdd", scriptPubKeys: [FU_CHANGE_SCRIPT] };
-  let result;
-  assert.doesNotThrow(() => { result = auditSigner(before, after, { wallet }); });
-  const enrichment = result.findings.filter((f) => f.code === "METADATA_ENRICHMENT");
-  assert.equal(enrichment.length, 1);
-  assert.equal(enrichment[0].evidence.name, "PSBT_OUT_BIP32_DERIVATION");
+  const scriptOnly = auditSigner(before, after, { wallet: { scriptPubKeys: [FU_CHANGE_SCRIPT] } });
+  const verified = scriptOnly.findings.filter((f) => f.code === "CHANGE_VERIFIED");
+  assert.equal(verified.length, 1);
+  assert.equal("foreignFingerprint" in verified[0].evidence, false);
+
+  const mixed = fuDoc([], [fuOutDerivationFor("aabbccdd", "55"), fuOutDerivationFor("deadbeef", "66")]);
+  const mixedResult = auditSigner(before, mixed, { wallet: { fingerprints: ["aabbccdd"], scriptPubKeys: [FU_CHANGE_SCRIPT] } });
+  const mixedVerified = mixedResult.findings.filter((f) => f.code === "CHANGE_VERIFIED");
+  assert.equal(mixedVerified.length, 1);
+  assert.equal(mixedVerified[0].evidence.fingerprint, "aabbccdd");
+  assert.equal(mixedVerified[0].evidence.foreignFingerprint, "deadbeef");
+});
+
+test("malformed wallet lists are ignored entirely (fail closed)", () => {
+  const before = fuDoc([], []);
+  const after = fuDoc([], [fuOutDerivation("deadbeef")]);
+  const noWallet = auditSigner(before, after, {});
+  for (const wallet of [
+    { fingerprints: "aabbccdd", scriptPubKeys: [FU_CHANGE_SCRIPT] },
+    { fingerprints: ["aabbccdd"], scriptPubKeys: FU_CHANGE_SCRIPT },
+  ]) {
+    const result = auditSigner(before, after, { wallet });
+    assert.deepEqual(result.findings, noWallet.findings);
+    assert.equal(result.findings.some((f) => f.code === "CHANGE_VERIFIED"), false);
+    assert.equal(result.findings.some((f) => f.code === "METADATA_ENRICHMENT"), false);
+    assert.equal(result.checks.changeOutputs, noWallet.checks.changeOutputs);
+  }
 });
 
 const P1_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";

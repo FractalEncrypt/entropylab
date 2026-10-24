@@ -217,28 +217,48 @@ const detectReorder = (before, after, keyOf) => {
   return { order };
 };
 
+// Wallet facts are only trusted when both lists are absent or arrays. A
+// malformed list is ignored entirely (fail closed): no change verification
+// and no enrichment allowance, exactly as if no wallet were supplied.
+const walletFacts = (wallet) => {
+  if (!wallet) return null;
+  if (wallet.fingerprints !== undefined && !Array.isArray(wallet.fingerprints)) return null;
+  if (wallet.scriptPubKeys !== undefined && !Array.isArray(wallet.scriptPubKeys)) return null;
+  return {
+    fingerprints: (wallet.fingerprints ?? []).map(lower),
+    scripts: (wallet.scriptPubKeys ?? []).map(lower),
+  };
+};
+
 const computeChangeFindings = (afterDoc, wallet) => {
   const findings = [];
   const verified = new Set();
-  if (!wallet) return { findings, verified };
-  const fingerprints = Array.isArray(wallet.fingerprints) ? wallet.fingerprints.map(lower) : [];
-  const scripts = Array.isArray(wallet.scriptPubKeys) ? wallet.scriptPubKeys.map(lower) : [];
+  const facts = walletFacts(wallet);
+  if (!facts) return { findings, verified };
+  const { fingerprints, scripts } = facts;
   const scriptSet = new Set(scripts);
   const outputs = afterDoc.tx?.outputs ?? [];
   for (let index = 0; index < outputs.length; index++) {
     const pairs = afterDoc.outputs?.[index] ?? [];
+    const derivations = pairs.filter((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
+      && pair.decoded && !pair.decodeError
+      && typeof pair.decoded.fingerprint === "string");
     const derivation = fingerprints.length > 0
-      ? pairs.find((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
-        && pair.decoded && !pair.decodeError
-        && fingerprints.includes(lower(pair.decoded.fingerprint)))
+      ? derivations.find((pair) => fingerprints.includes(lower(pair.decoded.fingerprint)))
       : null;
+    // A foreign fingerprint is only meaningful against a non-empty wallet
+    // list, and is reported whichever branch verified the output (SA-2).
+    const foreign = fingerprints.length > 0
+      ? derivations.find((pair) => !fingerprints.includes(lower(pair.decoded.fingerprint)))
+      : null;
+    const foreignEvidence = foreign ? { foreignFingerprint: lower(foreign.decoded.fingerprint) } : {};
     const scriptPubKey = lower(outputs[index].scriptPubKey);
     const scriptMatches = scripts.length > 0 && scriptSet.has(scriptPubKey);
     const fingerprint = derivation ? lower(derivation.decoded.fingerprint) : null;
     if (derivation) {
       if (scripts.length > 0) {
         if (scriptMatches) {
-          findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint }));
+          findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, { index, scriptPubKey, fingerprint, ...foreignEvidence }));
           verified.add(index);
         } else {
           findings.push(finding("CHANGE_NOT_FROM_WALLET", "critical", "output", index, null, { index, scriptPubKey, fingerprint }));
@@ -249,15 +269,11 @@ const computeChangeFindings = (afterDoc, wallet) => {
     } else if (scriptMatches) {
       // The script match is the authority, but a derivation from a fingerprint
       // the wallet does not claim belongs in the evidence (SA-2).
-      const foreign = pairs.find((pair) => (pair.name === "PSBT_OUT_BIP32_DERIVATION" || pair.name === "PSBT_OUT_TAP_BIP32_DERIVATION")
-        && pair.decoded && !pair.decodeError
-        && typeof pair.decoded.fingerprint === "string"
-        && !fingerprints.includes(lower(pair.decoded.fingerprint)));
       findings.push(finding("CHANGE_VERIFIED", "info", "output", index, null, {
         index,
         scriptPubKey,
         fingerprint: null,
-        ...(foreign ? { foreignFingerprint: lower(foreign.decoded.fingerprint) } : {}),
+        ...foreignEvidence,
       }));
       verified.add(index);
     }
@@ -511,12 +527,12 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
     if (change.scope === "output-map") {
       if (change.name === "PSBT_OUT_BIP32_DERIVATION" || change.name === "PSBT_OUT_TAP_BIP32_DERIVATION") {
         if (!verifiedChangeOutputs.has(change.index)) return false;
+        const facts = walletFacts(options.wallet);
+        if (!facts) return false;
         const fingerprint = lower(afterPair?.decoded?.fingerprint);
-        const fingerprints = Array.isArray(options.wallet?.fingerprints) ? options.wallet.fingerprints.map(lower) : [];
-        const scripts = Array.isArray(options.wallet?.scriptPubKeys) ? options.wallet.scriptPubKeys.map(lower) : [];
         const scriptPubKey = lower(afterDoc.tx?.outputs?.[change.index]?.scriptPubKey);
-        if (fingerprints.length > 0) return fingerprints.includes(fingerprint);
-        return scripts.length > 0 && scripts.includes(scriptPubKey);
+        if (facts.fingerprints.length > 0) return facts.fingerprints.includes(fingerprint);
+        return facts.scripts.length > 0 && facts.scripts.includes(scriptPubKey);
       }
       if (change.name === "PSBT_OUT_TAP_INTERNAL_KEY") {
         return verifiedChangeOutputs.has(change.index);
@@ -748,9 +764,11 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   // Phase E — sighash evaluation of new signatures.
   for (const event of newSigEvents) {
     const parsed = parseAppendedSighash(event);
-    // A Taproot signature field only exists for a P2TR spent output; on any
-    // other input the field itself is malformed, whatever its length (SA-4).
-    if (parsed.malformed || (parsed.tap && !taprootish(beforeView, event.index))) {
+    // A Taproot signature field only exists for a P2TR spent output; on a
+    // known non-P2TR input the field itself is malformed, whatever its length
+    // (SA-4). An unknown spent output is left to verification, which fails
+    // closed with SIGNATURE_UNVERIFIED.
+    if (parsed.malformed || (parsed.tap && spentScriptPubKey(beforeView, event.index) !== null && !taprootish(beforeView, event.index))) {
       findings.push(finding("SIGNATURE_MALFORMED", "critical", "input-map", event.index, null, {
         index: event.index,
         name: event.name,
@@ -918,7 +936,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   else if (has("SIGHASH_DECLARATION_CHANGED")) sighashPolicy = "mismatch";
   else if (has("SIGHASH_DECLARATION_ADDED", "critical")) sighashPolicy = "weak";
   else if (weakAsRequested.value) sighashPolicy = "weak_as_requested";
-  else if (newSigEvents.length > 0) sighashPolicy = "full_commitment";
+  else if (newSigEvents.some((event) => !event.malformed)) sighashPolicy = "full_commitment";
 
   let signerKeys = "no_new_signatures";
   if (has("UNEXPECTED_SIGNER")) signerKeys = "unexpected";
@@ -947,7 +965,7 @@ export function auditSigner(beforeDoc, afterDoc, options = {}) {
   if (has("CHANGE_NOT_FROM_WALLET")) changeOutputs = "not_from_wallet";
   else if (has("CHANGE_UNVERIFIED")) changeOutputs = "unverified";
   else if (has("CHANGE_VERIFIED")) changeOutputs = "verified";
-  else if (options.wallet) changeOutputs = "none_presented";
+  else if (walletFacts(options.wallet)) changeOutputs = "none_presented";
 
   const verdict = findings.some((f) => f.severity === "critical") ? "fail" : "pass";
   const stats = {
