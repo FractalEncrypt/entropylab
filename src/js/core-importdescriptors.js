@@ -234,12 +234,12 @@ export function buildDeriveAddressesCommands({ receiveDescriptor, changeDescript
       assertCommandSafe(entry.descriptor, "Public branch descriptor");
       // Units come from the wallet export's public projection, whose
       // rangeEnd adds Core's importdescriptors lookahead. deriveaddresses
-      // checks only the displayed window, so a unit needs an explicit
-      // displayedEnd (its own or the top-level one): never a silent [0,19]
-      // that would check fewer addresses than the page shows.
-      const end = entry.displayedEnd !== undefined ? entry.displayedEnd : displayedEnd;
-      if (end === undefined) throw new Error("Branch-aware deriveaddresses needs the deepest displayed address index (displayedEnd), not the importdescriptors range, which adds lookahead.");
-      lines.push(`deriveaddresses "${entry.descriptor}" "[0,${resolveDeriveRangeEnd(end)}]"`);
+      // checks only the displayed window, and branches can show different
+      // windows, so every unit carries its own displayedEnd: no top-level
+      // value and no silent [0,19] can make a branch's check shallower than
+      // the page shows.
+      if (entry.displayedEnd === undefined) throw new Error("Branch-aware deriveaddresses needs each branch's deepest displayed address index (displayedEnd), not the importdescriptors range, which adds lookahead.");
+      lines.push(`deriveaddresses "${entry.descriptor}" "[0,${resolveDeriveRangeEnd(entry.displayedEnd)}]"`);
     }
     return `${lines.join("\n")}\n`;
   }

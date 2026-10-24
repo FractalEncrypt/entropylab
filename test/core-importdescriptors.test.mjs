@@ -460,9 +460,9 @@ test("deriveaddresses commands cover receive and change with the displayed windo
 test("deriveaddresses commands keep descriptor-unit order and per-unit windows", () => {
   const units = [
     { descriptor: bip84Receive, internal: false, active: true, displayedEnd: 5 },
-    { descriptor: bip84Change, internal: true, active: true },
+    { descriptor: bip84Change, internal: true, active: true, displayedEnd: 7 },
   ];
-  const commands = buildDeriveAddressesCommands({ descriptorUnits: units, displayedEnd: 7 });
+  const commands = buildDeriveAddressesCommands({ descriptorUnits: units });
   assert.equal(commands, `deriveaddresses "${bip84Receive}" "[0,5]"\nderiveaddresses "${bip84Change}" "[0,7]"\n`);
   const [jsonReceive, jsonChange] = parse(buildImportDescriptorsJson({ descriptorUnits: units }));
   assert.equal(commands.split("\n")[0], `deriveaddresses "${jsonReceive.desc}" "[0,5]"`);
@@ -478,9 +478,13 @@ test("branch-aware deriveaddresses needs an explicit displayed window and ignore
     { descriptor: bip84Change, internal: true, active: true, rangeEnd: 5003 },
   ];
   assert.throws(() => buildDeriveAddressesCommands({ descriptorUnits: units }), /displayedEnd/);
+  // A top-level displayedEnd does not stand in for a branch's own window.
+  assert.throws(() => buildDeriveAddressesCommands({ descriptorUnits: units, displayedEnd: 5000 }), /displayedEnd/);
+  const withOne = [{ ...units[0], displayedEnd: 5000 }, units[1]];
+  assert.throws(() => buildDeriveAddressesCommands({ descriptorUnits: withOne, displayedEnd: 5000 }), /displayedEnd/);
   assert.equal(
-    buildDeriveAddressesCommands({ descriptorUnits: units, displayedEnd: 5 }),
-    `deriveaddresses "${bip84Receive}" "[0,5]"\nderiveaddresses "${bip84Change}" "[0,5]"\n`,
+    buildDeriveAddressesCommands({ descriptorUnits: [{ ...units[0], displayedEnd: 5000 }, { ...units[1], displayedEnd: 5002 }] }),
+    `deriveaddresses "${bip84Receive}" "[0,5000]"\nderiveaddresses "${bip84Change}" "[0,5002]"\n`,
   );
 });
 
@@ -520,9 +524,9 @@ test("deriveaddresses range defaults, overrides and refuses unsafe windows", () 
   assert.match(buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, displayedEnd: 42 }), /"\[0,42\]"/);
   const units = [
     { descriptor: bip84Receive, internal: false, active: true, displayedEnd: 3 },
-    { descriptor: bip84Change, internal: true, active: true },
+    { descriptor: bip84Change, internal: true, active: true, displayedEnd: 8 },
   ];
-  const lines = buildDeriveAddressesCommands({ descriptorUnits: units, displayedEnd: 8 }).trimEnd().split("\n");
+  const lines = buildDeriveAddressesCommands({ descriptorUnits: units }).trimEnd().split("\n");
   assert.match(lines[0], /"\[0,3\]"/);
   assert.match(lines[1], /"\[0,8\]"/);
   assert.throws(() => buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, displayedEnd: 999999 }), /deriveaddresses refuses a range span/);
