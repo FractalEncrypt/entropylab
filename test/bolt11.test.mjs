@@ -7,6 +7,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bolt11Decode } from "../src/js/bolt11.js";
+import { secp256k1 } from "../src/js/secp256k1.js";
+import { sha256 } from "../src/js/hashes.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const specExamples = JSON.parse(readFileSync(join(root, "test/fixtures/bolt11-spec-examples.json"), "utf8"));
@@ -89,8 +91,6 @@ const INVALID = {
     "lnbc2500000001p1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgq0lzc236j96a95uv0m3umg28gclm5lqxtqqwk32uuk4k6673k6n5kfvx3d2h8s295fad45fdhmusm8sjudfhlf6dcsxmfvkeywmjdkxcp99202x",
   "missing payment secret":
     "lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqs9qrsgq7ea976txfraylvgzuxs8kgcw23ezlrszfnh8r6qtfpr6cxga50aj6txm9rxrydzd06dfeawfk6swupvz4erwnyutnjq7x39ymw6j38gp49qdkj",
-  "high-S signature with a declared node id":
-    "lnbc25m1p70xwfzpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaqnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66sp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygsp5cfzp9ugllvk03rltd6hvndxj26ux6gcxc5azyxk060rj9tzghct5zvjlps76gx8wpq5yuu79688k8gnm2c0al6v608s96l0xzrrlqqwnzxmu",
 };
 
 for (const [name, invoice] of Object.entries(INVALID)) {
@@ -396,6 +396,159 @@ test("rejects: an integer field longer than 10 words (no float rounding)", () =>
   assert.throws(
     () => bolt11Decode(invoice),
     (e) => typeof e.key === "string" && /too large/.test(e.key)
+  );
+});
+
+// ── round 2d: an empty description is still a description, a non-point
+//    declared node id, and the high-S rule with a declared node id ────────
+
+// A fixed test key (0x01 repeated 32 times) and its compressed node id.
+const TEST_KEY = hexToBytes("01".repeat(32));
+const TEST_NODE_ID_BYTES = secp256k1.getPublicKey(TEST_KEY, true);
+const TEST_NODE_ID = [...TEST_NODE_ID_BYTES].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+// 5-bit words -> bytes with the final byte zero-padded, the form the BOLT11
+// signature hashes (hrp || timestamp+tags).
+const wordsToBytesPadded = (words) => {
+  const out = [];
+  let acc = 0;
+  let bits = 0;
+  for (const w of words) {
+    acc = (acc << 5) | w;
+    bits += 5;
+    while (bits >= 8) {
+      bits -= 8;
+      out.push((acc >> bits) & 0xff);
+    }
+  }
+  if (bits > 0) out.push((acc << (8 - bits)) & 0xff);
+  return Uint8Array.from(out);
+};
+
+const hrpOf = (invoice) => invoice.slice(0, invoice.lastIndexOf("1"));
+
+const dataWordsOf = (invoice) => {
+  const sep = invoice.lastIndexOf("1");
+  const words = [...invoice.slice(sep + 1, -6)].map((c) => CHARSET.indexOf(c));
+  return words.slice(0, -104); // drop the 65-byte signature
+};
+
+const addTagWords = (dataWords, tagType, payloadBytes) => {
+  const payloadWords = b2w(payloadBytes);
+  return [
+    ...dataWords.slice(0, 7), // timestamp
+    tagType,
+    ...splitWordCount(payloadWords.length),
+    ...payloadWords,
+    ...dataWords.slice(7),
+  ];
+};
+
+const replaceTagPayloadWords = (dataWords, tagType, payloadBytes) => {
+  const payloadWords = b2w(payloadBytes);
+  const out = dataWords.slice(0, 7);
+  let i = 7;
+  while (i < dataWords.length) {
+    const length = dataWords[i + 1] * 32 + dataWords[i + 2];
+    if (dataWords[i] === tagType) {
+      out.push(tagType, ...splitWordCount(payloadWords.length), ...payloadWords);
+    } else {
+      out.push(...dataWords.slice(i, i + 3 + length));
+    }
+    i += 3 + length;
+  }
+  return out;
+};
+
+const recoveryIdFor = (hash, sig, pub) => {
+  for (let r = 0; r < 4; r++) {
+    const recovered = secp256k1.recover(hash, sig, r);
+    if (recovered && recovered.length === pub.length && recovered.every((b, i) => b === pub[i])) return r;
+  }
+  throw new Error("could not find a recovery id for the test signature");
+};
+
+// Sign the BOLT11 message hash (SHA256(hrp || data words as bytes)) with the
+// test key and append the 65-byte signature (64-byte compact + recovery id).
+const signInvoice = (hrp, dataWords, key, { highS = false } = {}) => {
+  const hrpBytes = new TextEncoder().encode(hrp);
+  const dataBytes = wordsToBytesPadded(dataWords);
+  const message = new Uint8Array(hrpBytes.length + dataBytes.length);
+  message.set(hrpBytes, 0);
+  message.set(dataBytes, hrpBytes.length);
+  const hash = sha256(message);
+  const sig = secp256k1.sign(hash, key, { prehash: false });
+  let recid = 0;
+  if (highS) {
+    const ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+    const s = BigInt("0x" + [...sig.slice(32)].map((b) => b.toString(16).padStart(2, "0")).join(""));
+    const high = (ORDER - s).toString(16).padStart(64, "0");
+    for (let i = 0; i < 32; i++) sig[32 + i] = parseInt(high.slice(i * 2, i * 2 + 2), 16);
+  } else {
+    recid = recoveryIdFor(hash, sig, secp256k1.getPublicKey(key, true));
+  }
+  return encodeBech32(hrp, [...dataWords, ...b2w([...sig, recid])]);
+};
+
+test("an empty description is a description: it decodes alone", () => {
+  const hrp = hrpOf(COFFEE);
+  const dataWords = replaceTagPayloadWords(dataWordsOf(COFFEE), TAG_DESCRIPTION, []);
+  const d = bolt11Decode(signInvoice(hrp, dataWords, TEST_KEY));
+  assert.equal(d.description, "");
+  assert.equal(d.descriptionHash, null);
+  assert.equal(d.signatureValid, true);
+});
+
+test("rejects: a non-ASCII character that case-folds to bech32 (U+212A KELVIN SIGN)", () => {
+  // U+212A survives the all-uppercase test and lowercases to ASCII "k", so
+  // the range check must run on the string as pasted (Kimi K3 review).
+  const upper = COFFEE.toUpperCase();
+  assert.equal(bolt11Decode(upper).signatureValid, true, "the plain uppercase invoice decodes");
+  const at = upper.indexOf("K", upper.lastIndexOf("1"));
+  assert.ok(at > 0, "the data part has a K to replace");
+  const kelvin = upper.slice(0, at) + "K" + upper.slice(at + 1);
+  assert.throws(() => bolt11Decode(kelvin), (e) => typeof e.key === "string" && /outside the bech32 range/.test(e.key));
+});
+
+test("rejects: an empty description plus a description hash", () => {
+  const hrp = hrpOf(COFFEE);
+  const withEmptyD = replaceTagPayloadWords(dataWordsOf(COFFEE), TAG_DESCRIPTION, []);
+  const dataWords = addTagWords(withEmptyD, 23, new Uint8Array(32));
+  assert.throws(
+    () => bolt11Decode(signInvoice(hrp, dataWords, TEST_KEY)),
+    (e) => typeof e.key === "string" && /both a description and a description hash/.test(e.key)
+  );
+});
+
+test("rejects: a declared node id that is not a curve point (keyed, not a raw Error)", () => {
+  const hrp = hrpOf(COFFEE);
+  const nonPoint = new Uint8Array(33);
+  nonPoint[0] = 0x02;
+  nonPoint.fill(0xff, 1);
+  const dataWords = addTagWords(dataWordsOf(COFFEE), 19, nonPoint);
+  let thrown;
+  try {
+    bolt11Decode(signInvoice(hrp, dataWords, TEST_KEY));
+  } catch (e) {
+    thrown = e;
+  }
+  assert.ok(thrown, "a non-point node id must be refused");
+  assert.equal(thrown instanceof Error, false, "must not throw a raw Error");
+  assert.equal(typeof thrown.key, "string");
+  assert.match(thrown.key, /declared node id/);
+});
+
+test("a declared node id accepts a low-S signature and rejects its high-S twin", () => {
+  const hrp = hrpOf(COFFEE);
+  const dataWords = addTagWords(dataWordsOf(COFFEE), 19, TEST_NODE_ID_BYTES);
+
+  const good = bolt11Decode(signInvoice(hrp, dataWords, TEST_KEY));
+  assert.equal(good.signatureValid, true);
+  assert.equal(good.nodeId, TEST_NODE_ID);
+
+  assert.throws(
+    () => bolt11Decode(signInvoice(hrp, dataWords, TEST_KEY, { highS: true })),
+    (e) => typeof e.key === "string" && /declared node id/.test(e.key)
   );
 });
 

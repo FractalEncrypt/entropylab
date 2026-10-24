@@ -49,14 +49,17 @@ const hrpExpand = (hrp) => [
 const bech32DecodeBolt11 = (text) => {
   if (typeof text !== "string" || text.length === 0) fail("Paste an invoice first.");
   if (text.length > MAX_LENGTH) fail("This string is too long to be a BOLT11 invoice.");
+  // The range and case rules apply to the string as pasted: case folding
+  // first would let a non-ASCII character such as U+212A KELVIN SIGN (which
+  // lowercases to "k") slip through as if it were ASCII.
+  for (const c of text) {
+    const code = c.charCodeAt(0);
+    if (code < 33 || code > 126) fail("This invoice contains characters outside the bech32 range.");
+  }
   if (text !== text.toLowerCase() && text !== text.toUpperCase()) {
     fail("This invoice mixes upper and lower case, which bech32 forbids.");
   }
   const lower = text.toLowerCase();
-  for (const c of lower) {
-    const code = c.charCodeAt(0);
-    if (code < 33 || code > 126) fail("This invoice contains characters outside the bech32 range.");
-  }
   const sep = lower.lastIndexOf("1");
   if (sep < 1 || sep + 7 > lower.length) fail("This is not a bech32 string (no valid separator).");
   const hrp = lower.slice(0, sep);
@@ -279,6 +282,24 @@ const parseTags = (words) => {
 
 // ── top level ──────────────────────────────────────────────────────────────
 
+// The curve facade returns false/null on malformed input, but a facade that
+// throws (a non-point public key, an out-of-range r/s, WASM not ready) must
+// still surface as the keyed signature failure, never as a raw Error.
+const safeVerify = (signature, msghash, publicKey, options) => {
+  try {
+    return secp256k1.verify(signature, msghash, publicKey, options) === true;
+  } catch {
+    return false;
+  }
+};
+const safeRecover = (msghash, signature, recid) => {
+  try {
+    return secp256k1.recover(msghash, signature, recid);
+  } catch {
+    return null;
+  }
+};
+
 // Decodes a BOLT11 invoice string. Returns the parsed fields with the
 // recovered node id; fails (throws { key, vars }) on any structural or
 // signature problem. An invoice is only returned once its recoverable
@@ -301,8 +322,10 @@ export const bolt11Decode = (text) => {
   // Required-content rules a BOLT11 reader MUST enforce.
   if (!tags.paymentSecret) fail("This invoice has no payment secret, which BOLT11 requires.");
   if (!tags.paymentHash) fail("This invoice has no payment hash, which BOLT11 requires.");
-  if (!tags.description && !tags.descriptionHash) fail("This invoice has neither a description nor a description hash.");
-  if (tags.description && tags.descriptionHash) fail("This invoice has both a description and a description hash, which BOLT11 forbids.");
+  // Presence, not truthiness: an empty `d` field is still a description, so
+  // "" counts as present for both the "neither" and "both" rules.
+  if (tags.description === null && tags.descriptionHash === null) fail("This invoice has neither a description nor a description hash.");
+  if (tags.description !== null && tags.descriptionHash !== null) fail("This invoice has both a description and a description hash, which BOLT11 forbids.");
 
   // The signature covers SHA256(hrp as UTF-8 || timestamp+tags as bytes).
   const hrpBytes = new TextEncoder().encode(hrp);
@@ -317,14 +340,14 @@ export const bolt11Decode = (text) => {
     // With a declared node id a reader MUST validate against it (no
     // recovery) and MUST reject a non-canonical (high-S) signature.
     const declared = hex.decode(tags.declaredNodeId);
-    if (!secp256k1.verify(signature, msghash, declared, { prehash: false })) {
+    if (!safeVerify(signature, msghash, declared, { prehash: false })) {
       fail("This invoice's signature does not verify against its declared node id. Do not trust its contents.");
     }
     nodeId = tags.declaredNodeId;
   } else {
     // Without one a reader MUST recover the node id, accepting high-S.
-    const nodeIdBytes = secp256k1.recover(msghash, signature, recoveryId);
-    if (!nodeIdBytes || !secp256k1.verify(signature, msghash, nodeIdBytes, { prehash: false, lowS: false })) {
+    const nodeIdBytes = safeRecover(msghash, signature, recoveryId);
+    if (!nodeIdBytes || !safeVerify(signature, msghash, nodeIdBytes, { prehash: false, lowS: false })) {
       fail("This invoice's signature does not verify. Do not trust its contents.");
     }
     nodeId = hex.encode(nodeIdBytes);
