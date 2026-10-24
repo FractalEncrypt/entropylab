@@ -33,13 +33,16 @@ export function aexbDecode(input) {
 }
 
 export function aexbVerify(decoded, reveal = null, commitment = null) {
+  // Wrapper forms only fill arguments the caller left out: an explicit
+  // reveal or commitment is never replaced by a field of the same object
+  // that carries the signatures.
   if (decoded && decoded.signatures && decoded.reveal) {
-    reveal = decoded.reveal;
+    reveal = reveal ?? decoded.reveal;
     decoded = decoded.signatures;
   }
   if (decoded && decoded.message4 && decoded.message3) {
-    reveal = decoded.message3;
-    commitment = decoded.message2 ?? decoded.message1 ?? commitment;
+    reveal = reveal ?? decoded.message3;
+    commitment = commitment ?? decoded.message2 ?? decoded.message1 ?? null;
     decoded = decoded.message4;
   }
   if (!decoded || typeof decoded !== "object") return fail("INVALID_MESSAGE");

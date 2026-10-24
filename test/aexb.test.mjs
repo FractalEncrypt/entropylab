@@ -213,6 +213,43 @@ test("a high-S signature fails the low-S check", () => {
   assert.equal(result.slots[0].reason, "NON_LOW_S");
 });
 
+test("a changed low-S s fails at the ECDSA verify step itself", () => {
+  // r is kept, so the S2C x(R0 + t·G) == r check still passes, and s - 1 is
+  // still low-S: only the final ECDSA verification can reject this slot.
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
+  const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
+  const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
+  const tampered = {
+    ...signatures,
+    slots: signatures.slots.map((slot, index) => {
+      if (index !== 0) return slot;
+      const s = bytesToBigInt(slot.signature.slice(32));
+      assert.ok(s > 1n, "the vector's s leaves room for s - 1");
+      const signature = new Uint8Array(64);
+      signature.set(slot.signature.slice(0, 32), 0);
+      signature.set(bigIntTo32(s - 1n), 32);
+      return { ...slot, signature };
+    })
+  };
+  const result = aexbVerify(tampered, reveal, stage2);
+  assert.equal(result.ok, false);
+  assert.equal(result.slots[0].ok, false);
+  assert.equal(result.slots[0].reason, "SIGNATURE_INVALID");
+  assert.ok(result.slots.slice(1).every((slot) => slot.ok), "the untouched slots still verify");
+});
+
+test("explicit reveal and commitment arguments win over a wrapper's fields", () => {
+  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
+  const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
+  const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
+  // The wrapper carries only a stage-1 commitment; the caller's explicit
+  // stage-2 message must be the one used, so this verifies.
+  assert.equal(aexbVerify({ message4: signatures, message3: reveal, message1: stage1 }, null, stage2).verdict, "ok");
+  // And a caller's explicit stage-1 is not silently upgraded by the wrapper.
+  assert.equal(aexbVerify({ message4: signatures, message3: reveal, message2: stage2 }, null, stage1).reason, "MISSING_STAGE2_OPENING");
+});
+
 test("an empty slot set fails closed", () => {
   const emptyReveal = {
     stage: 3,
