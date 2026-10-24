@@ -364,6 +364,50 @@ test("no added signatures: complete, empty, and the audit is untouched", () => {
   assert.deepEqual(psbtSignerAuditVerification(beforeDoc, beforeDoc), { complete: true, signatures: [] });
 });
 
+// Two P2WPKH inputs to the same key: a signer can return them in the other
+// order with a fresh signature on each.
+const twoInputTx = (order) => {
+  const tx = new btc.Transaction();
+  for (const [txid, index, amount] of order) {
+    tx.addInput({ txid, index, witnessUtxo: { script: spkOf(btc.p2wpkh(PUB)), amount } });
+  }
+  tx.updateInput(0, { bip32Derivation: DERIVATION });
+  tx.updateInput(1, { bip32Derivation: DERIVATION });
+  tx.addOutput({ script: DEST, amount: 140_000n });
+  return tx;
+};
+
+test("a returned PSBT with the sent inputs swapped and a new signature fails with TX_REORDERED", () => {
+  const sent = twoInputTx([["11".repeat(32), 0, 100_000n], ["22".repeat(32), 1, 50_000n]]);
+  const before = sent.toPSBT();
+  const returned = twoInputTx([["22".repeat(32), 1, 50_000n], ["11".repeat(32), 0, 100_000n]]);
+  returned.sign(PRIV);
+  const beforeDoc = psbtInspectDoc(before), afterDoc = psbtInspectDoc(returned.toPSBT());
+  const verification = psbtSignerAuditVerification(beforeDoc, afterDoc);
+  const report = auditSigner(beforeDoc, afterDoc, { verification });
+  assert.equal(report.verdict, "fail");
+  assert.ok(report.findings.some((f) => f.code === "TX_REORDERED" && f.severity === "critical"));
+});
+
+test("a returned PSBT with an input the sent one lacks fails", () => {
+  const sent = new btc.Transaction();
+  sent.addInput({ txid: "11".repeat(32), index: 0, witnessUtxo: { script: spkOf(btc.p2wpkh(PUB)), amount: 100_000n } });
+  sent.updateInput(0, { bip32Derivation: DERIVATION });
+  sent.addOutput({ script: DEST, amount: 90_000n });
+  const before = sent.toPSBT();
+  const returned = new btc.Transaction();
+  returned.addInput({ txid: "11".repeat(32), index: 0, witnessUtxo: { script: spkOf(btc.p2wpkh(PUB)), amount: 100_000n } });
+  returned.addInput({ txid: "22".repeat(32), index: 1, witnessUtxo: { script: spkOf(btc.p2wpkh(PUB)), amount: 50_000n } });
+  returned.updateInput(0, { bip32Derivation: DERIVATION });
+  returned.updateInput(1, { bip32Derivation: DERIVATION });
+  returned.addOutput({ script: DEST, amount: 90_000n });
+  returned.sign(PRIV);
+  const beforeDoc = psbtInspectDoc(before), afterDoc = psbtInspectDoc(returned.toPSBT());
+  const verification = psbtSignerAuditVerification(beforeDoc, afterDoc);
+  const report = auditSigner(beforeDoc, afterDoc, { verification });
+  assert.equal(report.verdict, "fail");
+});
+
 // The shipped module must not import @noble: every secp256k1 operation in
 // the page goes through src/js/secp256k1.js, the facade over libsecp256k1
 // compiled to WebAssembly, and every hash through src/js/hashes.js, so the

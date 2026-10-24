@@ -19961,6 +19961,9 @@ function hodlInitSecretFieldAutoClear() {
     if (psbtText) psbtText.value = "";
     if (psbtAxTranscript) psbtAxTranscript.value = "";
     if (psbtAuditBefore) psbtAuditBefore.value = "";
+    // The rendered audit holds change addresses and fingerprints derived
+    // from the loaded key; retire it with the field it was computed from.
+    try { hodlPsbtClearSignerAudit(); } catch {}
     for (let id of ["nonce-key", "nonce-pass", "nonce-text"]) {
       let field = document.getElementById(id);
       if (field) field.value = "";

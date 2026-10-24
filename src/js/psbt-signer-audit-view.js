@@ -323,7 +323,12 @@ const findingRow = (f, network) => {
 // the closing limitation note, which always renders.
 export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copyIcon = () => "" } = {}) => {
   const findings = Array.isArray(report?.findings) ? report.findings : [];
-  const tier = report?.verdict === "fail" ? "fail" : findings.some((f) => f.severity === "warning") ? "pass-warnings" : "pass";
+  // Defense in depth: a signature the engine could not check (or found
+  // invalid) is never painted as a pass, whatever the verdict says.
+  const signatures = report?.checks?.signatures;
+  const tier = report?.verdict === "fail" || signatures === "unverified" || signatures === "invalid"
+    ? "fail"
+    : findings.some((f) => f.severity === "warning") ? "pass-warnings" : "pass";
   const note = tier === "fail"
     ? `<p class="edge-note is-private" data-audit-verdict="fail"><strong>Do not broadcast this PSBT</strong><br>One or more critical checks failed — details below.</p>`
     : tier === "pass-warnings"
@@ -353,7 +358,7 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   const diff = report?.diff
     ? `<details class="derivation-advanced"><summary>Show every difference (technical)</summary>${psbtDiffHtml(report.diff, beforeDoc, afterDoc, network, { copyIcon, beforeLabel: "the PSBT you sent", afterLabel: "the returned PSBT" })}</details>`
     : "";
-  return `<section class="psbt-analysis-summary" data-audit-section aria-label="PSBT signer audit">${note}<p class="label psbt-section-label">PSBT signer audit</p><ul>${checkRows}${stats}</ul>${groups}${diff}<p class="edge-note is-muted">This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.</p></section>`;
+  return `<section class="psbt-analysis-summary" data-audit-section data-audit-tier="${tier}" aria-label="PSBT signer audit">${note}<p class="label psbt-section-label">PSBT signer audit</p><ul>${checkRows}${stats}</ul>${groups}${diff}<p class="edge-note is-muted">This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.</p></section>`;
 };
 
 // The fail-closed read error: the sent PSBT (or the pair) did not decode,

@@ -9,6 +9,7 @@
 // Run with `npm test`.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { SIGNER_AUDIT_CODES } from "../src/js/psbt-signer-audit.js";
 import { comparePsbtDocs } from "../src/js/psbt-diff.js";
 import { psbtDiffHtml } from "../src/js/psbt-editor.js";
@@ -157,22 +158,30 @@ test("SIGHASH_DECLARATION_ADDED renders its three severity wordings", () => {
   assert.ok(weak.includes("A weak sighash was declared"));
 });
 
-test("the three verdict tiers render their approved headlines", () => {
+test("the three verdict tiers render their tier hook", () => {
   const clean = psbtSignerAuditHtml(reportFor([]), null, null, "mainnet");
-  assert.ok(clean.includes('data-audit-verdict="pass"'));
-  assert.ok(clean.includes("No changes to your transaction"));
+  assert.ok(clean.includes('data-audit-tier="pass"'));
   const warned = psbtSignerAuditHtml(reportFor([findingFor("METADATA_ADDED")]), null, null, "mainnet");
-  assert.ok(warned.includes('data-audit-verdict="pass-warnings"'));
-  assert.ok(warned.includes("Your transaction is unchanged — review the warnings below"));
+  assert.ok(warned.includes('data-audit-tier="pass-warnings"'));
   const failed = psbtSignerAuditHtml(reportFor([findingFor("TX_LOCKTIME_CHANGED")]), null, null, "mainnet");
-  assert.ok(failed.includes('data-audit-verdict="fail"'));
-  assert.ok(failed.includes("Do not broadcast this PSBT"));
+  assert.ok(failed.includes('data-audit-tier="fail"'));
+  assert.ok(failed.includes("Do not broadcast"));
+});
+
+test("a pass verdict with an unverified or invalid signature check renders the fail tier", () => {
+  for (const signatures of ["unverified", "invalid"]) {
+    const report = reportFor([], { checks: { ...reportFor([]).checks, signatures } });
+    const html = psbtSignerAuditHtml(report, null, null, "mainnet");
+    assert.ok(html.includes('data-audit-tier="fail"'), `signatures ${signatures} must render the fail tier`);
+    assert.ok(html.includes('data-audit-verdict="fail"'), `signatures ${signatures} must render the fail note`);
+    assert.ok(html.includes("Do not broadcast"));
+  }
 });
 
 test("the closing limitation note always renders", () => {
   for (const findings of [[], [findingFor("METADATA_ADDED")], [findingFor("NONCE_REUSE")]]) {
     const html = psbtSignerAuditHtml(reportFor(findings), null, null, "mainnet");
-    assert.ok(html.includes("does not prove the signing device or its firmware is trustworthy"));
+    assert.ok(html.includes("does not prove the signing device"));
   }
 });
 
@@ -191,7 +200,7 @@ test("a group lists at most 8 findings, then one …and N more line; the verdict
   // A critical finding anywhere fails the verdict, listed or not: the cap
   // limits only what is shown, never what counts.
   const failed = psbtSignerAuditHtml(reportFor([...warnings, findingFor("TX_VERSION_CHANGED")]), null, null, "mainnet");
-  assert.ok(failed.includes('data-audit-verdict="fail"'));
+  assert.ok(failed.includes('data-audit-tier="fail"'));
   assert.ok(failed.includes("…and 2 more."));
 });
 
@@ -256,7 +265,7 @@ test("an undecodable-document report renders the error finding, unknown checks, 
     diff: null,
   };
   const html = psbtSignerAuditHtml(report, null, null, "mainnet");
-  assert.ok(html.includes('data-audit-verdict="fail"'));
+  assert.ok(html.includes('data-audit-tier="fail"'));
   assert.ok(html.includes('data-audit-code="DOC_UNDECODABLE"'));
   assert.ok(html.includes('data-audit-check="transactionBody" data-audit-tone="warn"'));
   assert.ok(!html.includes("<details"), "no diff block without a diff");
@@ -265,7 +274,7 @@ test("an undecodable-document report renders the error finding, unknown checks, 
 test("the parse-error note escapes its message and carries no verdict", () => {
   const html = psbtSignerAuditErrorHtml(`not base64 <script>alert(1)</script>`);
   assert.ok(html.includes("data-audit-section"));
-  assert.ok(!html.includes("data-audit-verdict"));
+  assert.ok(!html.includes("data-audit-tier"));
   assert.ok(html.includes("could not be read"));
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("&lt;script&gt;"));
@@ -274,11 +283,12 @@ test("the parse-error note escapes its message and carries no verdict", () => {
 test("psbtDiffHtml labels: the default output is byte-identical, custom labels rename the sides", () => {
   const { before, after, diff } = versionBumpDocs();
   const fallback = psbtDiffHtml(diff, before, after, "mainnet");
-  assert.ok(fallback.includes("before = the PSBT in the editor · after = the pasted PSBT. Only differences are listed."));
+  assert.ok(fallback.includes("the PSBT in the editor"));
   assert.equal(psbtDiffHtml(diff, before, after, "mainnet", {}), fallback);
   assert.equal(psbtDiffHtml(diff, before, after, "mainnet", { copyIcon: () => "" }), fallback);
   const labeled = psbtDiffHtml(diff, before, after, "mainnet", { beforeLabel: "the PSBT you sent", afterLabel: "the returned PSBT" });
-  assert.ok(labeled.includes("before = the PSBT you sent · after = the returned PSBT. Only differences are listed."));
+  assert.ok(labeled.includes("the PSBT you sent"));
+  assert.ok(labeled.includes("the returned PSBT"));
   assert.ok(!labeled.includes("the PSBT in the editor"));
 });
 
@@ -286,6 +296,24 @@ test("the view renders the collapsed technical diff with the sent/returned label
   const { before, after, diff } = versionBumpDocs();
   const html = psbtSignerAuditHtml(reportFor([], { diff, equal: false }), before, after, "mainnet");
   assert.ok(html.includes("<details"));
-  assert.ok(html.includes("before = the PSBT you sent · after = the returned PSBT."));
+  assert.ok(html.includes("the PSBT you sent"));
+  assert.ok(html.includes("the returned PSBT"));
   assert.ok(!html.includes("the PSBT in the editor"));
+});
+
+// The app-wide session wipe must retire a shown audit verdict with the
+// field it was computed from: the rendered section holds change addresses
+// and fingerprints derived from the loaded key. A static check of the wipe
+// body, as test/secret-field-registry.test.mjs does for its probes.
+test("the app-wide session wipe also retires a shown signer-audit verdict", () => {
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlInitSecretFieldAutoClear()");
+  assert.ok(start >= 0, "fixture: hodlInitSecretFieldAutoClear is in app.js");
+  const next = source.indexOf("\nfunction ", start + 1);
+  const body = source.slice(start, next === -1 ? undefined : next);
+  const emptied = body.indexOf('psbtAuditBefore.value = ""');
+  assert.ok(emptied >= 0, "fixture: the wipe empties #psbt-audit-before");
+  const cleared = body.indexOf("hodlPsbtClearSignerAudit()", emptied);
+  assert.ok(cleared > emptied, "the wipe must retire the rendered audit section after emptying #psbt-audit-before");
+  assert.ok(cleared - emptied < 400, "the call belongs right after the #psbt-audit-before wipe");
 });

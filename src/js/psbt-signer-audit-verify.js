@@ -311,11 +311,10 @@ const tapLeafFor = (doc, index, leafHash) => {
   return null;
 };
 
-// Verification ran and failed is false; a verifier that cannot even parse
-// its inputs is also false — consensus would reject the signature the same
-// way (verify.rs reports bad DER or an unparseable key as invalid, never
-// unchecked). A facade that is not ready cannot verify at all: null, never
-// true.
+// Verification ran and failed is false. A verifier that cannot parse its
+// inputs returns null — unverified, which the engine treats as critical —
+// never true: a facade that is not ready cannot verify at all, and a throw
+// is not evidence that the signature is invalid.
 const verifyEcdsa = (der, digest, pubkey) => {
   try {
     return hodlSecp256k1.verify(der, digest, pubkey, { prehash: false, format: "der", lowS: false }) === true;
