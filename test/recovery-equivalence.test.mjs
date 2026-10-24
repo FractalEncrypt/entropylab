@@ -855,6 +855,19 @@ test("a descriptor key with two origins, or an origin not directly before it, is
   assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: BIP84_DESC }, opts).verdict, "consistent");
 });
 
+test("a descriptor containing whitespace is refused", () => {
+  // Muse (review of 57e9d37): "[origin] key" read as "[origin]key".
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  // No checksum: the repo's checksum helper refuses whitespace itself, and a
+  // descriptor without one is accepted (flagged absent), so this reaches the
+  // whitespace check.
+  for (const body of [`wpkh([${BIP84_FPR}/84'/0'/0'] ${BIP84_XPUB}/0/*)`, `wpkh([${BIP84_FPR}/84'/0'/0']${BIP84_XPUB}/0/* )`]) {
+    const out = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: body }, opts);
+    assert.equal(out.verdict, "inconsistent", body);
+    assert.equal(out.mismatchAt, "Support", body);
+  }
+});
+
 test("no step detail ever repeats secret input; a private key in a descriptor is refused", () => {
   // The BIP-32 test-vector-1 master xprv (public test data, not a secret
   // anyone holds) and a made-up mnemonic word stand in for private input.

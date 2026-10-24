@@ -185,6 +185,9 @@ function parseDescriptorClaims(descriptor) {
   } else {
     checksumAbsent = true;
   }
+  // A descriptor never contains whitespace; "[origin] key" would otherwise
+  // read as "[origin]key" (Muse, review of 57e9d37).
+  if (/\s/.test(body)) return { error: "descriptor contains whitespace" };
   // Private extended keys are refused before anything else reads the text:
   // this module compares public material only (red-team on 57e9d37).
   if (/\b[xtyzuvYZUV]prv[1-9A-HJ-NP-Za-km-z]/.test(body)) {
