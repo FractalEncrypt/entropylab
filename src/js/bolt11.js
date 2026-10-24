@@ -119,15 +119,29 @@ const wordsToBytes = (words, expectedLength, what) => {
 
 const wordsToInt = (words) => words.reduce((acc, w) => acc * 32 + w, 0);
 
+// Integer tag fields are read with BigInt so nothing is rounded through
+// floating point; a field longer than 10 words (50 bits) is refused.
+const MAX_INT_WORDS = 10;
+const wordsToSafeInt = (words, what) => {
+  if (words.length > MAX_INT_WORDS) fail("The {what} field in this invoice is too large.", { what });
+  const value = words.reduce((acc, w) => acc * 32n + BigInt(w), 0n);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
+};
+
 // ── human-readable part ────────────────────────────────────────────────────
 
 const NETWORKS = { bc: "mainnet", tb: "testnet", tbs: "signet", bcrt: "regtest" };
-const MULTIPLIERS = { m: 10n ** 8n, u: 10n ** 5n, n: 10n ** 2n, p: 10n }; // msat per unit
+// msat per unit. 1 pico-bitcoin is 0.1 msat, so `p` is not a whole number
+// of millisatoshi and is handled separately below.
+const MULTIPLIERS = { m: 10n ** 8n, u: 10n ** 5n, n: 10n ** 2n };
 
 const parseHrp = (hrp) => {
   if (!hrp.startsWith("ln")) fail("This is bech32, but not a Lightning invoice (missing the \"ln\" prefix).");
   const rest = hrp.slice(2);
-  const coin = rest.match(/^[a-z]+/)[0];
+  // An hrp with no coin letters at all ("ln", "ln2500u") must fail through
+  // fail() like every other bad prefix, not with a raw TypeError.
+  const coinMatch = rest.match(/^[a-z]+/);
+  const coin = coinMatch ? coinMatch[0] : "";
   const network = NETWORKS[coin];
   if (!network) fail("This invoice is for an unknown network (\"{coin}\").", { coin });
   const amountPart = rest.slice(coin.length);
@@ -138,7 +152,11 @@ const parseHrp = (hrp) => {
   const multiplier = match[2];
   if (!multiplier) return { network, amountMsat: (amount * 10n ** 11n).toString() };
   if (amount === 0n) fail("A zero amount must not carry a multiplier.");
-  if (multiplier === "p" && amount % 10n !== 0n) fail("The amount has sub-millisatoshi precision, which BOLT11 forbids.");
+  if (multiplier === "p") {
+    // 1 pico-bitcoin = 0.1 msat; the last-digit-0 rule makes this exact.
+    if (amount % 10n !== 0n) fail("The amount has sub-millisatoshi precision, which BOLT11 forbids.");
+    return { network, amountMsat: (amount / 10n).toString() };
+  }
   return { network, amountMsat: (amount * MULTIPLIERS[multiplier]).toString() };
 };
 
@@ -155,7 +173,7 @@ const TAG_NODE_ID = 19; // 'n'
 const TAG_DESCRIPTION_HASH = 23; // 'h'
 const TAG_MIN_FINAL_CLTV = 24; // 'c'
 
-const ROUTE_HOP_WORDS = 51; // 33-byte pubkey + 8-byte scid + 4 + 4 + 2 fee/cltv
+const ROUTE_HOP_BYTES = 51; // 33-byte pubkey + 8-byte scid + 4 + 4 + 2 fee/cltv
 
 const parseTags = (words) => {
   const out = {
@@ -211,24 +229,38 @@ const parseTags = (words) => {
         out.declaredNodeId = hex.encode(wordsToBytes(data, 33, "node id"));
         break;
       case TAG_EXPIRY:
-        out.expiry = wordsToInt(data);
+        out.expiry = wordsToSafeInt(data, "expiry");
         break;
       case TAG_MIN_FINAL_CLTV:
-        out.minFinalCltvExpiry = wordsToInt(data);
+        out.minFinalCltvExpiry = wordsToSafeInt(data, "min_final_cltv_expiry_delta");
         break;
       case TAG_FALLBACK: {
         if (data.length < 1) fail("A fallback address field in this invoice is empty.");
+        const version = data[0];
         // A reader MUST skip over fallback fields with an unknown version
-        // (17 = P2PKH, 18 = P2SH, 0 = segwit v0 are the defined ones).
-        if (data[0] === 17 || data[0] === 18 || data[0] === 0) {
-          out.fallbacks.push({ version: data[0], program: hex.encode(wordsToBytesTrimmed(data.slice(1))) });
+        // (0-16 = segwit witness versions, 17 = P2PKH, 18 = P2SH).
+        if (version > 18) break;
+        const program = wordsToBytesTrimmed(data.slice(1));
+        if (version === 17 || version === 18) {
+          if (program.length !== 20) fail("The {what} field has the wrong length for a BOLT11 invoice.", { what: "fallback address" });
+          out.fallbacks.push({ version, kind: version === 17 ? "p2pkh" : "p2sh", program: hex.encode(program) });
+        } else {
+          const ok = version === 0
+            ? program.length === 20 || program.length === 32
+            : program.length >= 2 && program.length <= 40;
+          if (!ok) fail("The {what} field has the wrong length for a BOLT11 invoice.", { what: "fallback address" });
+          out.fallbacks.push({ version, kind: "witness", program: hex.encode(program) });
         }
         break;
       }
-      case TAG_ROUTE_HINT:
-        if (data.length % ROUTE_HOP_WORDS !== 0) fail("A route hint in this invoice is malformed.");
-        out.routeHintHops += data.length / ROUTE_HOP_WORDS;
+      case TAG_ROUTE_HINT: {
+        // The field is a whole number of 51-byte hops; compare bytes, not
+        // 5-bit words (51 bytes is 81.6 words).
+        const bytes = wordsToBytesTrimmed(data);
+        if (bytes.length % ROUTE_HOP_BYTES !== 0) fail("A route hint in this invoice is malformed.");
+        out.routeHintHops += bytes.length / ROUTE_HOP_BYTES;
         break;
+      }
       case TAG_PAYMENT_SECRET:
         out.paymentSecret = hex.encode(wordsToBytes(data, 32, "payment secret"));
         break;
@@ -263,6 +295,7 @@ export const bolt11Decode = (text) => {
 
   // Required-content rules a BOLT11 reader MUST enforce.
   if (!tags.paymentSecret) fail("This invoice has no payment secret, which BOLT11 requires.");
+  if (!tags.paymentHash) fail("This invoice has no payment hash, which BOLT11 requires.");
   if (!tags.description && !tags.descriptionHash) fail("This invoice has neither a description nor a description hash.");
   if (tags.description && tags.descriptionHash) fail("This invoice has both a description and a description hash, which BOLT11 forbids.");
 

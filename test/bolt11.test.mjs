@@ -221,3 +221,156 @@ test("rejects: a description that is not valid UTF-8 (keyed, not a raw TypeError
     }
   );
 });
+
+// ── round 2: hrp without a coin, pico amounts, required p, route hints,
+//    fallback addresses, integer fields, and the chosen spec examples ──────
+
+// A checksum-valid bech32 (constant 1) string built from an arbitrary hrp
+// and data words, so prefix-level failures can be exercised.
+const encodeBech32 = (hrp, words) => {
+  const chk = polymod([...hrpExpand(hrp), ...words, 0, 0, 0, 0, 0, 0]) ^ 1;
+  const checksum = [25, 20, 15, 10, 5, 0].map((shift) => (chk >> shift) & 31);
+  return hrp + "1" + [...words, ...checksum].map((w) => CHARSET[w]).join("");
+};
+
+test("rejects: an hrp with no coin letters (keyed, not a raw TypeError)", () => {
+  for (const hrp of ["ln", "ln2500u"]) {
+    let thrown;
+    try {
+      bolt11Decode(encodeBech32(hrp, [0, 0, 0, 0, 0, 0, 0]));
+    } catch (e) {
+      thrown = e;
+    }
+    assert.ok(thrown, `${hrp} must be refused`);
+    assert.equal(thrown instanceof TypeError, false, `${hrp} must not throw a raw TypeError`);
+    assert.equal(typeof thrown.key, "string", `${hrp} must fail with a key`);
+    assert.ok(thrown.key.length > 0, `${hrp} must fail with a non-empty key`);
+  }
+});
+
+// "Please send 0.00967878534 BTC for a list of items within one week, amount
+// in pico-BTC" — 9678785340 pico-bitcoin is 967878534 msat, not 96787853400.
+const PICO =
+  "lnbc9678785340p1pwmna7lpp5gc3xfm08u9qy06djf8dfflhugl6p7lgza6dsjxq454gxhj9t7a0sd8dgfkx7cmtwd68yetpd5s9xar0wfjn5gpc8qhrsdfq24f5ggrxdaezqsnvda3kkum5wfjkzmfqf3jkgem9wgsyuctwdus9xgrcyqcjcgpzgfskx6eqf9hzqnteypzxz7fzypfhg6trddjhygrcyqezcgpzfysywmm5ypxxjemgw3hxjmn8yptk7untd9hxwg3q2d6xjcmtv4ezq7pqxgsxzmnyyqcjqmt0wfjjq6t5v4khxsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygsxqyjw5qcqp2rzjq0gxwkzc8w6323m55m4jyxcjwmy7stt9hwkwe2qxmy8zpsgg7jcuwz87fcqqeuqqqyqqqqlgqqqqn3qq9q9qrsgqrvgkpnmps664wgkp43l22qsgdw4ve24aca4nymnxddlnp8vh9v2sdxlu5ywdxefsfvm0fq3sesf08uf6q9a2ke0hc9j6z6wlxg5z5kqpu2v9wz";
+
+test("spec vector: pico-BTC amount is scaled to millisatoshi", () => {
+  const d = bolt11Decode(PICO);
+  assert.equal(d.amountMsat, "967878534");
+  assert.equal(d.signatureValid, true);
+  assert.equal(d.nodeId, SPEC_NODE_ID);
+  assert.equal(d.expiry, 604800);
+  assert.equal(d.minFinalCltvExpiry, 10);
+  assert.equal(d.routeHintHops, 1);
+});
+
+// "On mainnet, with fallback address 1RustyRX2oai4EYYDpQGWvEL62BBGqN9T with
+// extra routing info to go via nodes 029e03a9… then 039e03a9…"
+const FALLBACK_P2PKH =
+  "lnbc20m1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsfpp3qjmp7lwpagxun9pygexvgpjdc4jdj85fr9yq20q82gphp2nflc7jtzrcazrra7wwgzxqc8u7754cdlpfrmccae92qgzqvzq2ps8pqqqqqqpqqqqq9qqqvpeuqafqxu92d8lr6fvg0r5gv0heeeqgcrqlnm6jhphu9y00rrhy4grqszsvpcgpy9qqqqqqgqqqqq7qqzq9qrsgqdfjcdk6w3ak5pca9hwfwfh63zrrz06wwfya0ydlzpgzxkn5xagsqz7x9j4jwe7yj7vaf2k9lqsdk45kts2fd0fkr28am0u4w95tt2nsq76cqw0";
+
+test("spec vector: P2PKH fallback address and two route hops", () => {
+  const d = bolt11Decode(FALLBACK_P2PKH);
+  assert.equal(d.signatureValid, true);
+  assert.equal(d.amountMsat, "2000000000"); // 20m = 0.02 BTC
+  assert.equal(d.nodeId, SPEC_NODE_ID);
+  assert.equal(d.fallbacks.length, 1);
+  assert.equal(d.fallbacks[0].version, 17);
+  assert.equal(d.fallbacks[0].kind, "p2pkh");
+  assert.equal(d.fallbacks[0].program.length, 40); // 20-byte hash160
+  assert.equal(d.routeHintHops, 2);
+});
+
+// "On mainnet, with fallback (P2TR) address
+// bc1pptdvg0d2nj99568qn6ssdy4cygnwuxgw2ukmnwgwz7jpqjz2kszse2s3lm"
+const FALLBACK_P2TR =
+  "lnbc20m1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsfp4pptdvg0d2nj99568qn6ssdy4cygnwuxgw2ukmnwgwz7jpqjz2kszs9qrsgqy606dznq28exnydt2r4c29y56xjtn3sk4mhgjtl4pg2y4ar3249rq4ajlmj9jy8zvlzw7cr8mggqzm842xfr0v72rswzq9xvr4hknfsqwmn6xd";
+
+test("spec vector: P2TR fallback address is reported, not dropped", () => {
+  const d = bolt11Decode(FALLBACK_P2TR);
+  assert.equal(d.signatureValid, true);
+  assert.equal(d.amountMsat, "2000000000");
+  assert.equal(d.nodeId, SPEC_NODE_ID);
+  assert.equal(d.fallbacks.length, 1);
+  assert.equal(d.fallbacks[0].version, 1);
+  assert.equal(d.fallbacks[0].kind, "witness");
+  assert.equal(d.fallbacks[0].program.length, 64); // 32-byte witness program
+});
+
+// The spec's "Missing required `p` field" example. The key is pinned by a
+// short stable substring so the test cannot pass on a later signature
+// failure instead of the missing payment hash.
+const MISSING_P =
+  "lnbc25m1pvjluezdq5vdhkven9v5sxyetpdeessp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9q5sqqqqqqqqqqqqqqqqsgqjy08jd52dtj25pefkh0enc54lxtjtr8wnum2msrq2d8uztp9vhhpccq93ljpff0kkjgzkzcp2czlyenjphf6upazjlc8uxw7za0ynusqrfhg8u";
+
+test("rejects: missing required p field", () => {
+  assert.throws(
+    () => bolt11Decode(MISSING_P),
+    (e) => typeof e.key === "string" && /payment hash/.test(e.key)
+  );
+});
+
+// Same rule, built the way the rest of this file builds edited invoices: the
+// p tag is dropped from a valid invoice. parseTags runs before signature
+// verification, so the missing-payment-hash failure is what must surface.
+const dropTag = (invoice, tagType) => {
+  const sep = invoice.lastIndexOf("1");
+  const hrp = invoice.slice(0, sep);
+  const words = [...invoice.slice(sep + 1, -6)].map((c) => CHARSET.indexOf(c));
+  const out = words.slice(0, 7); // timestamp
+  let i = 7;
+  while (i < words.length) {
+    const length = words[i + 1] * 32 + words[i + 2];
+    if (words[i] !== tagType) out.push(...words.slice(i, i + 3 + length));
+    i += 3 + length;
+  }
+  const chk = polymod([...hrpExpand(hrp), ...out, 0, 0, 0, 0, 0, 0]) ^ 1;
+  const checksum = [25, 20, 15, 10, 5, 0].map((shift) => (chk >> shift) & 31);
+  return hrp + "1" + [...out, ...checksum].map((w) => CHARSET[w]).join("");
+};
+
+test("rejects: an invoice with its p field removed", () => {
+  assert.throws(
+    () => bolt11Decode(dropTag(COFFEE, 1)),
+    (e) => typeof e.key === "string" && /payment hash/.test(e.key)
+  );
+});
+
+// The bundled "high-S signature with a declared node id" vector does not
+// pass the bech32 checksum (it fails before parseTags), so it can never
+// reach the declared-node-id branch. Build that case instead: add an `n`
+// field to the coffee invoice. The signature no longer covers the data, so
+// the declared-id verification is what must fail, with its own key.
+const hexToBytes = (h) => Uint8Array.from(h.match(/../g).map((b) => parseInt(b, 16)));
+const addTag = (invoice, tagType, payloadBytes) => {
+  const sep = invoice.lastIndexOf("1");
+  const hrp = invoice.slice(0, sep);
+  const words = [...invoice.slice(sep + 1, -6)].map((c) => CHARSET.indexOf(c));
+  const payloadWords = b2w(payloadBytes);
+  const out = [
+    ...words.slice(0, 7), // timestamp
+    tagType,
+    ...splitWordCount(payloadWords.length),
+    ...payloadWords,
+    ...words.slice(7),
+  ];
+  const chk = polymod([...hrpExpand(hrp), ...out, 0, 0, 0, 0, 0, 0]) ^ 1;
+  const checksum = [25, 20, 15, 10, 5, 0].map((shift) => (chk >> shift) & 31);
+  return hrp + "1" + [...out, ...checksum].map((w) => CHARSET[w]).join("");
+};
+
+test("rejects: a declared node id the signature does not verify against", () => {
+  const invoice = addTag(COFFEE, 19, hexToBytes(SPEC_NODE_ID));
+  assert.throws(
+    () => bolt11Decode(invoice),
+    (e) => typeof e.key === "string" && /declared node id/.test(e.key)
+  );
+});
+
+test("rejects: an integer field longer than 10 words (no float rounding)", () => {
+  // 11 bytes of expiry payload is 18 words, past the 50-bit ceiling.
+  const invoice = replaceTagPayload(COFFEE, 6, new Array(11).fill(0xff));
+  assert.throws(
+    () => bolt11Decode(invoice),
+    (e) => typeof e.key === "string" && /too large/.test(e.key)
+  );
+});
