@@ -874,5 +874,6 @@ test("a failed verification refuses the import handler even if the button is cli
   await new Promise((resolve) => setTimeout(resolve, 0));
   out.buttons[0].listeners.click();
   assert.equal(imported.length, 0, "a failed document must not import");
-  assert.equal(elements["core-error"].textContent, "Import unlocks when every check above passes or warns.");
+  // Copy is asserted for presence only (AGENTS.md): the refusal shows a message.
+  assert.ok(elements["core-error"].textContent.trim(), "a refused import shows a message");
 });
