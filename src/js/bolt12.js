@@ -31,6 +31,7 @@
 // plain objects ({ key, vars }) for the DOM layer to translate with t().
 import { fromWords } from "./bech32.js";
 import { hex } from "./coders.js";
+import { secp256k1 } from "./secp256k1.js";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 
@@ -80,6 +81,24 @@ const lengthField = (name, length) => (bytes) => {
   return hex.encode(bytes);
 };
 
+// Every pubkey in a BOLT12 string must be a valid compressed secp256k1
+// point; the WASM facade does the curve check, never JavaScript.
+const requirePoint = (bytes, name) => {
+  try {
+    secp256k1.Point.fromBytes(bytes);
+  } catch {
+    throw { key: "The {name} is not a valid compressed secp256k1 point.", vars: { name } };
+  }
+};
+
+// A 33-byte compressed secp256k1 pubkey (offer_issuer_id, invreq_payer_id,
+// invoice_node_id): the length and the curve point are both checked.
+const pubkeyField = (name) => (bytes) => {
+  if (bytes.length !== 33) throw { key: "The {name} field has an invalid length.", vars: { name } };
+  requirePoint(bytes, name);
+  return hex.encode(bytes);
+};
+
 // offer_chains: a run of 32-byte chain hashes.
 const chainsField = (bytes) => {
   if (bytes.length === 0 || bytes.length % 32 !== 0) throw { key: "The {name} field has an invalid length.", vars: { name: "offer_chains" } };
@@ -92,12 +111,19 @@ const chainsField = (bytes) => {
 // sciddir_or_pubkey (9 bytes when the first byte is 0x00/0x01 — direction +
 // short channel id — otherwise a 33-byte pubkey), a 33-byte blinding key, a
 // hop count, and that many (33-byte id + u16 length + encrypted data) hops.
+// Every pubkey form (first_node_id, path_key, blinded_node_id) must be a
+// valid compressed secp256k1 point; the sciddir direction is 0 or 1.
 const pathsField = (bytes) => {
   let offset = 0;
   let count = 0;
   while (offset < bytes.length) {
-    offset += bytes[offset] <= 0x01 ? 9 : 33;
-    offset += 33; // blinding key
+    const idLen = bytes[offset] <= 0x01 ? 9 : 33;
+    if (offset + idLen > bytes.length) throw { key: "Truncated blinded path data." };
+    if (idLen === 33) requirePoint(bytes.slice(offset, offset + 33), "first_node_id");
+    offset += idLen;
+    if (offset + 33 > bytes.length) throw { key: "Truncated blinded path data." };
+    requirePoint(bytes.slice(offset, offset + 33), "path_key");
+    offset += 33;
     if (offset >= bytes.length) throw { key: "Truncated blinded path data." };
     const hops = bytes[offset];
     offset += 1;
@@ -105,6 +131,7 @@ const pathsField = (bytes) => {
     if (hops === 0) throw { key: "A blinded path has no hops." };
     for (let hop = 0; hop < hops; hop++) {
       if (offset + 35 > bytes.length) throw { key: "Truncated blinded path data." };
+      requirePoint(bytes.slice(offset, offset + 33), "blinded_node_id");
       const enclen = (bytes[offset + 33] << 8) | bytes[offset + 34];
       offset += 35 + enclen;
     }
@@ -145,7 +172,7 @@ const OFFER_FIELDS = [
   [16n, "paths", pathsField],
   [18n, "issuer", utf8Field("offer_issuer")],
   [20n, "quantityMax", tuField("offer_quantity_max", 8)],
-  [22n, "issuerId", lengthField("offer_issuer_id", 33)],
+  [22n, "issuerId", pubkeyField("offer_issuer_id")],
 ];
 
 const INVREQ_FIELDS = [
@@ -155,7 +182,7 @@ const INVREQ_FIELDS = [
   [82n, "amountMsat", tuField("invreq_amount_msat", 8)],
   [84n, "invreqFeatures", hexField],
   [86n, "quantity", tuField("invreq_quantity", 8)],
-  [88n, "payerId", lengthField("invreq_payer_id", 33)],
+  [88n, "payerId", pubkeyField("invreq_payer_id")],
   [89n, "payerNote", utf8Field("invreq_payer_note")],
   [90n, "invreqPaths", pathsField],
 ];
@@ -170,7 +197,7 @@ const INVOICE_FIELDS = [
   [170n, "invoiceAmount", tuField("invoice_amount", 8)],
   [172n, "fallbacks", hexField],
   [174n, "invoiceFeatures", hexField],
-  [176n, "nodeId", lengthField("invoice_node_id", 33)],
+  [176n, "nodeId", pubkeyField("invoice_node_id")],
 ];
 
 const SIGNATURE_TYPE = 240n;
@@ -261,6 +288,29 @@ export const bolt12Decode = (text) => {
       continue;
     }
     fields[field.name] = field.decode(value);
+  }
+  if (hrp === "lno") {
+    // BOLT12 offer reader: MUST NOT respond to an offer that breaks these.
+    if (fields.amount !== undefined && fields.amount === "0") throw { key: "The offer_amount must be greater than zero." };
+    if (fields.amount !== undefined && fields.description === undefined) throw { key: "An offer with offer_amount must also have offer_description." };
+    if (fields.currency !== undefined && fields.amount === undefined) throw { key: "An offer with offer_currency must also have offer_amount." };
+    if (fields.issuerId === undefined && fields.paths === undefined) throw { key: "An offer must have offer_issuer_id or offer_paths." };
+    if (fields.features !== undefined) {
+      for (const byte of hex.decode(fields.features)) {
+        if ((byte & 0x55) !== 0) throw { key: "The offer_features field has an unknown even bit set." };
+      }
+    }
+  }
+  if (hrp === "lni") {
+    // BOLT12 invoice reader: these fields are required, and the blinded
+    // payinfo must line up one-for-one with the blinded paths.
+    for (const [name, label] of [["invoiceAmount", "invoice_amount"], ["createdAt", "invoice_created_at"], ["paymentHash", "invoice_payment_hash"], ["nodeId", "invoice_node_id"]]) {
+      if (fields[name] === undefined) throw { key: "The invoice is missing the required {name} field.", vars: { name: label } };
+    }
+    const pathCount = fields.invoicePaths && typeof fields.invoicePaths.count === "number" ? fields.invoicePaths.count : 0;
+    if (pathCount === 0) throw { key: "The invoice has no blinded paths." };
+    if (typeof fields.payinfoCount !== "number") throw { key: "The invoice is missing the required invoice_blindedpay field." };
+    if (fields.payinfoCount !== pathCount) throw { key: "The invoice's blinded payinfo count does not match its path count." };
   }
   return { kind: "bolt12", hrp, fields, unknownOddTypes, signaturePresent };
 };

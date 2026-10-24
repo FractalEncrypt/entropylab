@@ -10,9 +10,41 @@
 // checksum-free encoder (toWords + the bech32 charset).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { toWords } from "../src/js/bech32.js";
 import { hex } from "../src/js/coders.js";
+import { secp256k1Ready } from "../src/js/secp256k1.js";
 import { bolt12Decode, bolt12PathCount, bolt12RecipientVisibility } from "../src/js/bolt12.js";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+await secp256k1Ready;
+
+// Official BOLT 12 test vectors: lightning/bolts bolt12/, commit 191462825ae3, CC-BY 4.0.
+const offerVectors = JSON.parse(readFileSync(join(root, "test/fixtures/bolt12-offers-test.json"), "utf8"));
+const formatVectors = JSON.parse(readFileSync(join(root, "test/fixtures/bolt12-format-string-test.json"), "utf8"));
+
+// The format-string fixture names the string differently from the offers
+// fixture; take the first value that looks like a BOLT12 string.
+const bolt12Of = (vector) => {
+  const values = Object.values(vector);
+  const string = values.find((value) => typeof value === "string" && /^ln[ori]1/i.test(value.replace(/[+\s]/g, "")));
+  if (string !== undefined) return string;
+  const parts = values.find((value) => Array.isArray(value) && value.every((part) => typeof part === "string"));
+  return parts && parts.join("");
+};
+
+for (const vector of [...offerVectors, ...formatVectors]) {
+  test(`BOLT 12 vector: ${vector.description ?? vector.name ?? "(unnamed)"}`, () => {
+    const text = bolt12Of(vector);
+    if (vector.valid) {
+      assert.doesNotThrow(() => bolt12Decode(text));
+    } else {
+      assert.throws(() => bolt12Decode(text), (error) => typeof error.key === "string");
+    }
+  });
+}
 
 // ── spec strings (verbatim) ─────────────────────────────────────────────────
 
@@ -213,8 +245,22 @@ test("decodes an invoice: amount, payment hash, node id, paths, payinfo, expiry"
 });
 
 test("an invoice without a signature record reports signaturePresent false", () => {
-  const result = bolt12Decode(encode("lni", [[164, "6553f100"], [168, PAYMENT_HASH], [170, "030d40"], [176, PUBKEY]]));
+  const result = bolt12Decode(encode("lni", [[160, PATH_ONE], [162, PAYINFO], [164, "6553f100"], [168, PAYMENT_HASH], [170, "030d40"], [176, PUBKEY]]));
   assert.equal(result.signaturePresent, false);
+});
+
+test("refuses an invoice missing a required field, with no paths, or with mismatched payinfo", () => {
+  const base = [[160, PATH_ONE], [162, PAYINFO], [164, "6553f100"], [168, PAYMENT_HASH], [170, "030d40"], [176, PUBKEY]];
+  // The complete invoice decodes.
+  assert.equal(bolt12Decode(encode("lni", base)).hrp, "lni");
+  // Each required field, when removed, is refused.
+  for (const type of [160, 162, 164, 168, 170, 176]) {
+    assertKeyed(() => bolt12Decode(encode("lni", base.filter(([t]) => t !== type))));
+  }
+  // An empty invoice_paths is refused.
+  assertKeyed(() => bolt12Decode(encode("lni", base.map(([t, v]) => [t, t === 160 ? "" : v]))));
+  // A payinfo count that differs from the path count is refused.
+  assertKeyed(() => bolt12Decode(encode("lni", base.map(([t, v]) => [t, t === 162 ? PAYINFO + PAYINFO : v]))));
 });
 
 test("keeps amounts above 2^53 exact as decimal strings", () => {
@@ -333,8 +379,8 @@ test("rejects prototype keys as an unknown prefix", () => {
 });
 
 test("refuses a blinded path with zero hops", () => {
-  // sciddir_or_pubkey (33) + blinding key (33) + num_hops 0.
-  const zeroHops = "02" + "11".repeat(32) + "22".repeat(33) + "00";
+  // first_node_id (valid pubkey) + path_key (valid pubkey) + num_hops 0.
+  const zeroHops = PUBKEY + PUBKEY + "00";
   assertKeyed(() => bolt12Decode(encode("lno", [[10, "5465737420766563746f7273"], [16, zeroHops], [22, PUBKEY]])));
 });
 
