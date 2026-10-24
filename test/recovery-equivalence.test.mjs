@@ -840,6 +840,20 @@ test("an unknown network or an invalid receiveIndex is refused up front", () => 
   assert.equal(compareRecoveryArtifacts(artifacts, { network: "mainnet", receiveIndex: 0 }).verdict, "consistent");
 });
 
+test("a seed outside BIP-32's 16 to 64 bytes is refused", () => {
+  // Red-team RE-3: a 1-byte "seed" was accepted and could report consistent
+  // against a key derived from it. BIP-32 seeds are 128 to 512 bits.
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  for (const seed of ["ab", "00".repeat(15), "00".repeat(65)]) {
+    const out = compareRecoveryArtifacts({ seed, xpub: BIP84_XPUB }, opts);
+    assert.equal(out.verdict, "inconsistent", `${seed.length / 2} bytes`);
+    assert.equal(out.mismatchAt, "Support", `${seed.length / 2} bytes`);
+  }
+  // The edges are accepted: the 64-byte BIP-39 seed already verifies above,
+  // and a 16-byte seed parses (it only has to derive the same keys).
+  assert.notEqual(compareRecoveryArtifacts({ seed: "00".repeat(16), xpub: BIP84_XPUB }, opts).mismatchAt, "Support");
+});
+
 test("a passphrase without a mnemonic is refused, not silently ignored", () => {
   const opts = { network: "mainnet", receiveIndex: 0 };
   const out = compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: BIP39_PASSPHRASE }, opts);

@@ -65,8 +65,11 @@ const TEMPLATE_SCRIPT_TYPE = {
   tr: "p2tr",
 };
 
+// A BIP-32 seed is 128 to 512 bits (16 to 64 bytes); anything else is not a
+// seed this module can stand behind, however it was produced.
 function hexSeedBytes(seedHex) {
   if (!/^[0-9a-fA-F]+$/.test(seedHex) || seedHex.length % 2 !== 0) return null;
+  if (seedHex.length < 32 || seedHex.length > 128) return null;
   const out = new Uint8Array(seedHex.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(seedHex.slice(2 * i, 2 * i + 2), 16);
   return out;
@@ -516,7 +519,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
   if (supplied.seed) {
     const seedBytes = hexSeedBytes(supplied.seed);
     if (!seedBytes) {
-      steps.push(stepFail("Support", "seed must be lowercase/uppercase hex, even length"));
+      steps.push(stepFail("Support", "seed must be 16 to 64 bytes of hex (BIP-32)"));
     } else {
       try {
         // A mnemonic and a seed are the same kind of artifact: the seed must
