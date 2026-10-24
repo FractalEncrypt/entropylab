@@ -22,6 +22,7 @@ import { descriptorChecksum } from "../src/js/core-importdescriptors.js";
 import { base58checkDecode, base58checkEncode } from "../src/js/base58.js";
 import { HDKey } from "../src/js/hdkey.js";
 import { mnemonicToSeedSync } from "../src/js/bip39.js";
+import { addressFor } from "../src/js/addresses.js";
 
 test("returns a non-null object", () => {
   const out = compareRecoveryArtifacts({}, { network: "mainnet", receiveIndex: 0 });
@@ -142,6 +143,53 @@ const BIP49_TESTNET_TPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONI
 const BIP49_TESTNET_UPUB = toVersion(BIP49_TESTNET_TPUB, 0x044a5262);
 const BIP49_TESTNET_DESC = desc(`sh(wpkh([${BIP84_FPR}/49'/1'/0']${BIP49_TESTNET_TPUB}/0/*))`);
 const BIP49_AS_ZPUB = toVersion(BIP49_YPUB, 0x04b24746);
+
+// ---- Round 4 fixtures --------------------------------------------------
+//
+// BIP-39 published vectors for the BIP-84 mnemonic (entropy
+// 00000000000000000000000000000000): the seed with no passphrase and the
+// seed with passphrase "TREZOR". These anchor the mnemonic-vs-seed and
+// passphrase checks independently of the code under test.
+const BIP39_SEED_HEX =
+  "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
+const BIP39_PASSPHRASE = "TREZOR";
+const BIP39_PASSPHRASE_SEED_HEX =
+  "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
+
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
+  return out;
+}
+function toHex(bytes) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The same mnemonic with passphrase "TREZOR", at m/84'/0'/0', as a zpub.
+const BIP39_PASSPHRASE_ZPUB = toVersion(
+  HDKey.fromMasterSeed(hexToBytes(BIP39_PASSPHRASE_SEED_HEX)).derive("m/84'/0'/0'").neutered().publicExtendedKey,
+  0x04b24746,
+);
+
+// BIP-44 first receive address of the BIP-84 mnemonic, built with the repo's
+// already-pinned HDKey/addressFor (not the code under test).
+const BIP44_ADDR0 = addressFor(
+  "p2pkh",
+  HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONIC)).derive("m/44'/0'/0'/0/0").publicKey,
+  "mainnet",
+);
+
+// Account 1 of the BIP-84 mnemonic (m/84'/0'/1'), and two keys that are not
+// account-level: the master (depth 0) and a depth-3 non-hardened child.
+const BIP84_ACCOUNT1_XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONIC))
+  .derive("m/84'/0'/1'").neutered().publicExtendedKey;
+const BIP84_MASTER_XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONIC)).neutered().publicExtendedKey;
+const BIP84_NONHARDENED_XPUB = HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONIC))
+  .derive("m/84'/0/0").neutered().publicExtendedKey;
+
+// A different valid BIP-39 mnemonic's seed, for the "another wallet" case.
+const OTHER_MNEMONIC = "abandon ".repeat(23) + "art";
+const OTHER_SEED_HEX = toHex(mnemonicToSeedSync(OTHER_MNEMONIC));
 
 test("BIP-84 vector: mnemonic + descriptor + first receive address → consistent", () => {
   const out = compareRecoveryArtifacts(
@@ -551,4 +599,164 @@ test("testnet key + descriptor with opts.network mainnet → inconsistent at Net
   );
   assert.equal(out.verdict, "inconsistent");
   assert.equal(out.mismatchAt, "Network");
+});
+
+// ---- R4-1: mnemonic vs seed, and the BIP-39 passphrase ----------------
+
+test("R4-1: a matching mnemonic + BIP-39 seed pair alone is consistent", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, seed: BIP39_SEED_HEX },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const seedStep = out.steps.find((s) => s.name === "Seed");
+  assert.ok(seedStep && seedStep.ok === true, "the Seed step ran and matched");
+});
+
+test("R4-1: another wallet's seed is inconsistent at Seed even when the address matches the mnemonic", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, seed: OTHER_SEED_HEX, address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Seed");
+});
+
+test("R4-1: a passphrase-protected xpub matches only when the passphrase is supplied", () => {
+  const without = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP39_PASSPHRASE_ZPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(without.verdict, "inconsistent");
+  assert.equal(without.mismatchAt, "Account key");
+
+  const withPass = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP39_PASSPHRASE_ZPUB, passphrase: BIP39_PASSPHRASE },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(withPass.verdict, "consistent");
+
+  // Spaces are part of a BIP-39 passphrase: a trailing space is a different
+  // passphrase and must not be trimmed into a match.
+  const trailing = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP39_PASSPHRASE_ZPUB, passphrase: BIP39_PASSPHRASE + " " },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(trailing.verdict, "inconsistent");
+  assert.equal(trailing.mismatchAt, "Account key");
+});
+
+// ---- R4-2: a supplied key decides where the address must be -----------
+
+test("R4-2: a zpub pins the address to its own account and script type", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP84_ZPUB, address: BIP44_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Receive address");
+});
+
+test("R4-2: a zpub still matches its own receive address when a mnemonic is present", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP84_ZPUB, address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+});
+
+// ---- R4-3: the account index comes from the key itself ----------------
+
+test("R4-3: an account-1 xpub matches its mnemonic at the key's own account", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_ACCOUNT1_XPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const acct = out.steps.find((s) => s.name === "Account key");
+  assert.ok(acct && acct.ok === true);
+});
+
+test("R4-3: a depth-0 key is a named Support failure", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_MASTER_XPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Support");
+});
+
+test("R4-3: a depth-3 key with a non-hardened index is a named Support failure", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_NONHARDENED_XPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Support");
+});
+
+// ---- R4-4a: private key material is wiped before return ---------------
+
+test("R4-4a: every HDKey built from the mnemonic/seed is wiped before return", () => {
+  const masters = [];
+  const derived = [];
+  const wiped = [];
+  const fromMasterSeed = HDKey.fromMasterSeed;
+  const deriveChild = HDKey.prototype.deriveChild;
+  const wipe = HDKey.prototype.wipePrivateData;
+  HDKey.fromMasterSeed = function (...args) {
+    const node = fromMasterSeed.apply(this, args);
+    masters.push(node);
+    return node;
+  };
+  HDKey.prototype.deriveChild = function (index) {
+    const node = deriveChild.call(this, index);
+    derived.push(node);
+    return node;
+  };
+  HDKey.prototype.wipePrivateData = function () {
+    wiped.push(this);
+    return wipe.call(this);
+  };
+  try {
+    const out = compareRecoveryArtifacts(
+      { mnemonic: BIP84_MNEMONIC, seed: BIP39_SEED_HEX, descriptor: BIP84_DESC, address: BIP84_ADDR0 },
+      { network: "mainnet", receiveIndex: 0 },
+    );
+    assert.equal(out.verdict, "consistent");
+  } finally {
+    HDKey.fromMasterSeed = fromMasterSeed;
+    HDKey.prototype.deriveChild = deriveChild;
+    HDKey.prototype.wipePrivateData = wipe;
+  }
+  assert.equal(masters.length, 2, "one master per seed artifact");
+  for (const master of masters) {
+    assert.equal(master.hasPrivateKey, false, "the master built from seed material is wiped");
+    assert.ok(wiped.includes(master), "wipePrivateData ran on the master");
+  }
+  for (const node of derived) {
+    assert.equal(node.hasPrivateKey, false, "every derived node is wiped");
+  }
+});
+
+// ---- R4-4b: non-string artifacts fail closed, never throw -------------
+
+test("R4-4b: a non-string artifact value is a named Support failure, never a throw", () => {
+  const hostile = { toString() { throw new Error("hostile toString"); } };
+  const cases = [
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, seed: 12345 },
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, address: hostile },
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, descriptor: Symbol("descriptor") },
+    // One valid artifact plus a refused one is still a Support failure, not
+    // "insufficient" (Muse, round 4 review).
+    { mnemonic: BIP84_MNEMONIC, seed: 12345 },
+    { mnemonic: BIP84_MNEMONIC, passphrase: 7 },
+  ];
+  for (const artifacts of cases) {
+    assert.doesNotThrow(() => {
+      const out = compareRecoveryArtifacts(artifacts, { network: "mainnet", receiveIndex: 0 });
+      assert.equal(out.verdict, "inconsistent");
+      assert.equal(out.mismatchAt, "Support");
+    });
+  }
 });

@@ -24,7 +24,7 @@
 // combo(), and raw-hex-key-only descriptors are reported UNSUPPORTED, not
 // INVALID.
 
-import { HDKey } from "./hdkey.js";
+import { HDKey, HARDENED_OFFSET } from "./hdkey.js";
 import { mnemonicToSeedSync, validateMnemonic } from "./bip39.js";
 import { addressFor, descriptorDerive } from "./addresses.js";
 import { base58checkDecode, base58checkEncode } from "./base58.js";
@@ -70,6 +70,15 @@ function hexSeedBytes(seedHex) {
   const out = new Uint8Array(seedHex.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(seedHex.slice(2 * i, 2 * i + 2), 16);
   return out;
+}
+
+// Byte equality for the mnemonic-vs-seed check. Both buffers are the user's
+// own material, so constant time is not required.
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }
 
 // Normalize any extended public key to the Core form of its own network
@@ -260,10 +269,13 @@ function withChecksum(result, checksumStatus) {
 function candidatePathsFor(keyClaim, descriptorClaims) {
   if (descriptorClaims?.originPath) return [descriptorClaims.originPath];
   const coin = keyClaim.network === "testnet" ? 1 : 0;
+  // The account comes from the key itself (depth 3, hardened index), so an
+  // account-1 key is compared at account 1, not assumed to be account 0.
+  const account = keyClaim.account;
   const prefix = keyClaim.keyPrefix;
-  if (prefix === "ypub" || prefix === "upub") return [`/49'/${coin}'/0'`];
-  if (prefix === "zpub" || prefix === "vpub") return [`/84'/${coin}'/0'`];
-  return [`/44'/${coin}'/0'`, `/49'/${coin}'/0'`, `/84'/${coin}'/0'`, `/86'/${coin}'/0'`];
+  if (prefix === "ypub" || prefix === "upub") return [`/49'/${coin}'/${account}'`];
+  if (prefix === "zpub" || prefix === "vpub") return [`/84'/${coin}'/${account}'`];
+  return [`/44'/${coin}'/${account}'`, `/49'/${coin}'/${account}'`, `/84'/${coin}'/${account}'`, `/86'/${coin}'/${account}'`];
 }
 
 // Account-level purpose → the script type its addresses use. Used to derive
@@ -300,9 +312,30 @@ export function compareRecoveryArtifacts(artifacts, opts) {
   const supplied = {};
   for (const key of ["seed", "mnemonic", "xpub", "slip132", "descriptor", "address"]) {
     const value = artifacts?.[key];
-    if (value != null && String(value).trim() !== "") supplied[key] = String(value).trim();
+    if (value == null) continue;
+    if (typeof value !== "string") {
+      // Never coerce: String() on a hostile object can throw, and a coerced
+      // value is not what the user supplied. Fail closed with a named step.
+      steps.push(stepFail("Support", `${key} must be a string`));
+      continue;
+    }
+    if (value.trim() !== "") supplied[key] = value.trim();
   }
+  // The BIP-39 passphrase is used exactly as given: spaces are part of it,
+  // so it is never trimmed. It modifies the mnemonic, it is not an artifact.
+  let passphrase = "";
+  const rawPassphrase = artifacts?.passphrase;
+  if (rawPassphrase != null) {
+    if (typeof rawPassphrase !== "string") {
+      steps.push(stepFail("Support", "passphrase must be a string"));
+    } else {
+      passphrase = rawPassphrase;
+    }
+  }
+  // Too little to compare is "insufficient", unless something the user
+  // supplied was refused: that is never softened to insufficient.
   if (Object.keys(supplied).length < 2) {
+    if (steps.length) return { steps, verdict: "inconsistent", mismatchAt: "Support" };
     return { steps, verdict: "insufficient" };
   }
 
@@ -352,28 +385,47 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       steps.push(stepFail("Support", `${source} is not a recognized public extended key`));
       return;
     }
+    let node;
     try {
-      HDKey.fromExtendedKey(coreXpub, versionsForNetwork(keyNetwork));
+      node = HDKey.fromExtendedKey(coreXpub, versionsForNetwork(keyNetwork));
     } catch (err) {
       steps.push(stepFail("Support", `${source} does not parse: ${err.message}`));
+      return;
+    }
+    // An account-level key is depth 3 with a hardened child index; that
+    // index is the account, so an account-1 key is compared at account 1.
+    if (node.depth !== 3 || node.index < HARDENED_OFFSET) {
+      steps.push(stepFail("Support", `${source} is not an account-level key (depth 3, hardened index)`));
       return;
     }
     // The prefix, not the field name, decides the script-type claim: a
     // SLIP-132 key keeps its claim whichever field it arrives in.
     const scriptTypeClaim = SLIP132_SCRIPT_TYPE[prefix] ?? null;
-    keyClaims.push({ source, coreXpub, network: keyNetwork, keyPrefix: prefix, scriptTypeClaim });
+    keyClaims.push({ source, coreXpub, network: keyNetwork, keyPrefix: prefix, scriptTypeClaim, account: node.index - HARDENED_OFFSET });
   };
 
   if (supplied.xpub) addKeyClaim("xpub", supplied.xpub);
   if (supplied.slip132) addKeyClaim("slip132", supplied.slip132);
   if (descriptorClaims) {
-    keyClaims.push({
-      source: "descriptor",
-      coreXpub: descriptorClaims.coreXpub,
-      network: descriptorClaims.keyNetwork,
-      keyPrefix: descriptorClaims.keyPrefix,
-      scriptTypeClaim: SLIP132_SCRIPT_TYPE[descriptorClaims.keyPrefix] ?? null,
-    });
+    let node = null;
+    try {
+      node = HDKey.fromExtendedKey(descriptorClaims.coreXpub, versionsForNetwork(descriptorClaims.keyNetwork));
+    } catch {
+      node = null;
+    }
+    const accountLevel = node && node.depth === 3 && node.index >= HARDENED_OFFSET;
+    if (!descriptorClaims.originPath && !accountLevel) {
+      steps.push(stepFail("Support", "descriptor key is not an account-level key (depth 3, hardened index)"));
+    } else {
+      keyClaims.push({
+        source: "descriptor",
+        coreXpub: descriptorClaims.coreXpub,
+        network: descriptorClaims.keyNetwork,
+        keyPrefix: descriptorClaims.keyPrefix,
+        scriptTypeClaim: SLIP132_SCRIPT_TYPE[descriptorClaims.keyPrefix] ?? null,
+        account: accountLevel ? node.index - HARDENED_OFFSET : null,
+      });
+    }
   }
 
   // ---- Network enforcement: opts.network is the expected network. A key or
@@ -391,11 +443,19 @@ export function compareRecoveryArtifacts(artifacts, opts) {
   const seedNetwork = descriptorClaims?.keyNetwork ?? keyClaims[0]?.network ?? network;
   const versions = versionsForNetwork(seedNetwork);
   const seedClaimsList = [];
+  // Every node built from seed material holds a private key; wipe them all
+  // before returning, on every path.
+  const privateNodes = [];
+  const trackPrivate = (node) => {
+    if (node?.hasPrivateKey) privateNodes.push(node);
+    return node;
+  };
   const addSeedClaim = (source, master) => {
     const fingerprintHex = master.fingerprint.toString(16).padStart(8, "0");
     seedClaimsList.push({ source, master, fingerprintHex });
   };
 
+  let mnemonicSeedBytes = null;
   if (supplied.mnemonic) {
     let valid = false;
     try {
@@ -408,8 +468,9 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     } else {
       let seedBytes = null;
       try {
-        seedBytes = mnemonicToSeedSync(supplied.mnemonic);
-        addSeedClaim("mnemonic", HDKey.fromMasterSeed(seedBytes, versions));
+        seedBytes = mnemonicToSeedSync(supplied.mnemonic, passphrase);
+        mnemonicSeedBytes = Uint8Array.from(seedBytes);
+        addSeedClaim("mnemonic", trackPrivate(HDKey.fromMasterSeed(seedBytes, versions)));
       } catch (err) {
         steps.push(stepFail("Support", `mnemonic could not be derived: ${err.message}`));
       } finally {
@@ -423,7 +484,14 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       steps.push(stepFail("Support", "seed must be lowercase/uppercase hex, even length"));
     } else {
       try {
-        addSeedClaim("seed", HDKey.fromMasterSeed(seedBytes, versions));
+        // A mnemonic and a seed are the same kind of artifact: the seed must
+        // be the BIP-39 seed of the mnemonic (with the supplied passphrase),
+        // not merely a seed that happens to derive the same address.
+        if (mnemonicSeedBytes) {
+          if (bytesEqual(seedBytes, mnemonicSeedBytes)) steps.push(stepOk("Seed"));
+          else steps.push(stepFail("Seed", "seed bytes do not match the BIP-39 seed of the mnemonic"));
+        }
+        addSeedClaim("seed", trackPrivate(HDKey.fromMasterSeed(seedBytes, versions)));
       } catch (err) {
         steps.push(stepFail("Support", `seed could not be derived: ${err.message}`));
       } finally {
@@ -466,7 +534,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       for (const path of candidates) {
         let account;
         try {
-          account = seedClaim.master.derive("m" + path);
+          account = trackPrivate(seedClaim.master.derive("m" + path));
         } catch {
           continue;
         }
@@ -526,7 +594,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       if (!match) continue; // Account key failure already reported
       let seedAddress = null;
       try {
-        const child = match.account.derive(`m/${descriptorClaims.branch}/${receiveIndex}`);
+        const child = trackPrivate(match.account.derive(`m/${descriptorClaims.branch}/${receiveIndex}`));
         seedAddress = addressFor(descriptorClaims.scriptType, child.publicKey, seedNetwork);
       } catch (err) {
         steps.push(stepFail("Support", `seed side does not derive at index ${receiveIndex}: ${err.message}`));
@@ -547,7 +615,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
         for (let i = 0; i < SCAN; i++) {
           let addr;
           try {
-            const child = account.derive(`m/${branch}/${i}`);
+            const child = trackPrivate(account.derive(`m/${branch}/${i}`));
             addr = addressFor(scriptType, child.publicKey, claimNetwork);
           } catch {
             continue;
@@ -573,19 +641,24 @@ export function compareRecoveryArtifacts(artifacts, opts) {
         if (scanAccount(account, scriptType, keyClaim.network, keyClaim.source)) break;
       }
     }
-    for (const seedClaim of seedClaimsList) {
-      if (matched) break;
-      const coin = seedNetwork === "testnet" ? 1 : 0;
-      for (const { purpose, scriptType } of PURPOSE_SCRIPT_TYPE) {
-        let account;
-        try {
-          account = seedClaim.master.derive(`m/${purpose}'/${coin}'/0'`);
-        } catch {
-          continue;
+    // A supplied key decides where the address must be found: the seed-only
+    // scan runs only when no key was supplied, so a zpub cannot be "rescued"
+    // by an address that lives under a different purpose.
+    if (keyClaims.length === 0) {
+      for (const seedClaim of seedClaimsList) {
+        if (matched) break;
+        const coin = seedNetwork === "testnet" ? 1 : 0;
+        for (const { purpose, scriptType } of PURPOSE_SCRIPT_TYPE) {
+          let account;
+          try {
+            account = trackPrivate(seedClaim.master.derive(`m/${purpose}'/${coin}'/0'`));
+          } catch {
+            continue;
+          }
+          const label = `${seedClaim.source} m/${purpose}'/${coin}'/0'`;
+          tried.push(label);
+          if (scanAccount(account, scriptType, seedNetwork, label)) break;
         }
-        const label = `${seedClaim.source} m/${purpose}'/${coin}'/0'`;
-        tried.push(label);
-        if (scanAccount(account, scriptType, seedNetwork, label)) break;
       }
     }
     if (matched) {
@@ -595,19 +668,26 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     }
   }
 
+  // Every private node built from seed material is wiped before returning,
+  // on every path.
+  const finish = (result) => {
+    for (const node of privateNodes) node.wipePrivateData();
+    if (mnemonicSeedBytes) mnemonicSeedBytes.fill(0);
+    return withChecksum(result, checksumStatus);
+  };
   // A supplied artifact that could not be checked is never a pass.
   if (steps.some((s) => s.name === "Support" && !s.ok)) {
-    return withChecksum({ steps, verdict: "inconsistent", mismatchAt: "Support" }, checksumStatus);
+    return finish({ steps, verdict: "inconsistent", mismatchAt: "Support" });
   }
   const comparable = steps.filter((s) => s.name !== "Support");
   if (comparable.length === 0) {
     // Two+ artifacts were supplied but none share a checkable claim.
-    return withChecksum({ steps, verdict: "insufficient" }, checksumStatus);
+    return finish({ steps, verdict: "insufficient" });
   }
   const firstFailure = comparable.find((s) => !s.ok);
   if (firstFailure) {
-    return withChecksum({ steps, verdict: "inconsistent", mismatchAt: firstFailure.name }, checksumStatus);
+    return finish({ steps, verdict: "inconsistent", mismatchAt: firstFailure.name });
   }
-  return withChecksum({ steps, verdict: "consistent" }, checksumStatus);
+  return finish({ steps, verdict: "consistent" });
 }
 
