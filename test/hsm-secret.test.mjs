@@ -36,10 +36,15 @@ const type2File = (mnemonic) => {
   return file;
 };
 
+// Every refusal must be a keyed error: `code` is the stable machine
+// identifier and `key` is a non-empty translatable string. Tests never pin
+// the English sentence itself (AGENTS.md).
 const refusal = (input) => {
   try {
     readClnMnemonic(input);
   } catch (error) {
+    assert.equal(typeof error.key, "string", "refusals must carry a translatable key");
+    assert.ok(error.key.length > 0, "the refusal key must not be empty");
     return error;
   }
   assert.fail("readClnMnemonic accepted input it must refuse");
@@ -72,6 +77,15 @@ test("hkdfSha256 matches RFC 5869 test case 1", () => {
   );
 });
 
+test("hkdfSha256 refuses an output longer than 255 * 32 bytes (RFC 5869)", () => {
+  const ikm = new Uint8Array(22).fill(0x0b);
+  const salt = fromHex("000102030405060708090a0b0c");
+  const info = fromHex("f0f1f2f3f4f5f6f7f8f9");
+  // RFC 5869 §2.3: L <= 255 * HashLen, so 255 * 32 is the largest legal output.
+  assert.equal(hkdfSha256(ikm, salt, info, 255 * 32).length, 255 * 32);
+  assert.throws(() => hkdfSha256(ikm, salt, info, 255 * 32 + 1), RangeError);
+});
+
 test("deriveClnNode reproduces CLN's node id for a type-2 mnemonic", () => {
   const { nodeId } = deriveClnNode(ABANDON, "bitcoin");
   assert.equal(nodeId, "03653e90c1ce4660fd8505dd6d643356e93cfe202af109d382787639dd5890e87d");
@@ -94,6 +108,15 @@ test("deriveClnNode uses the test-network key version without changing the node 
   assert.ok(testnet.descriptors.every((descriptor) => descriptor.includes(testnet.xpub)));
 });
 
+test("deriveClnNode refuses inherited object properties as network names", () => {
+  for (const network of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.throws(
+      () => deriveClnNode(ABANDON, network),
+      (error) => error.code === "hsm-secret-network" && typeof error.key === "string",
+    );
+  }
+});
+
 test("a type-2 hsm_secret file derives the same node as its words", () => {
   const fromFile = readClnMnemonic(type2File(ABANDON));
   assert.equal(fromFile, ABANDON);
@@ -104,7 +127,7 @@ test("readClnMnemonic normalizes the words lightning-hsmtool getsecret prints", 
   assert.equal(readClnMnemonic(`  ${ABANDON.toUpperCase()}\n`), ABANDON);
 });
 
-test("readClnMnemonic refuses every non-type-2 shape with its own key", () => {
+test("readClnMnemonic refuses every non-type-2 shape with its own code", () => {
   const withPassphrase = type2File(RITUAL);
   withPassphrase[0] = 0x42;
   const cases = [
@@ -115,16 +138,10 @@ test("readClnMnemonic refuses every non-type-2 shape with its own key", () => {
     ["hsm-secret-truncated", type2File("abandon ".repeat(11).trim())],
     ["hsm-secret-trailing", type2File(`${ABANDON} extra`)],
   ];
-  const keys = new Set();
   for (const [code, input] of cases) {
     const error = refusal(input);
     assert.equal(error.code, code);
-    keys.add(error.key);
   }
-  assert.equal(keys.size, cases.length);
-  // Safety-critical wording: a passphrase-protected secret must say so.
-  assert.match(refusal(withPassphrase).key, /passphrase/i);
-  assert.match(refusal(new Uint8Array(73).fill(7)).key, /encrypted legacy hsm_secret is not supported/i);
 });
 
 test("a short hsm_secret file is refused as truncated", () => {

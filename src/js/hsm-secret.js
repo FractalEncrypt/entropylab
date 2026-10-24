@@ -14,7 +14,9 @@
 //    seed (no HKDF), printed as wpkh / sh(wpkh) / tr over the same xpub.
 //
 // Deterministic transformations of user input only: nothing here generates
-// entropy, and every secret buffer is zeroed before returning.
+// entropy. Every secret byte buffer is zeroed before returning; the mnemonic
+// and other JS strings cannot be wiped, so wiping those is best effort, as
+// elsewhere in the app.
 import { HDKey } from "./hdkey.js";
 import { mnemonicToSeedSync, validateMnemonic } from "./bip39.js";
 import { sha256 } from "./hashes.js";
@@ -103,6 +105,11 @@ export const hmacSha256 = (key, message) => {
 };
 
 export const hkdfSha256 = (ikm, salt, info, length) => {
+  // RFC 5869 §2.3: L <= 255 * HashLen. The block counter is a single byte,
+  // so a longer request would silently repeat blocks instead of failing.
+  if (length > 255 * 32) {
+    throw new RangeError("HKDF-SHA256 output length must not exceed 255 * 32 bytes.");
+  }
   const prk = hmacSha256(salt, ikm);
   const okm = new Uint8Array(length);
   let previous = new Uint8Array(0);
@@ -184,7 +191,9 @@ const isValidMnemonic = (phrase) => {
 };
 
 export const deriveClnNode = (mnemonic, network = "bitcoin") => {
-  const params = NETWORKS[network];
+  // Own properties only: "constructor", "__proto__" or "toString" must not
+  // resolve to an inherited Object.prototype member.
+  const params = Object.hasOwn(NETWORKS, network) ? NETWORKS[network] : null;
   if (!params) throw refuse("hsm-secret-network", "Unknown network.");
   const phrase = String(mnemonic).trim().toLowerCase().replace(/\s+/g, " ");
   if (!isValidMnemonic(phrase)) {
@@ -249,6 +258,10 @@ const decodeMnemonicText = (bytes) => {
 
 // Accepts the raw hsm_secret file bytes or the words `lightning-hsmtool
 // getsecret` prints; returns the normalized mnemonic for type 2 only.
+//
+// The words-only path cannot see the 32-byte prefix, so it assumes type 2
+// (no passphrase). A passphrase-protected wallet's words derive a different
+// node, so the UI step must say that this path is for type-2 secrets only.
 export const readClnMnemonic = (input) => {
   if (typeof input === "string") return readWords(input);
   if (!(input instanceof Uint8Array)) {
