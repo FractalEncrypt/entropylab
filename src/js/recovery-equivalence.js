@@ -185,6 +185,11 @@ function parseDescriptorClaims(descriptor) {
   } else {
     checksumAbsent = true;
   }
+  // Private extended keys are refused before anything else reads the text:
+  // this module compares public material only (red-team on 57e9d37).
+  if (/\b[xtyzuvYZUV]prv[1-9A-HJ-NP-Za-km-z]/.test(body)) {
+    return { error: "descriptor carries a private key; only public descriptors are compared" };
+  }
   const fnMatch = body.match(/^([a-z]+)\(/);
   if (!fnMatch) return { error: "descriptor template outside v1 scope (pkh/wpkh/sh(wpkh)/tr, single extended key)" };
   let fn = fnMatch[1];
@@ -373,8 +378,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     let parsed;
     try {
       parsed = parseDescriptorClaims(supplied.descriptor);
-    } catch (err) {
-      parsed = { error: `descriptor could not be parsed: ${err.message}` };
+    } catch {
+      parsed = { error: "descriptor could not be parsed" };
     }
     if (parsed.error) {
       steps.push(stepFail("Support", parsed.error));
@@ -389,8 +394,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       const derivable = body.includes("/<0;1>/*") ? body.replace("/<0;1>/*", "/0/*") : supplied.descriptor;
       try {
         descriptorAddress = descriptorDerive(derivable, receiveIndex, descriptorClaims.keyNetwork).address;
-      } catch (err) {
-        steps.push(stepFail("Support", `descriptor does not derive at index ${receiveIndex}: ${err.message}`));
+      } catch {
+        steps.push(stepFail("Support", `descriptor does not derive at index ${receiveIndex}`));
         descriptorClaims = null;
       }
     }
@@ -420,8 +425,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     let node;
     try {
       node = HDKey.fromExtendedKey(coreXpub, versionsForNetwork(keyNetwork));
-    } catch (err) {
-      steps.push(stepFail("Support", `${source} does not parse: ${err.message}`));
+    } catch {
+      steps.push(stepFail("Support", `${source} does not parse`));
       return;
     }
     // An account-level key is depth 3 with a hardened child index; that
@@ -514,8 +519,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
         seedBytes = mnemonicToSeedSync(supplied.mnemonic, passphrase);
         mnemonicSeedBytes = Uint8Array.from(seedBytes);
         addSeedClaim("mnemonic", trackPrivate(HDKey.fromMasterSeed(seedBytes, versions)));
-      } catch (err) {
-        steps.push(stepFail("Support", `mnemonic could not be derived: ${err.message}`));
+      } catch {
+        steps.push(stepFail("Support", "mnemonic could not be derived"));
       } finally {
         if (seedBytes) seedBytes.fill(0);
       }
@@ -535,8 +540,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
           else steps.push(stepFail("Seed", "seed bytes do not match the BIP-39 seed of the mnemonic"));
         }
         addSeedClaim("seed", trackPrivate(HDKey.fromMasterSeed(seedBytes, versions)));
-      } catch (err) {
-        steps.push(stepFail("Support", `seed could not be derived: ${err.message}`));
+      } catch {
+        steps.push(stepFail("Support", "seed could not be derived"));
       } finally {
         seedBytes.fill(0);
       }
@@ -664,8 +669,8 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       try {
         const child = trackPrivate(match.account.derive(`m/${descriptorClaims.branch}/${receiveIndex}`));
         seedAddress = addressFor(descriptorClaims.scriptType, child.publicKey, seedNetwork);
-      } catch (err) {
-        steps.push(stepFail("Support", `seed side does not derive at index ${receiveIndex}: ${err.message}`));
+      } catch {
+        steps.push(stepFail("Support", `seed side does not derive at index ${receiveIndex}`));
         continue;
       }
       if (addressesEqual(seedAddress, descriptorAddress)) steps.push(stepOk("Receive address"));

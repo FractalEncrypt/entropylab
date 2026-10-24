@@ -855,6 +855,28 @@ test("a descriptor key with two origins, or an origin not directly before it, is
   assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: BIP84_DESC }, opts).verdict, "consistent");
 });
 
+test("no step detail ever repeats secret input; a private key in a descriptor is refused", () => {
+  // The BIP-32 test-vector-1 master xprv (public test data, not a secret
+  // anyone holds) and a made-up mnemonic word stand in for private input.
+  const XPRV = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  const cases = [
+    { descriptor: desc(`wpkh([${BIP84_FPR}/84'/0'/0']${XPRV}/0/*)`), xpub: BIP84_XPUB },
+    { xpub: XPRV, mnemonic: BIP84_MNEMONIC },
+    { slip132: XPRV, descriptor: BIP84_DESC },
+    { mnemonic: "abandon ".repeat(11) + "zzzzsecretword", xpub: BIP84_XPUB },
+    { seed: "zzzz" + "00".repeat(31), xpub: BIP84_XPUB },
+  ];
+  for (const artifacts of cases) {
+    const out = compareRecoveryArtifacts(artifacts, opts);
+    assert.equal(out.verdict, "inconsistent", JSON.stringify(Object.keys(artifacts)));
+    const details = JSON.stringify(out.steps);
+    for (const secret of [XPRV, XPRV.slice(4, 30), "zzzzsecretword"]) assert.ok(!details.includes(secret), "a step detail repeats secret input");
+  }
+  const refused = compareRecoveryArtifacts(cases[0], opts);
+  assert.equal(refused.mismatchAt, "Support");
+});
+
 test("a seed outside BIP-32's 16 to 64 bytes is refused", () => {
   // Red-team RE-3: a 1-byte "seed" was accepted and could report consistent
   // against a key derived from it. BIP-32 seeds are 128 to 512 bits.
