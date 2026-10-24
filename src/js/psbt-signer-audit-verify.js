@@ -466,13 +466,19 @@ const decoderCaps = (doc) => {
 };
 // The cap for one signature: the verdict of a problem that names its key
 // (invalid wins over unchecked), else "uncertain" when an unattributed
-// problem touches its family in this input, else none.
-const capFor = (cap, pair) => {
+// problem touches its family in this input, else none. A script-path
+// signature's identity is its x-only key AND its leaf, but the decoder names
+// only the key: when the same key signs in more than one leaf of the input,
+// a named problem cannot say which leaf it means, so it makes those
+// signatures uncertain, never invalid (Wicked's recheck of #1118).
+// `sameKeyLeaves` counts the input's script-path signatures per key.
+const capFor = (cap, pair, sameKeyLeaves) => {
   if (!cap) return null;
   const family = pair.name === "PSBT_IN_PARTIAL_SIG" ? "partial" : "tap";
   if (pair.name === "PSBT_IN_TAP_KEY_SIG" && cap.keyPath) return cap.keyPath;
   const pubkey = entryPubkey(pair);
   const verdicts = pubkey ? cap.keyed.filter((k) => k.family === family && pubkey.startsWith(k.prefix)).map((k) => k.verdict) : [];
+  if (verdicts.length && pair.name === "PSBT_IN_TAP_SCRIPT_SIG" && (sameKeyLeaves.get(pubkey) ?? 0) > 1) return "uncertain";
   if (verdicts.includes("invalid")) return "invalid";
   if (verdicts.length) return "unchecked";
   return cap.unattributed.has(family) ? "uncertain" : null;
@@ -574,13 +580,19 @@ export function psbtSignerAuditVerification(beforeDoc, afterDoc) {
   if (decoderBudget) complete = false;
   for (let index = 0; index < inputCount; index++) {
     const beforeKeys = new Set(mapPairs(beforeDoc, index).map((pair) => lower(pair?.key)));
+    const sameKeyLeaves = new Map();
+    for (const pair of mapPairs(afterDoc, index)) {
+      if (pair?.name !== "PSBT_IN_TAP_SCRIPT_SIG") continue;
+      const xonly = entryPubkey(pair);
+      sameKeyLeaves.set(xonly, (sameKeyLeaves.get(xonly) ?? 0) + 1);
+    }
     for (const pair of mapPairs(afterDoc, index)) {
       if (!pair || !SIG_NAMES.has(pair.name) || beforeKeys.has(lower(pair.key))) continue;
       const recomputed = !rawTx ? null
         : pair.name === "PSBT_IN_PARTIAL_SIG" ? verifyPartialSig(ctx, index, pair)
         : pair.name === "PSBT_IN_TAP_KEY_SIG" ? verifyTapKeySig(ctx, index, pair)
         : verifyTapScriptSig(ctx, index, pair);
-      const valid = capped(recomputed, capFor(caps.get(index), pair), decoderBudget);
+      const valid = capped(recomputed, capFor(caps.get(index), pair, sameKeyLeaves), decoderBudget);
       if (ctx.budgetExhausted) complete = false;
       signatures.push({ index, name: pair.name, key: lower(pair.key), pubkey: entryPubkey(pair), valid });
     }

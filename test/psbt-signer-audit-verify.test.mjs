@@ -507,6 +507,44 @@ test("the Inspector's own verdict caps the signature it names, and only that one
   assert.equal(budget.complete, false);
 });
 
+test("one key in two Taproot leaves: leaf A's bad signature does not make leaf B's valid one invalid", () => {
+  // Wicked's recheck: the decoder names a script-path signature by its key
+  // only, so a problem about leaf A cannot be pinned to leaf B. Two valid
+  // leaves using the same key; the sent PSBT has an invalid leaf-A signature,
+  // the returned one keeps it and adds a valid leaf-B signature.
+  const leafA = Uint8Array.of(0x20, ...LEAF_XONLY, 0xac); // <key> OP_CHECKSIG
+  const leafB = Uint8Array.of(0x20, ...LEAF_XONLY, 0xad, 0x51); // <key> OP_CHECKSIGVERIFY OP_TRUE
+  const payment = btc.p2tr(TAP_INTERNAL, [{ script: leafA, leafVersion: 0xc0 }, { script: leafB, leafVersion: 0xc0 }], undefined, true);
+  const spk = spkOf(payment);
+  const base = () => {
+    const tx = new btc.Transaction(SCURE_ANY);
+    tx.addInput({ txid: "88".repeat(32), index: 0, witnessUtxo: { script: spk, amount: 50_000n }, tapInternalKey: TAP_INTERNAL, tapLeafScript: payment.tapLeafScript });
+    tx.addOutput({ script: DEST, amount: 40_000n });
+    return tx;
+  };
+  const digestFor = (leaf) => base().preimageWitnessV1(0, [spk], btc.SigHash.DEFAULT, [50_000n], undefined, leaf, 0xc0);
+  const badA = nobleSchnorr.sign(digestFor(leafA), LEAF_PRIV).slice();
+  badA[10] ^= 1;
+  const sigB = nobleSchnorr.sign(digestFor(leafB), LEAF_PRIV);
+  const keyA = { pubKey: LEAF_XONLY, leafHash: leafHashOf(leafA) }, keyB = { pubKey: LEAF_XONLY, leafHash: leafHashOf(leafB) };
+  const withSigs = (sigs) => {
+    const tx = base();
+    if (sigs.length) tx.updateInput(0, { tapScriptSig: sigs }, true);
+    return tx.toPSBT();
+  };
+  const after = withSigs([[keyA, badA], [keyB, sigB]]);
+  const flagged = (psbtInspectDoc(after).problems ?? []).filter((p) => p.code === "tap_sig_invalid" && p.message.startsWith(`script-path signature (xonly ${hexOf(LEAF_XONLY).slice(0, 16)}`));
+  assert.ok(flagged.length >= 1, "fixture: the decoder flags the key, not the leaf");
+  const { verification, report } = auditOf({ before: withSigs([[keyA, badA]]), after });
+  const added = verification.signatures.filter((s) => s.name === "PSBT_IN_TAP_SCRIPT_SIG");
+  assert.equal(added.length, 1, "only leaf B's signature is new");
+  assert.notEqual(added[0].valid, false, "leaf B's valid signature is not reported invalid");
+  assert.ok(!report.findings.some((f) => f.code === "SIGNATURE_INVALID"), "no SIGNATURE_INVALID is raised against leaf B");
+  // On its own, the same leaf-B signature verifies.
+  const alone = auditOf({ before: withSigs([]), after: withSigs([[keyB, sigB]]) });
+  assert.equal(alone.verification.signatures[0].valid, true);
+});
+
 test("a 2-of-2 multisig with one signer's invalid signature does not blame the other's valid one", () => {
   // Wicked's reproduction: the sent PSBT carries an invalid key-1 signature,
   // the returned one keeps it and adds a valid key-2 signature. The decoder
