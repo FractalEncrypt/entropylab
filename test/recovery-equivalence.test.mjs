@@ -772,6 +772,35 @@ test("a descriptor with text after its key expression is refused, never read pas
   }
 });
 
+test("BIP-86 taproot success path matches the spec's own addresses", () => {
+  // Literal values from bip-0086.mediawiki (account xpub, m/86'/0'/0'/0/0
+  // and m/86'/0'/0'/1/0), so a wrong p2tr path cannot agree with itself.
+  const BIP86_ADDR0 = "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr";
+  const BIP86_CHANGE0 = "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7";
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  const receive = desc(`tr([${BIP84_FPR}/86'/0'/0']${BIP86_XPUB}/0/*)`);
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: receive, address: BIP86_ADDR0 }, opts).verdict, "consistent");
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, xpub: BIP86_XPUB, address: BIP86_ADDR0 }, opts).verdict, "consistent");
+  const change = desc(`tr([${BIP84_FPR}/86'/0'/0']${BIP86_XPUB}/1/*)`);
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: change, address: BIP86_CHANGE0 }, opts).verdict, "consistent");
+  // BIP-389 multipath: one descriptor for both branches; receive index 0 is
+  // the spec's first receive address (Kimi K3, round 4 review).
+  const multipath = desc(`tr([${BIP84_FPR}/86'/0'/0']${BIP86_XPUB}/<0;1>/*)`);
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: multipath, address: BIP86_ADDR0 }, opts).verdict, "consistent");
+});
+
+test("a descriptor whose origin purpose disagrees with its template is inconsistent at Script type", () => {
+  // The 49' account key under wpkh(): the key matches the seed at the origin
+  // path, but 49' means p2sh-p2wpkh, so restoring from this descriptor shows
+  // different addresses than the wallet used (MiniMax; red-team RE-1).
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  const out = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(`wpkh([${BIP84_FPR}/49'/0'/0']${BIP49_XPUB}/0/*)`) }, opts);
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Script type");
+  // The matching template under the same origin stays consistent.
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(`sh(wpkh([${BIP84_FPR}/49'/0'/0']${BIP49_XPUB}/0/*))`) }, opts).verdict, "consistent");
+});
+
 test("a passphrase without a mnemonic is refused, not silently ignored", () => {
   const opts = { network: "mainnet", receiveIndex: 0 };
   const out = compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: BIP39_PASSPHRASE }, opts);

@@ -366,8 +366,14 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     } else {
       descriptorClaims = parsed;
       checksumStatus = parsed.checksumAbsent ? "absent" : "verified";
+      // descriptorDerive refuses BIP-389 multipath (one call derives one
+      // branch), so a /<0;1>/* descriptor is evaluated on its receive branch,
+      // /0/*, matching descriptorClaims.branch. Its checksum was verified
+      // above against the multipath text, so the single-path form drops it.
+      const body = supplied.descriptor.split("#")[0];
+      const derivable = body.includes("/<0;1>/*") ? body.replace("/<0;1>/*", "/0/*") : supplied.descriptor;
       try {
-        descriptorAddress = descriptorDerive(supplied.descriptor, receiveIndex, descriptorClaims.keyNetwork).address;
+        descriptorAddress = descriptorDerive(derivable, receiveIndex, descriptorClaims.keyNetwork).address;
       } catch (err) {
         steps.push(stepFail("Support", `descriptor does not derive at index ${receiveIndex}: ${err.message}`));
         descriptorClaims = null;
@@ -573,13 +579,22 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     }
   }
 
-  // ---- Script-type claims: each SLIP-132 prefix claims a script type, and
-  // the descriptor template claims one. Any disagreement is a mismatch.
+  // ---- Script-type claims: each SLIP-132 prefix claims a script type, as
+  // do the descriptor template and its origin purpose. Any disagreement is a
+  // mismatch.
   const scriptClaims = [];
   for (const claim of keyClaims) {
     if (claim.scriptTypeClaim) scriptClaims.push({ source: claim.source, scriptType: claim.scriptTypeClaim });
   }
   if (descriptorClaims) scriptClaims.push({ source: "descriptor template", scriptType: descriptorClaims.scriptType });
+  // A standard origin purpose claims one too: 49' is p2sh-p2wpkh, so a
+  // wpkh() template under a 49' origin (a ypub imported as wpkh) restores
+  // different addresses than the wallet used, and is a mismatch.
+  if (descriptorClaims?.originPath) {
+    const purpose = Number(/^\/(\d+)'/.exec(descriptorClaims.originPath)?.[1]);
+    const standard = PURPOSE_SCRIPT_TYPE.find((p) => p.purpose === purpose);
+    if (standard) scriptClaims.push({ source: `descriptor origin ${purpose}'`, scriptType: standard.scriptType });
+  }
   for (let i = 0; i < scriptClaims.length; i++) {
     for (let j = i + 1; j < scriptClaims.length; j++) {
       if (scriptClaims[i].scriptType === scriptClaims[j].scriptType) {
