@@ -354,12 +354,18 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
     : tier === "pass-warnings"
       ? `<p class="edge-note is-info" data-audit-verdict="pass-warnings"><strong>Your transaction is unchanged — review the warnings below</strong></p>`
       : `<p class="edge-note is-public" data-audit-verdict="pass"><strong>No changes to your transaction</strong></p>`;
+  // One label/value row for every check and the signature count: the value
+  // always sits beside its label in the shared value style (data-audit-value),
+  // and its tone only colours it; neutral values (unchecked, unavailable,
+  // the count) stay distinct from green (Wicked's review of #1118).
+  const valueRow = (label, value, key, tone) =>
+    `<li><span class="label">${label}</span> — <span class="psbt-audit-value ${TONE_CLASS[tone]}" data-audit-value data-audit-check="${key}" data-audit-tone="${tone}">${value}</span></li>`;
   const checkRows = CHECK_ROWS.map(([key, label, values]) => {
     const [text, tone] = values[report?.checks?.[key]] ?? ["Unknown", "warn"];
-    return `<li><span class="label">${label}</span> — <span class="${TONE_CLASS[tone]}" data-audit-check="${key}" data-audit-tone="${tone}">${text}</span></li>`;
+    return valueRow(label, text, key, tone);
   }).join("");
   const stats = report?.stats && report.stats.newSignatures > 0
-    ? `<li><span class="label">New signatures</span> — <span class="muted">${escapeHtml(String(report.stats.newSignatures))}</span></li>`
+    ? valueRow("New signatures", escapeHtml(String(report.stats.newSignatures)), "newSignatures", "muted")
     : "";
   const groupOf = (code) => {
     const at = FINDING_GROUPS.findIndex(([, codes]) => codes.includes(code));

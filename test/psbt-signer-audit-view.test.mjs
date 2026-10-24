@@ -10,6 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { loadAppFunctions } from "./app-slice-harness.mjs";
 import { SIGNER_AUDIT_CODES } from "../src/js/psbt-signer-audit.js";
 import { comparePsbtDocs } from "../src/js/psbt-diff.js";
 import { psbtSignerAuditVerification } from "../src/js/psbt-signer-audit-verify.js";
@@ -224,6 +225,18 @@ test("every check value maps to its tone, and an unrecognized value never render
   assert.ok(!html.includes('data-audit-check="transactionBody" data-audit-tone="ok"'));
 });
 
+test("every checklist row, the signature count included, is one label/value row with a toned value", () => {
+  // Wicked's review of #1118: one shared row shape. The count used to be a
+  // bare neutral span outside it; now it is a value like the others, in the
+  // neutral tone, distinct from a passed (ok) check.
+  const html = psbtSignerAuditHtml(reportFor([], { stats: { inputs: 1, outputs: 1, newSignatures: 1, feeBefore: null, feeAfter: null } }), null, null, "mainnet");
+  assert.equal((html.match(/data-audit-value/g) ?? []).length, 10, "nine checks plus the signature count");
+  assert.ok(html.includes('data-audit-check="newSignatures" data-audit-tone="muted"'));
+  for (const key of ["nonceReuse", "antiExfil", "changeOutputs"]) {
+    assert.ok(new RegExp(`data-audit-check="${key}" data-audit-tone="(muted|warn)"`).test(html), `${key} unchecked is not the ok tone`);
+  }
+});
+
 test("an undecodable-document report renders the error finding, unknown checks, and no diff", () => {
   const report = {
     verdict: "fail",
@@ -286,18 +299,149 @@ test("the app-wide session wipe also retires a shown signer-audit verdict", () =
   assert.ok(cleared - emptied < 400, "the call belongs right after the #psbt-audit-before wipe");
 });
 
-// Item 2: retiring a shown verdict must not bypass the Inspect button's own
-// rules — the ordinary input sync decides the button state, so a field that
-// does not decode never enables Inspect.
-test("retiring a shown signer-audit verdict re-enables Inspect for the same inputs", () => {
+// Behavior tests for the audit's UI state (Wicked's review of #1118), run
+// on app.js's own functions through the slice harness, not on its text.
+const fakeOutput = () => {
+  const output = { innerHTML: "", childElementCount: 1 };
+  output.insertAdjacentHTML = (where, html) => { output.innerHTML = html + output.innerHTML; };
+  output.querySelector = () => (output.innerHTML.startsWith("AUDIT") ? { remove: () => { output.innerHTML = output.innerHTML.replace(/^AUDIT[^|]*\|/, ""); } } : null);
+  return output;
+};
+
+test("retiring a shown verdict re-enables Inspect even when the inputs trim back to the inspected ones", async () => {
+  const fields = { "psbt-text": { value: "RETURNED" }, "psbt-audit-before": { value: "SENT" } };
+  const output = fakeOutput();
+  const element = (id) => fields[id] ?? (id === "psbt-out" ? output : { value: "", hidden: false, classList: { toggle: () => {} } });
+  const enabled = {};
+  const app = await loadAppFunctions(["hodlPsbtClearSignerAudit", "hodlMarkPsbtInspected", "hodlSyncPsbtControls"], { settable: ["hodlPsbtInspected", "hodlPsbtLast"], stubs: {
+    document: { getElementById: element },
+    hodlSetButtonEnabled: (id, on) => { enabled[id] = on; },
+    hodlPsbtBytes: (text) => { if (!String(text).trim()) throw new Error("empty"); return new Uint8Array([1]); },
+    hodlStationPassphraseStamp: () => "",
+    hodlPsbtPriv: null,
+    hodlPsbtHd: null,
+    hodlPsbtSessionSpec: { key: "No session key. Inspect-only mode." },
+    hodlPsbtNonceHistory: [],
+  } });
+  const inspected = {};
+  app.__set.hodlPsbtInspected(inspected);
+  app.__set.hodlPsbtLast(null);
+  const showAudit = () => { output.innerHTML = "AUDIT fail|inspection"; };
+
+  // Inspect ran on this pair: the button waits for a change.
+  app.hodlMarkPsbtInspected("psbt-go");
+  app.hodlSyncPsbtControls();
+  assert.equal(enabled["psbt-go"], false);
+
+  // A trailing space retires the verdict; the trimmed inputs still match
+  // the old stamp, yet Inspect must come back so the verdict can be restored.
+  showAudit();
+  fields["psbt-audit-before"].value = "SENT ";
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(output.querySelector(), null, "the verdict is gone");
+  assert.equal(enabled["psbt-go"], true);
+
+  // Edit and revert: the same.
+  app.hodlMarkPsbtInspected("psbt-go");
+  showAudit();
+  fields["psbt-audit-before"].value = "SENTx";
+  fields["psbt-audit-before"].value = "SENT";
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(enabled["psbt-go"], true);
+
+  // A returned PSBT that does not decode still never enables Inspect.
+  showAudit();
+  fields["psbt-text"].value = "";
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(enabled["psbt-go"], false);
+});
+
+test("a language change paints a failing audit again; a retired one stays gone", async () => {
+  const outputs = { "psbt-out": fakeOutput(), "nonce-out": fakeOutput() };
+  const app = await loadAppFunctions(["hodlRefreshPsbtLocale", "hodlPsbtClearSignerAudit"], { settable: ["hodlPsbtLast", "hodlNonceLast", "hodlPsbtInspected"], stubs: {
+    document: { getElementById: (id) => outputs[id] ?? null },
+    hodlPaintPsbtSession: () => {},
+    hodlPaintPsbtKeyNotes: () => {},
+    hodlSetPsbtError: () => {},
+    hodlSetNonceError: () => {},
+    hodlPsbtSyncNonceHistoryControls: () => {},
+    hodlSyncPsbtControls: () => {},
+    hodlRenderPsbt: () => "inspection",
+    hodlRenderRawTx: () => "inspection",
+    hodlPsbtSignerAuditHtml: (report) => `AUDIT ${report.verdict}|`,
+    hodlPsbtSignerAuditErrorHtml: (message) => `AUDIT error ${message}|`,
+  } });
+  const last = { kind: "psbt", parsed: {}, sourceTag: new Uint8Array([1]), checkedAt: "t", network: "mainnet", audit: { report: { verdict: "fail" }, beforeDoc: {}, afterDoc: {}, network: "mainnet" } };
+  app.__set.hodlPsbtLast(last);
+  app.__set.hodlNonceLast(null);
+  app.__set.hodlPsbtInspected({});
+  app.hodlRefreshPsbtLocale();
+  assert.equal(outputs["psbt-out"].innerHTML, "AUDIT fail|inspection", "the critical verdict survives the switch");
+
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(last.audit, null);
+  app.hodlRefreshPsbtLocale();
+  assert.equal(outputs["psbt-out"].innerHTML, "inspection", "a retired verdict is not painted back");
+
+  // An audit that could not run (its error) is painted again the same way.
+  last.audit = { error: "not a PSBT" };
+  app.hodlRefreshPsbtLocale();
+  assert.equal(outputs["psbt-out"].innerHTML, "AUDIT error not a PSBT|inspection");
+});
+
+test("an audit upload that finishes after the session ends writes nothing back, success or error", async () => {
+  const field = { value: "" };
+  const errors = [];
+  let cleared = 0;
+  const app = await loadAppFunctions(["hodlPsbtLoadAuditUpload", "hodlPsbtRetireAuditUploads"], { stubs: {
+    document: { getElementById: (id) => (id === "psbt-audit-before" ? field : null) },
+    psbtBytesFromUpload: (bytes) => bytes,
+    hodlBytesToB64: () => "SENT-B64",
+    hodlPsbtClearSignerAudit: () => { cleared += 1; },
+    hodlSetPsbtError: (spec) => { errors.push(spec); },
+    hodlSyncPsbtControls: () => {},
+  } });
+  const pending = () => {
+    let settle;
+    const promise = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+    return { chosen: { arrayBuffer: () => promise }, settle };
+  };
+
+  // Control: an upload nothing interrupts fills the field.
+  let read = pending(), load = app.hodlPsbtLoadAuditUpload(read.chosen);
+  read.settle.resolve(new ArrayBuffer(4));
+  await load;
+  assert.equal(field.value, "SENT-B64");
+
+  // The session ends while the read is pending: nothing comes back.
+  field.value = "";
+  read = pending();
+  load = app.hodlPsbtLoadAuditUpload(read.chosen);
+  app.hodlPsbtRetireAuditUploads();
+  read.settle.resolve(new ArrayBuffer(4));
+  await load;
+  assert.equal(field.value, "", "a retired upload does not restore the cleared field");
+
+  // Nor does a retired read that fails show its stale error.
+  read = pending();
+  load = app.hodlPsbtLoadAuditUpload(read.chosen);
+  app.hodlPsbtRetireAuditUploads();
+  read.settle.reject(new Error("read failed"));
+  await load;
+  assert.deepEqual(errors, []);
+  assert.equal(cleared, 1, "only the uninterrupted upload retired a verdict");
+});
+
+test("both session wipes retire pending audit uploads", () => {
   const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
-  const start = source.indexOf("function hodlPsbtClearSignerAudit()");
-  assert.ok(start >= 0, "fixture: hodlPsbtClearSignerAudit is in app.js");
-  const next = source.indexOf("\nfunction ", start + 1);
-  const body = source.slice(start, next === -1 ? undefined : next);
-  assert.ok(body.includes("hodlSyncPsbtControls()"), "the retirement must let the input sync decide the Inspect button");
-  assert.ok(!body.includes('"psbt-go"'), "the retirement must not touch the Inspect button directly");
-  assert.ok(!/disabled\s*=\s*false/.test(body), "the retirement must not force-enable Inspect");
+  const bodyOf = (name) => {
+    const start = source.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `fixture: ${name} is in app.js`);
+    const next = source.indexOf("\nfunction ", start + 1);
+    return source.slice(start, next === -1 ? undefined : next);
+  };
+  assert.ok(bodyOf("hodlEndPsbtSession").includes("hodlPsbtRetireAuditUploads()"), "End Session retires pending uploads");
+  assert.ok(bodyOf("hodlInitSecretFieldAutoClear").includes("hodlPsbtRetireAuditUploads()"), "the app-wide wipe retires pending uploads");
 });
 
 // Item 3: a PSBT with very many inputs must not overflow the argument limit
