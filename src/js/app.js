@@ -16168,11 +16168,10 @@ async function hodlLoadTestKeys() {
 }
 // Each tool carries a full name and a short one. Narrow screens show the
 // short form so more tools stay on screen instead of off the right edge.
-var hodlWorkspaceTabs = [["calc", "Keys", "Keys"], ["msig", "Multi Signature", "MultiSig"], ["psbt", "Transactions", "Txns"], ...(__ENTROPYLAB_TEST_HOOKS__ ? [["core", "Core Wallet", "Core"]] : []), ["bip85", "BIP-85 Child", "BIP-85"], ["sp", "Silent Payments", "SP"], ["vanity", "Vanity Address", "Vanity"], ...(__ENTROPYLAB_TEST_HOOKS__ ? [["journal", "Journal", "Journal"]] : [])];
-// Lightning, Core Wallet and Journal are held back from release navigation
-// while their implementations remain in source. Test builds keep Core Wallet
-// and Journal reachable so their behavior (and Journal backup compatibility)
-// stay covered until the team opens them.
+var hodlWorkspaceTabs = [["calc", "Keys", "Keys"], ["msig", "Multi Signature", "MultiSig"], ["psbt", "Transactions", "Txns"], ...(__ENTROPYLAB_TEST_HOOKS__ ? [["core", "Core Wallet", "Core"]] : []), ["bip85", "BIP-85 Child", "BIP-85"], ["sp", "Silent Payments", "SP"], ["vanity", "Vanity Address", "Vanity"], ["journal", "Journal", "Journal"]];
+// Lightning is still held back from release navigation while its
+// implementation remains in source. Core Wallet stays reachable in test
+// builds only, until the follow-up that opens it. The Journal tab is released.
 var hodlPsbtTool = "inspector";
 function hodlSyncPsbtTool() {
   let visible = hodlWorkspace === "psbt",
@@ -19473,7 +19472,7 @@ function hodlInitWorkspace() {
   hodlInitJournalNotebook();
   hodlInitMsig();
   hodlInitPsbt();
-  initPsbtEditor({ networkDefault: () => hodlInspectorNetwork(), copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup });
+  initPsbtEditor({ networkDefault: () => hodlInspectorNetwork(), copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup, journalLog: hodlJournalLog });
   initCoreWallet({ deps: hodlWalletDatDeps(), onImportIntoStation: hodlCoreImportIntoStation, copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup });
   hodlInitBip85();
   hodlInitVanity();

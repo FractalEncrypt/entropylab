@@ -1713,15 +1713,27 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs retain Core Wallet and the Journal only in test builds", () => {
-  for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
-    /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
-    /\["core", "Core Wallet", "Core"\]/,
-    /\["journal", "Journal", "Journal"\]/]) {
-    assert.match(appSource, entry);
-  }
-  assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["journal", "Journal", "Journal"\]\] : \[\]/);
-  assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["core", "Core Wallet", "Core"\]\] : \[\]/);
+test("workspace tabs ship the Journal, keep Core Wallet to test builds and hold back Lightning", () => {
+  // The release tab list is unconditional apart from Core Wallet, which stays
+  // test-build-only until its follow-up opens it: exactly seven release
+  // entries, in order, with the Journal released and Lightning held back.
+  const declaration = appSource.match(/^var hodlWorkspaceTabs = (\[.*\]);$/m);
+  assert.ok(declaration, "the workspace tab list is missing");
+  const coreGate = '...(__ENTROPYLAB_TEST_HOOKS__ ? [["core", "Core Wallet", "Core"]] : []), ';
+  assert.ok(declaration[1].includes(coreGate), "Core Wallet stays behind the test-build gate");
+  const release = declaration[1].replace(coreGate, "");
+  assert.doesNotMatch(release, /__ENTROPYLAB_TEST_HOOKS__|\.\.\./, "no other release tab may be gated behind test hooks");
+  const entries = [...release.matchAll(/\["([a-z0-9]+)", "([^"]*)", "([^"]*)"\]/g)].map((match) => [match[1], match[2], match[3]]);
+  assert.deepEqual(entries, [
+    ["calc", "Keys", "Keys"],
+    ["msig", "Multi Signature", "MultiSig"],
+    ["psbt", "Transactions", "Txns"],
+    ["bip85", "BIP-85 Child", "BIP-85"],
+    ["sp", "Silent Payments", "SP"],
+    ["vanity", "Vanity Address", "Vanity"],
+    ["journal", "Journal", "Journal"],
+  ]);
+  assert.equal(entries.some((entry) => entry[0] === "ln"), false, "Lightning stays held back from the release tab list");
   // Release first paint and no-JS show the static strip: a held-back tool has no button there.
   assert.doesNotMatch(shell, /aria-controls="core-card"/);
   for (const markup of [shell]) {
@@ -2026,12 +2038,6 @@ test("Key Station keeps derivation actions focused and BIP-85 remains its own wo
   for (const id of ["journal-open", "journal-use-calc", "bip85-open"]) assert.equal(document.getElementById(id), null);
   assert.doesNotMatch(appSource, /getElementById\("bip85-open"\)/);
   assert.doesNotMatch(appSource, /getElementById\("journal-open"\)|getElementById\("journal-use-calc"\)|hodlJournalUseActiveKey|hodlJournalApplySnapshot/);
-  for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
-    /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
-    /\["core", "Core Wallet", "Core"\]/,
-    /\["journal", "Journal", "Journal"\]/]) {
-    assert.match(appSource, entry);
-  }
   // The tab keeps its own way to adopt a key, so the removal must not have
   // taken the underlying session-key path with it.
   assert.match(appSource, /function hodlPickBip85SessionKey\(/);
