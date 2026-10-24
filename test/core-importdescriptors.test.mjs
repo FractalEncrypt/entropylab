@@ -469,6 +469,21 @@ test("deriveaddresses commands keep descriptor-unit order and per-unit windows",
   assert.equal(commands.split("\n")[1], `deriveaddresses "${jsonChange.desc}" "[0,7]"`);
 });
 
+test("branch-aware deriveaddresses needs an explicit displayed window and ignores the lookahead rangeEnd", () => {
+  // The projection's units carry rangeEnd (displayed end plus Core's
+  // importdescriptors lookahead); deriveaddresses must check the displayed
+  // window only, and never fall back to [0,19] for a unit without one.
+  const units = [
+    { descriptor: bip84Receive, internal: false, active: true, rangeEnd: 5002 },
+    { descriptor: bip84Change, internal: true, active: true, rangeEnd: 5003 },
+  ];
+  assert.throws(() => buildDeriveAddressesCommands({ descriptorUnits: units }), /displayedEnd/);
+  assert.equal(
+    buildDeriveAddressesCommands({ descriptorUnits: units, displayedEnd: 5 }),
+    `deriveaddresses "${bip84Receive}" "[0,5]"\nderiveaddresses "${bip84Change}" "[0,5]"\n`,
+  );
+});
+
 test("deriveaddresses rewrites SLIP-132 zpub to xpub", () => {
   const raw = b58checkDecode(bip84.publicExtendedKey);
   raw.set([0x04, 0xb2, 0x47, 0x46]);
