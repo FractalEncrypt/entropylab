@@ -319,3 +319,44 @@ test("the attestation walker refuses the same op twice at one node", (t) => {
   assert.equal(status([...header, 0xff, 0xf0, 1, 0xaa, ...att(1), 0xf0, 1, 0xbb, ...att(2)]), 0, "two different appends at one node");
   assert.equal(status([...header, 0x08, 0x08, ...att(1)]), 0, "sha256 under sha256 (different nodes)");
 });
+
+test("the proof push survives a rock that moved: bounded retry, re-checked commit, no force", () => {
+  // Rock CI run 39990729021: the translation bot pushed between the job's
+  // fetch and its push, so the proof push was rejected and the run went red
+  // although the site had built and deployed. A moved rock is re-fetched and
+  // the proof rebased and re-checked, a bounded number of times.
+  const all = steps(jobBlock(read(".github/workflows/ci-cd.yml"), "timestamp-push"));
+  const push = all.find((step) => step.includes("push origin HEAD:rock"));
+  assert.ok(push, "the push step exists");
+  // Bounded retry: a fixed number of retries, then a clear error.
+  assert.match(push, /^ {10}MAX_RETRIES=3$/m, "the retry is bounded");
+  assert.match(
+    push,
+    /if \[ "\$attempt" -ge "\$MAX_RETRIES" \]; then\n\s+echo "::error::[^"]*"\n\s+exit 1/,
+    "exhausting the retries is an error, not a silent success",
+  );
+  // Only a rejected push is retried; an auth or network error fails at once.
+  assert.match(push, /grep -Eq '[^']*rejected[^']*'/, "only a rejected push is retried");
+  assert.match(push, /echo "::error::pushing the proof failed for a reason other than a moved rock"/, "any other push error fails at once");
+  // A moved rock is fetched again and its HTML digest read from the ref, not
+  // from the working tree (which is the rock this job started from).
+  assert.match(push, /git fetch --quiet origin rock/, "the moved rock is fetched again");
+  assert.match(push, /git show origin\/rock:entropylab\.html \| sha256sum/, "the digest comes from origin/rock");
+  // A newer site build supersedes this proof: push nothing, exit 0.
+  assert.match(
+    push,
+    /if \[ "\$ON_ROCK" != "\$EXPECTED" \]; then\n\s+echo "[^"]*superseded[^"]*"\n\s+exit 0/,
+    "a superseded proof exits 0 without pushing",
+  );
+  // A well-formed proof already on rock is kept, as in "Commit the proof".
+  assert.match(push, /git show origin\/rock:entropylab\.html\.ots/, "rock's proof is read from the ref");
+  assert.match(push, /python3 "\$WALKER" "\$RUNNER_TEMP\/rock\.ots"/, "the same attestation walk decides");
+  // The single proof commit is replayed, then the same two checks run.
+  assert.match(push, /git -c core\.hooksPath=\/dev\/null rebase origin\/rock/, "the proof commit is rebased with hooks disabled");
+  const rebase = push.indexOf("rebase origin/rock");
+  assert.ok(push.indexOf("rev-list --count origin/rock..HEAD", rebase) > rebase, "one commit ahead is re-checked after the rebase");
+  assert.ok(push.indexOf("diff --name-only origin/rock..HEAD", rebase) > rebase, "the proof-only rule is re-checked after the rebase");
+  // Never force-push, and never push anything but the one proof commit.
+  assert.doesNotMatch(push, /--force|force-with-lease|\+HEAD:rock/, "no force push");
+  assert.doesNotMatch(push, /push\s+-f\b/, "no short force flag");
+});
