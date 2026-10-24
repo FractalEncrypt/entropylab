@@ -48,6 +48,7 @@
         <button type="button" class="workspace-tab active" role="tab" aria-selected="true" aria-controls="calc-card" aria-label="Keys"><span class="workspace-tab-full">Keys</span><span class="workspace-tab-short">Keys</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="msig-card" aria-label="Multi Signature"><span class="workspace-tab-full">Multi Signature</span><span class="workspace-tab-short">MultiSig</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="psbt-card psbted-card nonce-card" aria-label="Transactions"><span class="workspace-tab-full">Transactions</span><span class="workspace-tab-short">Txns</span></button>
+        <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="core-card" aria-label="Core Wallet"><span class="workspace-tab-full">Core Wallet</span><span class="workspace-tab-short">Core</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="bip85-card" aria-label="BIP-85 Child"><span class="workspace-tab-full">BIP-85 Child</span><span class="workspace-tab-short">BIP-85</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="sp-card" aria-label="Silent Payments"><span class="workspace-tab-full">Silent Payments</span><span class="workspace-tab-short">SP</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="vanity-card" aria-label="Vanity Address"><span class="workspace-tab-full">Vanity Address</span><span class="workspace-tab-short">Vanity</span></button>
@@ -181,6 +182,7 @@ words, pick one of the checksum words.</span></span>
               <div class="field"><div class="field-head"><label for="address-start" id="address-start-label">Starting address index</label><label class="derivation-harden"><input id="address-start-harden" type="checkbox"><span>Harden</span></label></div>
                 <div class="derivation-index-control"><span class="derivation-index-value"><input id="address-start" type="text" inputmode="numeric" value="0" aria-describedby="address-start-help"></span></div>
                 <span class="field-note" id="address-start-help">First address index to derive · Unhardened · 0 to 2,147,483,647</span>
+                <p class="edge-note is-info" id="address-start-gap-note" data-gap-limit-note hidden></p>
               </div>
               <label class="field">Address range
                 <input id="address-range" type="number" min="1" max="10000" step="1" inputmode="numeric" value="10" aria-describedby="address-range-help">
@@ -488,6 +490,7 @@ words, pick one of the checksum words.</span></span>
               <div class="field"><div class="field-head"><label for="msig-address-start">Starting address index</label><label class="derivation-harden"><input id="msig-address-start-harden" type="checkbox"><span>Harden</span></label></div>
                 <div class="derivation-index-control"><span class="derivation-index-value"><input id="msig-address-start" type="number" min="0" max="2147483647" step="1" inputmode="numeric" value="0" aria-describedby="msig-address-start-help"><span class="derivation-index-prime" aria-hidden="true">'</span></span></div>
                 <span class="field-note" id="msig-address-start-help">First receive and change index to derive · Unhardened · 0 to 2,147,483,647</span>
+                <p class="edge-note is-info" id="msig-address-start-gap-note" data-gap-limit-note hidden></p>
               </div>
               <label class="field">Address range
                 <input id="msig-address-range" type="number" min="1" max="10000" step="1" inputmode="numeric" value="10" aria-describedby="msig-address-range-help">
