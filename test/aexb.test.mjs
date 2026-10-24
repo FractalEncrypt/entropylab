@@ -81,16 +81,16 @@ test("positive AEXB messages decode and verify", () => {
     assert.equal(bytesToHex(aexbEncode(decoded)), vector.message_hex);
   }
 
-  const stage1 = byStage.get(1);
+  const stage2 = byStage.get(2);
   const reveal = byStage.get(3);
   const signatures = byStage.get(4);
-  const revealResult = aexbVerify(reveal, null, stage1);
+  const revealResult = aexbVerify(reveal, null, stage2);
   assert.equal(revealResult.ok, true);
   assert.equal(revealResult.verdict, "ok");
   assert.equal(revealResult.slots.length, positive.slot_count);
   assert.ok(revealResult.slots.every((slot) => slot.ok));
 
-  const signatureResult = aexbVerify(signatures, reveal, stage1);
+  const signatureResult = aexbVerify(signatures, reveal, stage2);
   assert.equal(signatureResult.ok, true);
   assert.equal(signatureResult.verdict, "ok");
   assert.equal(signatureResult.slots.length, positive.slot_count);
@@ -128,16 +128,37 @@ test("negative vectors fail closed with the reference error code", () => {
   }
 });
 
-test("transport vectors round-trip", () => {
+test("transport vectors round-trip and embedded messages decode", () => {
   for (const vector of transport.vectors) {
     const decoded = aextDecodePackage(vector.package_hex);
     assert.equal(decoded.stage, vector.stage);
     assert.equal(bytesToHex(aextEncodePackage(decoded)), vector.package_hex);
+
+    // transport-v1-vectors.json preserves the historical single-slot
+    // RungBMessage physical-prototype packages. protocol-v1-wire-format.md §1
+    // states the historical and v1 layouts are not interchangeable despite
+    // sharing the AEXB magic and version byte, so the v1 decoder must reject
+    // them. Decode every embedded message that is AEXB v1; for the historical
+    // single-slot payloads, assert the historical header instead of skipping
+    // silently.
+    let embedded;
+    try {
+      embedded = aexbDecode(decoded.message);
+    } catch (err) {
+      assert.ok(err instanceof AexbError);
+      assert.equal(bytesToHex(decoded.message.slice(0, 4)), "41455842");
+      assert.equal(decoded.message[4], 1);
+      const historicalLength = (decoded.message[6] << 8) | decoded.message[7];
+      assert.equal(decoded.message.length, 8 + historicalLength);
+      continue;
+    }
+    assert.equal(embedded.stage, vector.stage);
+    assert.equal(embedded.network, decoded.network);
   }
 });
 
 test("a changed signature r fails the S2C check", () => {
-  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
   const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
   const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
   const tampered = {
@@ -146,7 +167,7 @@ test("a changed signature r fails the S2C check", () => {
       index === 0 ? { ...slot, signature: flipFirstByte(slot.signature) } : slot
     )
   };
-  const result = aexbVerify(tampered, reveal, stage1);
+  const result = aexbVerify(tampered, reveal, stage2);
   assert.equal(result.ok, false);
   assert.equal(result.verdict, "fail");
   assert.equal(result.slots[0].ok, false);
@@ -154,7 +175,7 @@ test("a changed signature r fails the S2C check", () => {
 });
 
 test("a changed host reveal fails the commitment check", () => {
-  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
   const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
   const tampered = {
     ...reveal,
@@ -162,7 +183,7 @@ test("a changed host reveal fails the commitment check", () => {
       index === 0 ? { ...slot, rho: flipFirstByte(slot.rho) } : slot
     )
   };
-  const result = aexbVerify(tampered, null, stage1);
+  const result = aexbVerify(tampered, null, stage2);
   assert.equal(result.ok, false);
   assert.equal(result.verdict, "fail");
   assert.equal(result.slots[0].ok, false);
@@ -170,7 +191,7 @@ test("a changed host reveal fails the commitment check", () => {
 });
 
 test("a high-S signature fails the low-S check", () => {
-  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
   const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
   const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
   const N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
@@ -185,7 +206,7 @@ test("a high-S signature fails the low-S check", () => {
       return { ...slot, signature };
     })
   };
-  const result = aexbVerify(tampered, reveal, stage1);
+  const result = aexbVerify(tampered, reveal, stage2);
   assert.equal(result.ok, false);
   assert.equal(result.verdict, "fail");
   assert.equal(result.slots[0].ok, false);
@@ -212,8 +233,8 @@ test("an empty slot set fails closed", () => {
   assert.equal(signatureResult.reason, "EMPTY_SLOT_SET");
 });
 
-test("a reveal not bound to the stage-1 commitment fails", () => {
-  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+test("a reveal not bound to the stage-2 commitment fails", () => {
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
   const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
   const forged = {
     ...reveal,
@@ -223,7 +244,7 @@ test("a reveal not bound to the stage-1 commitment fails", () => {
       return { ...slot, rho, commitment: taggedHash("s2c/ecdsa/data", rho) };
     })
   };
-  const result = aexbVerify(forged, null, stage1);
+  const result = aexbVerify(forged, null, stage2);
   assert.equal(result.ok, false);
   assert.equal(result.verdict, "fail");
   assert.equal(result.slots[0].ok, false);
@@ -231,7 +252,7 @@ test("a reveal not bound to the stage-1 commitment fails", () => {
 });
 
 test("a changed stage-3 commitment fails the commitment binding", () => {
-  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
   const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
   const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
   const tampered = {
@@ -241,17 +262,62 @@ test("a changed stage-3 commitment fails the commitment binding", () => {
     )
   };
 
-  const revealResult = aexbVerify(tampered, null, stage1);
+  const revealResult = aexbVerify(tampered, null, stage2);
   assert.equal(revealResult.ok, false);
   assert.equal(revealResult.verdict, "fail");
   assert.equal(revealResult.slots[0].ok, false);
   assert.equal(revealResult.slots[0].reason, "COMMITMENT_MISMATCH");
 
-  const signatureResult = aexbVerify(signatures, tampered, stage1);
+  const signatureResult = aexbVerify(signatures, tampered, stage2);
   assert.equal(signatureResult.ok, false);
   assert.equal(signatureResult.verdict, "fail");
   assert.equal(signatureResult.slots[0].ok, false);
   assert.equal(signatureResult.slots[0].reason, "COMMITMENT_MISMATCH");
+});
+
+test("a stage-1-only commitment is refused without the stage-2 openings", () => {
+  const stage1 = aexbDecode(positive.messages.find((m) => m.stage === 1).message_hex);
+  const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
+  const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
+
+  const revealResult = aexbVerify(reveal, null, stage1);
+  assert.equal(revealResult.ok, false);
+  assert.equal(revealResult.verdict, "fail");
+  assert.equal(revealResult.reason, "MISSING_STAGE2_OPENING");
+
+  const signatureResult = aexbVerify(signatures, reveal, stage1);
+  assert.equal(signatureResult.ok, false);
+  assert.equal(signatureResult.verdict, "fail");
+  assert.equal(signatureResult.reason, "MISSING_STAGE2_OPENING");
+});
+
+test("a stage-3 opening that differs from the stage-2 opening is refused", () => {
+  const stage2 = aexbDecode(positive.messages.find((m) => m.stage === 2).message_hex);
+  const reveal = aexbDecode(positive.messages.find((m) => m.stage === 3).message_hex);
+  const signatures = aexbDecode(positive.messages.find((m) => m.stage === 4).message_hex);
+
+  const tamperedReveal = {
+    ...reveal,
+    slots: reveal.slots.map((slot, index) =>
+      index === 0 ? { ...slot, opening: flipFirstByte(slot.opening) } : slot
+    )
+  };
+  const revealResult = aexbVerify(tamperedReveal, null, stage2);
+  assert.equal(revealResult.ok, false);
+  assert.equal(revealResult.verdict, "fail");
+  assert.equal(revealResult.reason, "OPENING_MISMATCH");
+
+  const tamperedSignatures = {
+    ...signatures,
+    slots: signatures.slots.map((slot, index) =>
+      index === 0 ? { ...slot, opening: flipFirstByte(slot.opening) } : slot
+    )
+  };
+  const signatureResult = aexbVerify(tamperedSignatures, reveal, stage2);
+  assert.equal(signatureResult.ok, false);
+  assert.equal(signatureResult.verdict, "fail");
+  assert.equal(signatureResult.slots[0].ok, false);
+  assert.equal(signatureResult.slots[0].reason, "OPENING_MISMATCH");
 });
 
 test("message 4 without the accepted reveal fails closed", () => {

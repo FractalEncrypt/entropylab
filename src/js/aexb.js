@@ -165,10 +165,13 @@ function verifySignatures(signatures, reveal, commitment) {
       !equalBytes(sigSlot.signerPubkey, revealSlot.signerPubkey) ||
       !equalBytes(sigSlot.messageHash, revealSlot.messageHash) ||
       sigSlot.sighashType !== revealSlot.sighashType ||
-      !equalBytes(sigSlot.commitment, revealSlot.commitment) ||
-      !equalBytes(sigSlot.opening, revealSlot.opening)
+      !equalBytes(sigSlot.commitment, revealSlot.commitment)
     ) {
       slots.push({ slot: index, ok: false, reason: "TRANSCRIPT_MISMATCH" });
+      continue;
+    }
+    if (!equalBytes(sigSlot.opening, revealSlot.opening)) {
+      slots.push({ slot: index, ok: false, reason: "OPENING_MISMATCH" });
       continue;
     }
     if (!revealSlot.rho || revealSlot.rho.length !== 32) {
@@ -241,13 +244,18 @@ function verifySignatures(signatures, reveal, commitment) {
 // The Python reference binds the reveal to the earlier commitment through
 // validate_transition(): each adjacent stage must repeat the same commitment,
 // and the stage-3 reveal is checked against that repeated commitment. This
-// module has no transition validator, so the caller supplies the stage-1/2
-// message and we perform the equivalent binding explicitly.
+// module has no transition validator, so the caller supplies the stage-2
+// message (the signer's pre-reveal opening commitment) and we perform the
+// equivalent binding explicitly. A stage-1-only commitment cannot bind the
+// openings, so it is refused rather than reported as "ok".
 function checkCommitmentBinding(message, commitment) {
   if (!commitment || typeof commitment !== "object") {
     return { fail: fail("MISSING_COMMITMENT") };
   }
-  if (commitment.stage !== 1 && commitment.stage !== 2) {
+  if (commitment.stage === 1) {
+    return { fail: fail("MISSING_STAGE2_OPENING") };
+  }
+  if (commitment.stage !== 2) {
     return { fail: fail("INVALID_COMMITMENT") };
   }
   if (!Array.isArray(commitment.slots)) {
@@ -272,8 +280,8 @@ function checkCommitmentBinding(message, commitment) {
     ) {
       return { fail: fail("TRANSCRIPT_MISMATCH") };
     }
-    if (commitment.stage === 2 && !equalBytes(slot.opening, original.opening)) {
-      return { fail: fail("TRANSCRIPT_MISMATCH") };
+    if (!equalBytes(slot.opening, original.opening)) {
+      return { fail: fail("OPENING_MISMATCH") };
     }
   }
   return { slots: commitment.slots };
