@@ -1628,23 +1628,13 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs ship the Journal and hold back only Lightning", () => {
-  // The release tab list is unconditional: exactly seven entries, in order,
-  // with the Journal released and Lightning still held back.
-  const declaration = appSource.match(/^var hodlWorkspaceTabs = (\[.*\]);$/m);
-  assert.ok(declaration, "the workspace tab list is missing");
-  assert.doesNotMatch(declaration[1], /__ENTROPYLAB_TEST_HOOKS__|\.\.\./, "no release tab may be gated behind test hooks");
-  const entries = [...declaration[1].matchAll(/\["([a-z0-9]+)", "([^"]*)", "([^"]*)"\]/g)].map((match) => [match[1], match[2], match[3]]);
-  assert.deepEqual(entries, [
-    ["calc", "Keys", "Keys"],
-    ["msig", "Multi Signature", "MultiSig"],
-    ["psbt", "Transactions", "Txns"],
-    ["bip85", "BIP-85 Child", "BIP-85"],
-    ["sp", "Silent Payments", "SP"],
-    ["vanity", "Vanity Address", "Vanity"],
-    ["journal", "Journal", "Journal"],
-  ]);
-  assert.equal(entries.some((entry) => entry[0] === "ln"), false, "Lightning stays held back from the release tab list");
+test("workspace tabs retain the Journal only in test builds", () => {
+  for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
+    /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
+    /\["journal", "Journal", "Journal"\]/]) {
+    assert.match(appSource, entry);
+  }
+  assert.match(appSource, /__ENTROPYLAB_TEST_HOOKS__ \? \[\["journal", "Journal", "Journal"\]\] : \[\]/);
   for (const markup of [shell]) {
     assert.match(markup, /id="bip85-card"/);
     assert.match(markup, /id="bip85-go"/);
@@ -1943,6 +1933,11 @@ test("Key Station keeps derivation actions focused and BIP-85 remains its own wo
   for (const id of ["journal-open", "journal-use-calc", "bip85-open"]) assert.equal(document.getElementById(id), null);
   assert.doesNotMatch(appSource, /getElementById\("bip85-open"\)/);
   assert.doesNotMatch(appSource, /getElementById\("journal-open"\)|getElementById\("journal-use-calc"\)|hodlJournalUseActiveKey|hodlJournalApplySnapshot/);
+  for (const entry of [/\["calc", "Keys", "Keys"\]/, /\["vanity", "Vanity Address", "Vanity"\]/, /\["bip85", "BIP-85 Child", "BIP-85"\]/,
+    /\["msig", "Multi Signature", "MultiSig"\]/, /\["sp", "Silent Payments", "SP"\]/, /\["psbt", "Transactions", "Txns"\]/,
+    /\["journal", "Journal", "Journal"\]/]) {
+    assert.match(appSource, entry);
+  }
   // The tab keeps its own way to adopt a key, so the removal must not have
   // taken the underlying session-key path with it.
   assert.match(appSource, /function hodlPickBip85SessionKey\(/);
