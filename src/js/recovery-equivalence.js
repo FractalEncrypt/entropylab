@@ -569,6 +569,16 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     }
   }
 
+  // The standard purpose (44/49/84/86) at which any seed derived this key,
+  // or null when no seed matched it.
+  const matchedPurposeOf = (keyClaim) => {
+    for (const perKey of seedAccounts.values()) {
+      const match = perKey.get(keyClaim);
+      if (match) return Number(/^\/(\d+)'/.exec(match.path)?.[1]);
+    }
+    return null;
+  };
+
   if (descriptorClaims?.originFingerprint) {
     for (const claim of seedClaimsList) {
       if (claim.fingerprintHex === descriptorClaims.originFingerprint) {
@@ -594,6 +604,12 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     const purpose = Number(/^\/(\d+)'/.exec(descriptorClaims.originPath)?.[1]);
     const standard = PURPOSE_SCRIPT_TYPE.find((p) => p.purpose === purpose);
     if (standard) scriptClaims.push({ source: `descriptor origin ${purpose}'`, scriptType: standard.scriptType });
+  } else if (descriptorKeyClaim) {
+    // With no origin, the purpose at which a seed derived the descriptor's
+    // key is the same evidence: the 49' account key under wpkh() is the
+    // same mismatch whether or not an origin says 49'.
+    const standard = PURPOSE_SCRIPT_TYPE.find((p) => p.purpose === matchedPurposeOf(descriptorKeyClaim));
+    if (standard) scriptClaims.push({ source: `seed match at ${standard.purpose}'`, scriptType: standard.scriptType });
   }
   for (let i = 0; i < scriptClaims.length; i++) {
     for (let j = i + 1; j < scriptClaims.length; j++) {
@@ -662,7 +678,11 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       } catch {
         continue;
       }
-      for (const { scriptType } of purposesForPrefix(keyClaim.keyPrefix)) {
+      // A seed that derived this key fixes its purpose, so a plain xpub of
+      // the 84' account does not also "match" a p2pkh address of that key.
+      const seedPurpose = matchedPurposeOf(keyClaim);
+      const purposes = purposesForPrefix(keyClaim.keyPrefix).filter((p) => seedPurpose == null || p.purpose === seedPurpose);
+      for (const { scriptType } of purposes) {
         tried.push(`${keyClaim.source} ${scriptType}`);
         if (scanAccount(account, scriptType, keyClaim.network, keyClaim.source)) break;
       }

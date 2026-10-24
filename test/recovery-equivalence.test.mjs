@@ -801,6 +801,24 @@ test("a descriptor whose origin purpose disagrees with its template is inconsist
   assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(`sh(wpkh([${BIP84_FPR}/49'/0'/0']${BIP49_XPUB}/0/*))`) }, opts).verdict, "consistent");
 });
 
+test("with no origin, the purpose the seed matched still claims a script type", () => {
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  // The 49' account key under wpkh() with no origin: the seed derives it at
+  // 49', so it is the same mismatch as with a 49' origin (MiniMax).
+  const noOrigin = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(`wpkh(${BIP49_XPUB}/0/*)`) }, opts);
+  assert.equal(noOrigin.verdict, "inconsistent");
+  assert.equal(noOrigin.mismatchAt, "Script type");
+  // A plain xpub of the 84' account does not "match" a p2pkh address of the
+  // same key once the seed has fixed its purpose at 84'.
+  const account84 = HDKey.fromMasterSeed(mnemonicToSeedSync(BIP84_MNEMONIC)).derive("m/84'/0'/0'");
+  const p2pkhOf84 = addressFor("p2pkh", account84.derive("m/0/0").publicKey, "mainnet");
+  const scan = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, address: p2pkhOf84 }, opts);
+  assert.equal(scan.verdict, "inconsistent");
+  assert.equal(scan.mismatchAt, "Receive address");
+  // The same xpub with its real p2wpkh address stays consistent.
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, address: BIP84_ADDR0 }, opts).verdict, "consistent");
+});
+
 test("a passphrase without a mnemonic is refused, not silently ignored", () => {
   const opts = { network: "mainnet", receiveIndex: 0 };
   const out = compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: BIP39_PASSPHRASE }, opts);
