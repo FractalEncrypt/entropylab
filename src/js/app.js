@@ -12019,7 +12019,19 @@ function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
 // computed from: any edit inside the card retires it on the spot, so a
 // stale verdict is never left on screen. The next Inspect re-runs it.
 function hodlPsbtClearSignerAudit() {
-  document.getElementById("psbt-out")?.querySelector("[data-audit-section]")?.remove();
+  const section = document.getElementById("psbt-out")?.querySelector("[data-audit-section]");
+  if (!section) return;
+  section.remove();
+  // The verdict belonged to the exact pair of PSBTs it was computed from, so
+  // retiring it must also let the user re-run Inspect on those same inputs.
+  // The run stamp still matches the fields, so the input sync above leaves
+  // Inspect disabled; re-enable it here, but only when there is something to
+  // inspect.
+  const go = document.getElementById("psbt-go");
+  if (go && String(document.getElementById("psbt-text")?.value || "").trim()) {
+    go.disabled = false;
+    go.setAttribute("aria-disabled", "false");
+  }
 }
 function hodlRunPsbt() {
   let output = document.getElementById("psbt-out"), manual = document.getElementById("psbt-key").value;

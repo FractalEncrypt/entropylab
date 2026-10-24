@@ -64,7 +64,11 @@ const hexBytes = (value) => {
   }
 };
 const eqBytes = (a, b) => a.length === b.length && a.every((byte, index) => byte === b[index]);
-const concatBytes = (...parts) => {
+// Concatenate a list of byte arrays without spreading them into one call:
+// a PSBT with very many inputs produces tens of thousands of parts, and
+// `f(...parts)` throws RangeError past the engine's argument limit, which
+// would downgrade the whole audit to unverified.
+const concatBytes = (parts) => {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let at = 0;
   for (const part of parts) {
@@ -141,7 +145,7 @@ const serializeDocTx = (tx, scriptAt) => {
     parts.push(u64le(value), varintBytes(script.length), script);
   }
   parts.push(u32le(locktime));
-  return concatBytes(...parts);
+  return concatBytes(parts);
 };
 
 // One input's UTXO claim, from the witness declaration or the non-witness
@@ -188,7 +192,7 @@ const isP2wpkh = (s) => s.length === 22 && s[0] === 0x00 && s[1] === 0x14;
 const isP2wsh = (s) => s.length === 34 && s[0] === 0x00 && s[1] === 0x20;
 const isP2tr = (s) => s.length === 34 && s[0] === 0x51 && s[1] === 0x20;
 const isP2sh = (s) => s.length === 23 && s[0] === 0xa9 && s[1] === 0x14 && s[22] === 0x87;
-const p2pkhScriptCode = (keyHash) => concatBytes(Uint8Array.of(0x76, 0xa9, 0x14), keyHash, Uint8Array.of(0x88, 0xac));
+const p2pkhScriptCode = (keyHash) => concatBytes([Uint8Array.of(0x76, 0xa9, 0x14), keyHash, Uint8Array.of(0x88, 0xac)]);
 
 const decodedField = (doc, index, name) => {
   for (const pair of mapPairs(doc, index)) {
@@ -250,12 +254,12 @@ const bip143AllDigest = (rawTx, index, scriptCode, amount) => {
 const legacyAllDigest = (tx, index, scriptCode, signature) => {
   if (containsBytes(scriptCode, signature)) return null;
   const raw = serializeDocTx(tx, (at) => (at === index ? scriptCode : new Uint8Array()));
-  return raw ? hodlSha256(hodlSha256(concatBytes(raw, u32le(1)))) : null;
+  return raw ? hodlSha256(hodlSha256(concatBytes([raw, u32le(1)]))) : null;
 };
 
 const taggedHash = (tag, ...messages) => {
   const tagHash = hodlSha256(new TextEncoder().encode(tag));
-  return hodlSha256(concatBytes(tagHash, tagHash, ...messages));
+  return hodlSha256(concatBytes([tagHash, tagHash, ...messages]));
 };
 
 // BIP-341 SigMsg digest for SIGHASH_DEFAULT/ALL (the only full-commitment
@@ -280,19 +284,19 @@ const bip341Digest = (tx, claims, index, sighashType, ext) => {
     if (value === null || !script) return null;
     outputs.push(u64le(value), varintBytes(script.length), script);
   }
-  const message = concatBytes(
+  const message = concatBytes([
     Uint8Array.of(sighashType),
     i32le(Number(tx.version)),
     u32le(Number(tx.locktime)),
-    hodlSha256(concatBytes(...prevouts)),
-    hodlSha256(concatBytes(...amounts)),
-    hodlSha256(concatBytes(...scriptPubKeys)),
-    hodlSha256(concatBytes(...sequences)),
-    hodlSha256(concatBytes(...outputs)),
+    hodlSha256(concatBytes(prevouts)),
+    hodlSha256(concatBytes(amounts)),
+    hodlSha256(concatBytes(scriptPubKeys)),
+    hodlSha256(concatBytes(sequences)),
+    hodlSha256(concatBytes(outputs)),
     Uint8Array.of(ext ? 2 : 0), // spend_type: ext_flag << 1, no annex
     u32le(index),
-  );
-  const extension = ext ? concatBytes(ext.leafHash, Uint8Array.of(0), u32le(0xffffffff)) : new Uint8Array();
+  ]);
+  const extension = ext ? concatBytes([ext.leafHash, Uint8Array.of(0), u32le(0xffffffff)]) : new Uint8Array();
   return taggedHash("TapSighash", Uint8Array.of(0), message, extension);
 };
 

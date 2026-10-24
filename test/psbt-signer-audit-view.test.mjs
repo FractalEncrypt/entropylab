@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { SIGNER_AUDIT_CODES } from "../src/js/psbt-signer-audit.js";
 import { comparePsbtDocs } from "../src/js/psbt-diff.js";
+import { psbtSignerAuditVerification } from "../src/js/psbt-signer-audit-verify.js";
 import { psbtDiffHtml } from "../src/js/psbt-editor.js";
 import { psbtSignerAuditErrorHtml, psbtSignerAuditHtml } from "../src/js/psbt-signer-audit-view.js";
 
@@ -95,67 +96,26 @@ const versionBumpDocs = () => {
   return { before, after, diff: comparePsbtDocs(before, after) };
 };
 
-// The approved one-line wording per code, as a short stable substring.
-const WORDING = {
-  DOC_UNDECODABLE: "could not be read safely",
-  TX_REORDERED: "changed the order of the outputs",
-  TX_INPUT_CHANGED: "is not what you sent",
-  TX_OUTPUT_CHANGED: "is not what you sent",
-  TX_VERSION_CHANGED: "transaction version changed",
-  TX_LOCKTIME_CHANGED: "locktime changed",
-  UTXO_DECLARATION_CHANGED: "claims to spend was changed",
-  UNEXPECTED_SIGNER: "signed by a key your PSBT does not name",
-  SIGNATURE_CHANGED: "was altered",
-  SIGNATURE_REMOVED: "was removed",
-  SIGNATURE_MALFORMED: "is malformed",
-  SIGNATURE_INVALID: "does not verify",
-  SIGNATURE_UNVERIFIED: "could not be checked",
-  SIGHASH_WEAK: "does not commit to the whole transaction",
-  SIGHASH_MISMATCH: "different sighash than declared",
-  SIGHASH_UNDEFINED: "undefined sighash value",
-  SIGHASH_DECLARATION_CHANGED: "changed or removed the sighash declaration",
-  SIGHASH_DECLARATION_ADDED: "A weak sighash was declared",
-  SIGHASH_DECLARATION_INVALID: "declares an invalid sighash",
-  FINALIZATION_INVALID: "could not be verified",
-  FINALIZED: "was finalized",
-  FIELD_REMOVED: "without valid finalization",
-  FINGERPRINT_MISMATCH: "origin changed",
-  METADATA_REMOVED: "removed PSBT data",
-  METADATA_CHANGED: "changed PSBT data",
-  METADATA_ADDED: "added PSBT data",
-  METADATA_ENRICHMENT: "added expected data",
-  CHANGE_NOT_FROM_WALLET: "does not belong to the loaded key",
-  CHANGE_UNVERIFIED: "could not be verified",
-  CHANGE_VERIFIED: "is change back to your wallet",
-  NONCE_REUSE: "reuses a nonce",
-  NONCE_CROSS_KEY: "under two different keys",
-  NONCE_REUSE_POSSIBLE: "Possible nonce reuse",
-  NONCE_COVERAGE_INCOMPLETE: "did not cover every signature",
-  ANTIEXFIL_FAILED: "anti-exfiltration check failed",
-  SIGNER_UNKNOWN: "names no signing keys",
-  MUSIG2_MATERIAL_ADDED: "MuSig2 signing data was added",
-  ORIGIN_INCONSISTENT: "does not match the global xpub",
-  SIGNATURE_ADDED: "New signature on input 0",
-};
-
-test("every signer-audit code renders its approved wording line", () => {
+// Every code renders a non-empty finding row, hooked on data-audit-code.
+// The wording itself is not pinned (AGENTS.md: only safety-critical copy may
+// be pinned, and only as a short stable substring); the fail headline's
+// "Do not broadcast" is the one substring kept, in the tier tests below.
+test("every signer-audit code renders a non-empty finding row", () => {
   assert.equal(SIGNER_AUDIT_CODES.length, 39, "fixture: the engine freezes 39 codes");
   for (const code of SIGNER_AUDIT_CODES) {
-    assert.ok(WORDING[code], `fixture: approved wording for ${code}`);
     const html = psbtSignerAuditHtml(reportFor([findingFor(code)]), null, null, "mainnet");
-    assert.ok(html.includes(`data-audit-code="${code}"`), `${code}: the row hook is missing`);
-    assert.ok(html.includes(WORDING[code]), `${code}: approved wording "${WORDING[code]}" is missing`);
+    const row = html.match(new RegExp(`<li[^>]*data-audit-code="${code}"[^>]*>([\\s\\S]*?)</li>`));
+    assert.ok(row, `${code}: the row hook is missing`);
+    assert.ok(row[1].replace(/<[^>]*>/g, "").trim().length > 0, `${code}: the finding line is empty`);
   }
 });
 
-test("SIGHASH_DECLARATION_ADDED renders its three severity wordings", () => {
+test("SIGHASH_DECLARATION_ADDED renders a row at every severity", () => {
   const base = findingFor("SIGHASH_DECLARATION_ADDED");
-  const info = psbtSignerAuditHtml(reportFor([{ ...base, severity: "info", evidence: { index: 0, value: 1 } }]), null, null, "mainnet");
-  assert.ok(info.includes("full-commitment sighash"));
-  const requested = psbtSignerAuditHtml(reportFor([{ ...base, severity: "warning" }]), null, null, "mainnet");
-  assert.ok(requested.includes("the one your PSBT requested"));
-  const weak = psbtSignerAuditHtml(reportFor([{ ...base, severity: "critical" }]), null, null, "mainnet");
-  assert.ok(weak.includes("A weak sighash was declared"));
+  for (const severity of ["info", "warning", "critical"]) {
+    const html = psbtSignerAuditHtml(reportFor([{ ...base, severity }]), null, null, "mainnet");
+    assert.ok(html.includes('data-audit-code="SIGHASH_DECLARATION_ADDED"'), `${severity}: the row hook is missing`);
+  }
 });
 
 test("the three verdict tiers render their tier hook", () => {
@@ -181,7 +141,7 @@ test("a pass verdict with an unverified or invalid signature check renders the f
 test("the closing limitation note always renders", () => {
   for (const findings of [[], [findingFor("METADATA_ADDED")], [findingFor("NONCE_REUSE")]]) {
     const html = psbtSignerAuditHtml(reportFor(findings), null, null, "mainnet");
-    assert.ok(html.includes("does not prove the signing device"));
+    assert.ok(html.includes("data-audit-limitation"), "the closing limitation note must always render");
   }
 });
 
@@ -275,7 +235,6 @@ test("the parse-error note escapes its message and carries no verdict", () => {
   const html = psbtSignerAuditErrorHtml(`not base64 <script>alert(1)</script>`);
   assert.ok(html.includes("data-audit-section"));
   assert.ok(!html.includes("data-audit-tier"));
-  assert.ok(html.includes("could not be read"));
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("&lt;script&gt;"));
 });
@@ -316,4 +275,45 @@ test("the app-wide session wipe also retires a shown signer-audit verdict", () =
   const cleared = body.indexOf("hodlPsbtClearSignerAudit()", emptied);
   assert.ok(cleared > emptied, "the wipe must retire the rendered audit section after emptying #psbt-audit-before");
   assert.ok(cleared - emptied < 400, "the call belongs right after the #psbt-audit-before wipe");
+});
+
+// Item 2: retiring a shown verdict must not strand the user — Inspect is
+// re-enabled for the same inputs, the way an ordinary edit re-enables it.
+test("retiring a shown signer-audit verdict re-enables Inspect for the same inputs", () => {
+  const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function hodlPsbtClearSignerAudit()");
+  assert.ok(start >= 0, "fixture: hodlPsbtClearSignerAudit is in app.js");
+  const next = source.indexOf("\nfunction ", start + 1);
+  const body = source.slice(start, next === -1 ? undefined : next);
+  assert.ok(body.includes('"psbt-go"'), "the retirement must touch the Inspect button");
+  assert.ok(body.includes('"psbt-text"'), "the re-enable must be guarded by a PSBT to inspect");
+  assert.ok(/disabled\s*=\s*false/.test(body), "the retirement must re-enable Inspect");
+  assert.ok(/aria-disabled["']?\s*,\s*["']false["']/.test(body), "the retirement must clear aria-disabled");
+});
+
+// Item 3: a PSBT with very many inputs must not overflow the argument limit
+// in the transaction serializer (concatBytes spread), which would downgrade
+// the whole audit to unverified.
+test("a PSBT with very many inputs does not overflow the argument limit", () => {
+  const count = 50000;
+  const inputs = Array.from({ length: count }, () => ({ txid: "ab".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 }));
+  const doc = {
+    tx: { version: 2, locktime: 0, inputs, outputs: [{ value: "1000", scriptPubKey: "51" }] },
+    globals: [],
+    inputs: inputs.map(() => []),
+    outputs: [[]],
+  };
+  const result = psbtSignerAuditVerification(doc, doc);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.signatures, []);
+});
+
+// Item 4: the technical diff prints each pair's decodeError; that text is
+// untrusted, so bidi controls must be neutralized before it reaches the line.
+test("the technical diff neutralizes bidi controls in a pair's decodeError", () => {
+  const before = { tx: { version: 2, locktime: 0, inputs: [], outputs: [] }, globals: [{ key: "ff00", value: "00", name: null, decodeError: "bad \u202e\u2066 signature" }], inputs: [], outputs: [] };
+  const after = { tx: { version: 2, locktime: 0, inputs: [], outputs: [] }, globals: [], inputs: [], outputs: [] };
+  const diff = comparePsbtDocs(before, after);
+  const html = psbtSignerAuditHtml(reportFor([], { diff, equal: false }), before, after, "mainnet");
+  assert.ok(!html.includes("\u202e") && !html.includes("\u2066"), "bidi controls in a decodeError must be neutralized");
 });

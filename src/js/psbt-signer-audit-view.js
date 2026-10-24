@@ -317,6 +317,23 @@ const findingRow = (f, network) => {
   return `<li class="${tone}" data-audit-code="${escapeHtml(String(f?.code ?? "unknown"))}">${headline}${detail ? `<br><span class="muted">${detail}</span>` : ""}</li>`;
 };
 
+// The technical diff prints each pair's decodeError verbatim (psbt-editor.js
+// pairCell). That text comes from the PSBT, so it is untrusted: neutralize
+// bidi and invisible codepoints in the copies handed to the diff, exactly as
+// the finding rows do, so a hostile decodeError cannot reorder the line.
+const neutralizePairText = (pair) => {
+  if (!pair || typeof pair !== "object" || typeof pair.decodeError !== "string") return pair;
+  return { ...pair, decodeError: hodlNeutralizeControls(pair.decodeError) };
+};
+const neutralizeDocText = (doc) => {
+  if (!doc || typeof doc !== "object") return doc;
+  const copy = { ...doc };
+  if (Array.isArray(doc.globals)) copy.globals = doc.globals.map(neutralizePairText);
+  if (Array.isArray(doc.inputs)) copy.inputs = doc.inputs.map((map) => (Array.isArray(map) ? map.map(neutralizePairText) : map));
+  if (Array.isArray(doc.outputs)) copy.outputs = doc.outputs.map((map) => (Array.isArray(map) ? map.map(neutralizePairText) : map));
+  return copy;
+};
+
 // The audit report as one section: the verdict note first (it is prepended
 // to the Inspector's output, so it is what the live region announces), then
 // the nine checks, the grouped findings, the collapsed technical diff, and
@@ -356,9 +373,9 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
     return `<p class="label psbt-section-label">${title}</p><ul>${rows}${more > 0 ? `<li class="muted">…and ${more} more.</li>` : ""}</ul>`;
   }).join("");
   const diff = report?.diff
-    ? `<details class="derivation-advanced"><summary>Show every difference (technical)</summary>${psbtDiffHtml(report.diff, beforeDoc, afterDoc, network, { copyIcon, beforeLabel: "the PSBT you sent", afterLabel: "the returned PSBT" })}</details>`
+    ? `<details class="derivation-advanced"><summary>Show every difference (technical)</summary>${psbtDiffHtml(report.diff, neutralizeDocText(beforeDoc), neutralizeDocText(afterDoc), network, { copyIcon, beforeLabel: "the PSBT you sent", afterLabel: "the returned PSBT" })}</details>`
     : "";
-  return `<section class="psbt-analysis-summary" data-audit-section data-audit-tier="${tier}" aria-label="PSBT signer audit">${note}<p class="label psbt-section-label">PSBT signer audit</p><ul>${checkRows}${stats}</ul>${groups}${diff}<p class="edge-note is-muted">This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.</p></section>`;
+  return `<section class="psbt-analysis-summary" data-audit-section data-audit-tier="${tier}" aria-label="PSBT signer audit">${note}<p class="label psbt-section-label">PSBT signer audit</p><ul>${checkRows}${stats}</ul>${groups}${diff}<p class="edge-note is-muted" data-audit-limitation>This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.</p></section>`;
 };
 
 // The fail-closed read error: the sent PSBT (or the pair) did not decode,
