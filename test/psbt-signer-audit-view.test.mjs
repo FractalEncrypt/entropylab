@@ -200,19 +200,22 @@ test("hostile PSBT strings are escaped and bidi controls are neutralized", () =>
 const CHECK_TONES = {
   transactionBody: { unchanged: "ok", changed: "bad", reordered: "bad", unknown: "warn" },
   utxoDeclarations: { unchanged: "ok", changed: "bad", unknown: "warn" },
-  signatures: { valid: "ok", invalid: "bad", unverified: "bad", removed_or_changed: "bad", none_added: "muted", unknown: "warn" },
-  sighashPolicy: { full_commitment: "ok", weak: "bad", weak_as_requested: "warn", mismatch: "bad", undefined: "bad", none: "muted", unknown: "warn" },
-  signerKeys: { match: "ok", unexpected: "bad", unknown: "bad", no_new_signatures: "muted" },
+  signatures: { valid: "ok", invalid: "bad", unverified: "bad", removed_or_changed: "bad", none_added: "neutral", unknown: "warn" },
+  sighashPolicy: { full_commitment: "ok", weak: "bad", weak_as_requested: "warn", mismatch: "bad", undefined: "bad", none: "neutral", unknown: "warn" },
+  signerKeys: { match: "ok", unexpected: "bad", unknown: "bad", no_new_signatures: "neutral" },
   metadata: { unchanged: "ok", additions: "warn", mutated: "bad", unknown: "warn" },
-  nonceReuse: { none_found: "ok", reuse: "bad", cross_key: "bad", possible: "warn", incomplete: "warn", not_checked: "muted", unknown: "warn" },
-  antiExfil: { verified: "ok", failed: "bad", not_available: "muted", unknown: "warn" },
-  changeOutputs: { verified: "ok", not_from_wallet: "bad", unverified: "warn", none_presented: "muted", not_checked: "muted", unknown: "warn" },
+  nonceReuse: { none_found: "ok", reuse: "bad", cross_key: "bad", possible: "warn", incomplete: "warn", not_checked: "neutral", unknown: "warn" },
+  antiExfil: { verified: "ok", failed: "bad", not_available: "neutral", unknown: "warn" },
+  changeOutputs: { verified: "ok", not_from_wallet: "bad", unverified: "warn", none_presented: "neutral", not_checked: "neutral", unknown: "warn" },
 };
 
 test("every check value maps to its tone, and an unrecognized value never renders green", () => {
   for (const [key, values] of Object.entries(CHECK_TONES)) {
     for (const [value, tone] of Object.entries(values)) {
       const report = reportFor([]);
+      // Unfold the three unwired checks (Unknown on one of the others), so
+      // their own neutral values render as rows too.
+      report.checks[key === "nonceReuse" ? "antiExfil" : "nonceReuse"] = "unknown";
       report.checks[key] = value;
       const html = psbtSignerAuditHtml(report, null, null, "mainnet");
       assert.ok(html.includes(`data-audit-check="${key}" data-audit-tone="${tone}"`), `${key}.${value} must render tone ${tone}`);
@@ -226,15 +229,46 @@ test("every check value maps to its tone, and an unrecognized value never render
 });
 
 test("every checklist row, the signature count included, is one label/value row with a toned value", () => {
-  // Wicked's review of #1118: one shared row shape. The count used to be a
-  // bare neutral span outside it; now it is a value like the others, in the
-  // neutral tone, distinct from a passed (ok) check.
+  // Wicked's review of #1118: one shared row shape. The count is a value
+  // like the others, in the neutral tone, distinct from a passed (ok) check.
   const html = psbtSignerAuditHtml(reportFor([], { stats: { inputs: 1, outputs: 1, newSignatures: 1, feeBefore: null, feeAfter: null } }), null, null, "mainnet");
-  assert.equal((html.match(/data-audit-value/g) ?? []).length, 10, "nine checks plus the signature count");
-  assert.ok(html.includes('data-audit-check="newSignatures" data-audit-tone="muted"'));
-  for (const key of ["nonceReuse", "antiExfil", "changeOutputs"]) {
-    assert.ok(new RegExp(`data-audit-check="${key}" data-audit-tone="(muted|warn)"`).test(html), `${key} unchecked is not the ok tone`);
+  assert.equal((html.match(/data-audit-value/g) ?? []).length, 7, "six checks plus the signature count");
+  assert.ok(html.includes('data-audit-check="newSignatures" data-audit-tone="neutral"'));
+});
+
+test("the three unwired checks fold into one Not checked here line; any other value brings their rows back", () => {
+  // TC's review of #1118: nonce reuse, anti-exfil and change outputs are not
+  // wired into the Inspector run, so they read "not checked" every time and
+  // collapse into one line naming all three.
+  const folded = psbtSignerAuditHtml(reportFor([]), null, null, "mainnet");
+  assert.ok(folded.includes('data-audit-unchecked="nonceReuse antiExfil changeOutputs"'));
+  for (const key of ["nonceReuse", "antiExfil", "changeOutputs"]) assert.ok(!folded.includes(`data-audit-check="${key}"`), `${key} is folded`);
+  // A result is never folded away: a problem, a pass, or Unknown on any one
+  // of them shows all three rows, and no line.
+  for (const [key, value, tone] of [["nonceReuse", "reuse", "bad"], ["antiExfil", "verified", "ok"], ["changeOutputs", "none_presented", "neutral"], ["changeOutputs", "unknown", "warn"]]) {
+    const report = reportFor([]);
+    report.checks[key] = value;
+    const html = psbtSignerAuditHtml(report, null, null, "mainnet");
+    assert.ok(!html.includes("data-audit-unchecked"), `${key}.${value}: no folded line`);
+    assert.ok(html.includes(`data-audit-check="${key}" data-audit-tone="${tone}"`), `${key}.${value} renders its row`);
+    assert.equal((html.match(/data-audit-value/g) ?? []).length, 9, `${key}.${value}: all nine checks`);
   }
+  // A report without checks folds nothing: all three are Unknown, in the
+  // warning tone.
+  const bare = psbtSignerAuditHtml({ verdict: "fail" }, null, null, "mainnet");
+  assert.ok(!bare.includes("data-audit-unchecked"));
+  assert.ok(bare.includes('data-audit-check="nonceReuse" data-audit-tone="warn"'));
+});
+
+test("a missing check value renders Unknown in the warning tone, never a table row named undefined", () => {
+  // sighashPolicy has an "undefined" value (a real sighash state); a check
+  // the report leaves out must not read it.
+  const report = reportFor([]);
+  delete report.checks.sighashPolicy;
+  const html = psbtSignerAuditHtml(report, null, null, "mainnet");
+  assert.ok(html.includes('data-audit-check="sighashPolicy" data-audit-tone="warn"'));
+  report.checks.signatures = "constructor";
+  assert.ok(psbtSignerAuditHtml(report, null, null, "mainnet").includes('data-audit-check="signatures" data-audit-tone="warn"'));
 });
 
 test("an undecodable-document report renders the error finding, unknown checks, and no diff", () => {
@@ -253,12 +287,85 @@ test("an undecodable-document report renders the error finding, unknown checks, 
   assert.ok(!html.includes("<details"), "no diff block without a diff");
 });
 
-test("the parse-error note escapes its message and carries no verdict", () => {
-  const html = psbtSignerAuditErrorHtml(`not base64 <script>alert(1)</script>`);
-  assert.ok(html.includes("data-audit-section"));
-  assert.ok(!html.includes("data-audit-tier"));
+test("the read-error note names its case, escapes the parser's message, and carries no verdict", () => {
+  // TC's review of #1118: the headline names the PSBT the error is about, so
+  // a raw transaction inspected above is never blamed on the PSBT you sent.
+  for (const kind of ["returned-raw", "sent-raw", "sent-unreadable", "failed"]) {
+    const html = psbtSignerAuditErrorHtml({ kind });
+    assert.ok(html.includes("data-audit-section"));
+    assert.ok(html.includes(`data-audit-error="${kind}"`), `${kind}: its own headline`);
+    assert.ok(!html.includes("data-audit-tier") && !html.includes("data-audit-verdict"), `${kind}: no verdict`);
+    assert.ok(!html.includes("data-audit-error-detail"), `${kind}: no detail line without a detail`);
+  }
+  const html = psbtSignerAuditErrorHtml({ kind: "sent-unreadable", detail: "not base64 <script>alert(1)</script> \u202e" });
+  assert.ok(html.includes("data-audit-error-detail"));
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("&lt;script&gt;"));
+  assert.ok(!html.includes("\u202e"), "bidi controls are neutralized");
+  // An unknown kind, or a bare message, is the generic case.
+  assert.ok(psbtSignerAuditErrorHtml({ kind: "something-new" }).includes('data-audit-error="failed"'));
+  const bare = psbtSignerAuditErrorHtml("boom <b>");
+  assert.ok(bare.includes('data-audit-error="failed"') && bare.includes("boom &lt;b&gt;"));
+});
+
+// The error kind comes from app.js's own run path (TC's review of #1118):
+// each stage's failure is named for the PSBT it is about.
+test("the audit run names which PSBT kept it from running", async () => {
+  const field = { value: "SENT" };
+  const app = await loadAppFunctions(["hodlPsbtPrependSignerAudit", "hodlPsbtSignerAuditMarkup"], { stubs: {
+    document: { getElementById: (id) => (id === "psbt-audit-before" ? field : null) },
+    hodlPsbtBytesFromText: (text) => { if (text === "BAD") throw new Error("not base64 or hex"); return new Uint8Array(text === "RAWTX" ? [2] : [0x70]); },
+    isPsbtMagic: (bytes) => bytes[0] === 0x70,
+    psbtInspectDoc: (bytes) => { if (bytes[0] === 0xee) throw new Error("returned decode"); return { bytes }; },
+    hodlPsbtSignerAuditVerify: () => undefined,
+    hodlAuditSigner: () => ({ verdict: "pass" }),
+    hodlPsbtSignerAuditHtml: () => "REPORT",
+    hodlPsbtSignerAuditErrorHtml: (error) => `ERROR ${error.kind}`,
+  } });
+  const run = (kind, returned = new Uint8Array([0x70])) => {
+    const output = { insertAdjacentHTML: (_, html) => { output.html = html; } };
+    return { audit: app.hodlPsbtPrependSignerAudit(output, returned, kind, "mainnet"), output };
+  };
+  assert.equal(run("tx").audit.error.kind, "returned-raw", "a raw transaction above is the returned side's");
+  field.value = "RAWTX";
+  assert.equal(run("psbt").audit.error.kind, "sent-raw");
+  field.value = "BAD";
+  const unreadable = run("psbt").audit;
+  assert.equal(unreadable.error.kind, "sent-unreadable");
+  assert.equal(unreadable.error.detail, "not base64 or hex");
+  field.value = "SENT";
+  const failed = run("psbt", new Uint8Array([0xee]));
+  assert.equal(failed.audit.error.kind, "failed", "a throw past the sent decode is not blamed on the sent PSBT");
+  assert.equal(failed.output.html, "ERROR failed");
+  assert.equal(run("psbt").output.html, "REPORT");
+  field.value = "  ";
+  assert.equal(run("psbt").audit, null, "an empty field runs nothing");
+});
+
+// TC's review of #1118: every sentence is a translator call with
+// placeholders, so the catalog sync picks it up (the view's aliased
+// imports, ternary branches and reason tables included).
+test("the audit's sentences are translation sources, numbers as placeholders", async () => {
+  const { collectSources } = await import("../scripts/i18n-sources.mjs");
+  const { fileURLToPath } = await import("node:url");
+  const sources = await collectSources(fileURLToPath(new URL("..", import.meta.url)));
+  for (const source of [
+    "PSBT signer audit",
+    "Do not broadcast this PSBT.",
+    "No changes to your transaction.",
+    "Transaction body",
+    "Not checked",
+    "Not checked here: nonce reuse, anti-exfil, change outputs.",
+    "Input {n} is not what you sent.",
+    "An input is not what you sent.",
+    "{count} keys named in your PSBT",
+    "…and {n} more.",
+    "its contents are malformed",
+    "The verification budget ran out before this signature could be checked.",
+    "unknown pair (type 0x{type})",
+    "The payload inspected above is a raw transaction, not a PSBT — the signer audit compares two PSBTs.",
+    "Upload sent .psbt",
+  ]) assert.ok(sources.has(source), `not a source: ${source}`);
 });
 
 test("psbtDiffHtml labels: the default output is byte-identical, custom labels rename the sides", () => {
@@ -374,7 +481,7 @@ test("a language change paints a failing audit again; a retired one stays gone",
     hodlRenderPsbt: () => "inspection",
     hodlRenderRawTx: () => "inspection",
     hodlPsbtSignerAuditHtml: (report) => `AUDIT ${report.verdict}|`,
-    hodlPsbtSignerAuditErrorHtml: (message) => `AUDIT error ${message}|`,
+    hodlPsbtSignerAuditErrorHtml: (error) => `AUDIT error ${error.kind}|`,
   } });
   const last = { kind: "psbt", parsed: {}, sourceTag: new Uint8Array([1]), checkedAt: "t", network: "mainnet", audit: { report: { verdict: "fail" }, beforeDoc: {}, afterDoc: {}, network: "mainnet" } };
   app.__set.hodlPsbtLast(last);
@@ -389,9 +496,9 @@ test("a language change paints a failing audit again; a retired one stays gone",
   assert.equal(outputs["psbt-out"].innerHTML, "inspection", "a retired verdict is not painted back");
 
   // An audit that could not run (its error) is painted again the same way.
-  last.audit = { error: "not a PSBT" };
+  last.audit = { error: { kind: "sent-raw" } };
   app.hodlRefreshPsbtLocale();
-  assert.equal(outputs["psbt-out"].innerHTML, "AUDIT error not a PSBT|inspection");
+  assert.equal(outputs["psbt-out"].innerHTML, "AUDIT error sent-raw|inspection");
 });
 
 test("an audit upload that finishes after the session ends writes nothing back, success or error", async () => {
@@ -449,7 +556,7 @@ test("Show more's full repaint keeps the audit; an edit after a repaint retires 
     hodlRenderPsbt: () => "inspection",
     hodlRenderRawTx: () => "inspection",
     hodlPsbtSignerAuditHtml: (report) => `AUDIT ${report.verdict}|`,
-    hodlPsbtSignerAuditErrorHtml: (message) => `AUDIT error ${message}|`,
+    hodlPsbtSignerAuditErrorHtml: (error) => `AUDIT error ${error.kind}|`,
     hodlSyncPsbtControls: () => {},
     hodlPaintPsbtSession: () => {},
     hodlPaintPsbtKeyNotes: () => {},

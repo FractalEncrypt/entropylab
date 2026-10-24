@@ -12005,31 +12005,40 @@ function hodlInitBip85() {
 // Inspector's own results are not readable in this run path), so those
 // checks report "Not checked"/"Not available".
 // The audit is kept as data (the report and both documents, or the error
-// message) so a language change can paint it again in the new language
-// (Wicked's review of #1118); hodlPsbtSignerAuditMarkup renders either.
+// kind and detail) so a language change can paint it again in the new
+// language (Wicked's review of #1118); hodlPsbtSignerAuditMarkup renders
+// either. An error names the PSBT it is about: a raw transaction inspected
+// above is never blamed on the PSBT you sent (TC's review of #1118).
 function hodlPsbtSignerAuditMarkup(audit) {
   return audit.error !== undefined ? hodlPsbtSignerAuditErrorHtml(audit.error) : hodlPsbtSignerAuditHtml(audit.report, audit.beforeDoc, audit.afterDoc, audit.network);
 }
 function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
   let raw = String(document.getElementById("psbt-audit-before")?.value || "").trim();
   if (!raw) return null;
-  let audit;
+  let audit, stage = "sent-unreadable";
   try {
-    if (kind !== "psbt") throw new Error("The signer audit compares two PSBTs; the inspected payload above is a raw transaction, not a PSBT.");
-    let sentBytes = hodlPsbtBytesFromText(raw);
-    if (!isPsbtMagic(sentBytes)) throw new Error("The PSBT you sent must be a PSBT (base64 or hex), not a raw transaction.");
-    let beforeDoc = psbtInspectDoc(sentBytes), afterDoc = psbtInspectDoc(returnedBytes), verification;
-    // Verification fails closed: an error here leaves the engine without
-    // its verification input, and every new signature is reported
-    // unverified rather than waved through.
-    try {
-      verification = hodlPsbtSignerAuditVerify(beforeDoc, afterDoc);
-    } catch {
-      verification = undefined;
+    if (kind !== "psbt") audit = { error: { kind: "returned-raw" } };
+    else {
+      let sentBytes = hodlPsbtBytesFromText(raw);
+      if (!isPsbtMagic(sentBytes)) audit = { error: { kind: "sent-raw" } };
+      else {
+        let beforeDoc = psbtInspectDoc(sentBytes), afterDoc, verification;
+        // Past the sent PSBT's decode, a throw is no longer about its text.
+        stage = "failed";
+        afterDoc = psbtInspectDoc(returnedBytes);
+        // Verification fails closed: an error here leaves the engine without
+        // its verification input, and every new signature is reported
+        // unverified rather than waved through.
+        try {
+          verification = hodlPsbtSignerAuditVerify(beforeDoc, afterDoc);
+        } catch {
+          verification = undefined;
+        }
+        audit = { report: hodlAuditSigner(beforeDoc, afterDoc, { verification }), beforeDoc, afterDoc, network };
+      }
     }
-    audit = { report: hodlAuditSigner(beforeDoc, afterDoc, { verification }), beforeDoc, afterDoc, network };
   } catch (exception) {
-    audit = { error: exception instanceof Error ? exception.message : String(exception) };
+    audit = { error: { kind: stage, detail: exception instanceof Error ? exception.message : String(exception) } };
   }
   output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(audit));
   return audit;

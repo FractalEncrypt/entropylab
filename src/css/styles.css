@@ -1952,12 +1952,6 @@ label.field.journal-format-control { min-width: 0; margin-top: 0; }
 /* A check's detail sits under its verdict as a tighter block: an inline span
    cannot set its line height below the line it sits in. */
 .psbt-analysis-summary li > .muted { display: block; line-height: 1.3; }
-/* A checklist value sits beside its label in one shared style, whatever its
-   tone, so every row wraps the same way. Neutral values (not checked, not
-   available, the signature count) read as values in --muted-strong, still
-   distinct from the green of a passed check. */
-.psbt-analysis-summary > ul > li > .psbt-audit-value { display: inline; line-height: inherit; }
-.psbt-analysis-summary > ul > li > .psbt-audit-value.muted { color: var(--muted-strong); }
 /* The overall verdict is a <strong>, which the browser sets at 700; the
    report's headings sit at 600. */
 .psbt-analysis-summary > p > strong { font-weight: 600; }
