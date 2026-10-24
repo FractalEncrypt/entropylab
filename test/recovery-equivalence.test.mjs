@@ -760,3 +760,23 @@ test("R4-4b: a non-string artifact value is a named Support failure, never a thr
     });
   }
 });
+
+// ---- Round 4 red-team (RE-3, RE-10) ------------------------------------
+
+test("a descriptor with text after its key expression is refused, never read past", () => {
+  const key = `[${BIP84_FPR}/84'/0'/0']${BIP84_XPUB}`;
+  for (const body of [`wpkh(${key}/0/*)junk`, `wpkh(${key}/0/*),{pk(${key}/1/*)}`, `sh(wpkh(${key}/0/*))x`]) {
+    const out = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(body) }, { network: "mainnet", receiveIndex: 0 });
+    assert.equal(out.verdict, "inconsistent", body);
+    assert.equal(out.mismatchAt, "Support", body);
+  }
+});
+
+test("a passphrase without a mnemonic is refused, not silently ignored", () => {
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  const out = compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: BIP39_PASSPHRASE }, opts);
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Support");
+  // An empty passphrase is the BIP-39 default, not an artifact.
+  assert.equal(compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: "" }, opts).verdict, "consistent");
+});

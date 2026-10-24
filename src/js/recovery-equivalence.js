@@ -194,6 +194,12 @@ function parseDescriptorClaims(descriptor) {
 
   const arg = keyArgumentOf(body, fn);
   if (arg == null) return { error: "descriptor key argument could not be read" };
+  // The body must be exactly the template around its one argument: anything
+  // after the closing parenthesis (a stray ",{...}" script tree, a second
+  // expression) is refused, never read past.
+  if (body !== (fn === "sh(wpkh)" ? `sh(wpkh(${arg}))` : `${fn}(${arg})`)) {
+    return { error: "descriptor has text outside its single key expression" };
+  }
 
   // tr() is single-key only in v1: a script tree (or any second argument)
   // is outside scope and must be refused, not silently ignored.
@@ -331,6 +337,11 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     } else {
       passphrase = rawPassphrase;
     }
+  }
+  // A passphrase only modifies a mnemonic. With no mnemonic it would be
+  // silently ignored, so it is refused instead.
+  if (passphrase !== "" && !supplied.mnemonic) {
+    steps.push(stepFail("Support", "a passphrase applies only to a mnemonic, and none was supplied"));
   }
   // Too little to compare is "insufficient", unless something the user
   // supplied was refused: that is never softened to insufficient.
