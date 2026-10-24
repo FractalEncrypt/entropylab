@@ -819,6 +819,27 @@ test("with no origin, the purpose the seed matched still claims a script type", 
   assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, xpub: BIP84_XPUB, address: BIP84_ADDR0 }, opts).verdict, "consistent");
 });
 
+test("a descriptor key that is not at its stated origin fails at Origin, with no seed needed", () => {
+  // Origin says account 0', the key is the account-1 key (red-team RE-1).
+  const mislabelled = desc(`wpkh([${BIP84_FPR}/84'/0'/0']${BIP84_ACCOUNT1_XPUB}/0/*)`);
+  const out = compareRecoveryArtifacts({ xpub: BIP84_ACCOUNT1_XPUB, descriptor: mislabelled }, { network: "mainnet", receiveIndex: 0 });
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Origin");
+  // The same key under its true origin passes that check.
+  const correct = desc(`wpkh([${BIP84_FPR}/84'/0'/1']${BIP84_ACCOUNT1_XPUB}/0/*)`);
+  assert.equal(compareRecoveryArtifacts({ xpub: BIP84_ACCOUNT1_XPUB, descriptor: correct }, { network: "mainnet", receiveIndex: 0 }).verdict, "consistent");
+});
+
+test("an unknown network or an invalid receiveIndex is refused up front", () => {
+  const artifacts = { mnemonic: BIP84_MNEMONIC, descriptor: BIP84_DESC };
+  for (const opts of [{ network: "regtest" }, { network: "foo" }, { receiveIndex: -1 }, { receiveIndex: 1.5 }, { receiveIndex: "0" }, { receiveIndex: 2 ** 31 }]) {
+    const out = compareRecoveryArtifacts(artifacts, opts);
+    assert.equal(out.verdict, "inconsistent", JSON.stringify(opts));
+    assert.equal(out.mismatchAt, "Support", JSON.stringify(opts));
+  }
+  assert.equal(compareRecoveryArtifacts(artifacts, { network: "mainnet", receiveIndex: 0 }).verdict, "consistent");
+});
+
 test("a passphrase without a mnemonic is refused, not silently ignored", () => {
   const opts = { network: "mainnet", receiveIndex: 0 };
   const out = compareRecoveryArtifacts({ seed: BIP39_SEED_HEX, xpub: BIP84_XPUB, passphrase: BIP39_PASSPHRASE }, opts);

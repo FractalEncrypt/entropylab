@@ -314,6 +314,13 @@ function purposesForPrefix(prefix) {
 export function compareRecoveryArtifacts(artifacts, opts) {
   const { network = "mainnet", receiveIndex = 0 } = opts ?? {};
   const steps = [];
+  // An unknown network or an invalid index is refused up front, before any
+  // derivation, rather than failing (or being coerced) deep inside it.
+  if (network !== "mainnet" && network !== "testnet") steps.push(stepFail("Support", 'network must be "mainnet" or "testnet"'));
+  if (!Number.isSafeInteger(receiveIndex) || receiveIndex < 0 || receiveIndex > 2147483647) {
+    steps.push(stepFail("Support", "receiveIndex must be a whole number from 0 to 2,147,483,647"));
+  }
+  if (steps.length) return { steps, verdict: "inconsistent", mismatchAt: "Support" };
 
   const supplied = {};
   for (const key of ["seed", "mnemonic", "xpub", "slip132", "descriptor", "address"]) {
@@ -431,6 +438,17 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       node = null;
     }
     const accountLevel = node && node.depth === 3 && node.index >= HARDENED_OFFSET;
+    // The origin is a claim about the key itself: its last step is the
+    // account, so the key must be depth 3 at that hardened index. This needs
+    // no seed, so an account-1 key labelled as account 0 is caught even when
+    // only the descriptor and an address are supplied.
+    if (descriptorClaims.originPath && node) {
+      const originAccount = Number(/'\/(\d+)'$/.exec(descriptorClaims.originPath)?.[1]);
+      if (node.depth !== 3 || node.index !== HARDENED_OFFSET + originAccount) {
+        const where = node.index >= HARDENED_OFFSET ? `${node.index - HARDENED_OFFSET}'` : `${node.index}`;
+        steps.push(stepFail("Origin", `descriptor key is at depth ${node.depth}, index ${where}; its origin claims m${descriptorClaims.originPath}`));
+      }
+    }
     if (!descriptorClaims.originPath && !accountLevel) {
       steps.push(stepFail("Support", "descriptor key is not an account-level key (depth 3, hardened index)"));
     } else {
