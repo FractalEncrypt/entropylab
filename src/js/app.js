@@ -3,6 +3,9 @@ import { sha256 as hodlSha256, hash160 as hodlHash160 } from "./hashes.js";
 // is a drop-in for the noble/curves surface this file uses (see
 // src/js/secp256k1.js). App boot waits for the module to be ready.
 import { secp256k1 as hodlSecp256k1, secp256k1Ready } from "./secp256k1.js";
+// The ECDSA sign-to-contract (anti-exfil) relation, shared with the AEXB-v1
+// verifier (aexb.js).
+import { s2cSignatureMatches } from "./s2c.js";
 import {
   createLabeledSilentPaymentAddress,
   createSilentPaymentOutputs,
@@ -2854,9 +2857,10 @@ function hodlFormatAddressEstimate(milliseconds) {
 function hodlUpdateAddressEstimate(prefix = "") {
   let estimate = document.getElementById(`${prefix}address-estimate`), help = document.getElementById(`${prefix}address-range-help`), startHelp = document.getElementById(`${prefix}address-start-help`), branchHelp = document.getElementById(`${prefix}branch-range-help`);
   if (!estimate || !help || !startHelp || !branchHelp) return;
+  let gapNote = document.getElementById(`${prefix}address-start-gap-note`);
   let maximum = hodlSyncAddressRangeLimit(prefix), branchMaximum = hodlSyncBranchRangeLimit(prefix);
   try {
-    let { range } = hodlReadAddressWindow(prefix, false), { branches } = hodlReadBranchWindow(prefix, false), hardening = hodlReadHardening(prefix), keyCount = prefix ? Math.max(1, Number(document.getElementById("msig-n")?.value) || 1) : (hodlImportedExtendedKeyDepth() ?? 0) > 0 ? 1 : 4;
+    let { start, range } = hodlReadAddressWindow(prefix, false), { branches } = hodlReadBranchWindow(prefix, false), hardening = hodlReadHardening(prefix), keyCount = prefix ? Math.max(1, Number(document.getElementById("msig-n")?.value) || 1) : (hodlImportedExtendedKeyDepth() ?? 0) > 0 ? 1 : 4;
     // Whole sentences for the Receive branch, the Change branch, and both, so
     // a translation can inflect them; a custom branch window is named in the
     // English the branch labels use.
@@ -2871,6 +2875,13 @@ function hodlUpdateAddressEstimate(prefix = "") {
       : receive ? hodlTText("First receive index to derive · {hardening} · 0 to 2,147,483,647", vars)
       : change ? hodlTText("First change index to derive · {hardening} · 0 to 2,147,483,647", vars)
       : hodlTText("First {branches} index to derive · {hardening} · 0 to 2,147,483,647", { ...vars, branches: vars.branches.toLowerCase() });
+    // Wallets such as Sparrow and Electrum scan about 20 unused addresses
+    // ahead (indexes 0-19 in a fresh wallet), so coins received at index 20
+    // or deeper show as a zero balance there until the gap limit is raised.
+    if (gapNote) {
+      gapNote.hidden = start < 20;
+      gapNote.textContent = start >= 20 ? hodlTText("Wallets only look about 20 unused addresses ahead. If coins arrive at index {n}, raise your wallet's gap limit above that, or the balance will show as zero (Sparrow: Settings → Advanced → Gap limit). EntropyLab's Bitcoin Core export already covers this window.", { n: start.toLocaleString() }) : "";
+    }
     help.textContent = both ? hodlTText("Derives {count} receive and {count} change addresses · Max {max}", { count, max })
       : receive ? hodlTText(one ? "Derives {count} receive address · Max {max}" : "Derives {count} receive addresses · Max {max}", { count, max })
       : change ? hodlTText(one ? "Derives {count} change address · Max {max}" : "Derives {count} change addresses · Max {max}", { count, max })
@@ -2880,6 +2891,10 @@ function hodlUpdateAddressEstimate(prefix = "") {
     branchHelp.textContent = hodlTText("Choose one or two valid address branches.");
     help.textContent = hodlTText("Choose a valid address range.");
     estimate.textContent = error.message;
+    if (gapNote) {
+      gapNote.hidden = true;
+      gapNote.textContent = "";
+    }
   }
 }
 function hodlInitAddressBenchmark() {
@@ -12730,11 +12745,12 @@ function hodlParseAntiExfil(raw) {
   return { host, openings };
 }
 function hodlAntiExfilCommitOk(r, opening, host) {
-  const n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
-  let tweak = hodlTaggedSha256("s2c/ecdsa/point", opening, host), tweakInt = hodlBytesToBig(tweak);
-  if (tweakInt >= n || tweakInt === 0n) return false;
-  let committed = hodlPointFrom(opening).add(hodlSecp256k1.Point.BASE.multiply(tweakInt)), xBytes = hodlPointBytes(committed, true).slice(1);
-  return hodlBytesToBig(r) % n === hodlBytesToBig(xBytes) % n;
+  // The relation (tweak = TaggedHash("s2c/ecdsa/point", opening, host),
+  // committed = opening + tweak*G, r mod n == x(committed) mod n) lives in
+  // s2c.js. A malformed opening still throws so the caller's try/catch
+  // reports it as an error rather than as a mismatch.
+  hodlPointFrom(opening);
+  return s2cSignatureMatches(r, opening, host);
 }
 function hodlLe32Counter(n) {
   let b = new Uint8Array(32);
