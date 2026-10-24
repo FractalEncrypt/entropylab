@@ -840,6 +840,21 @@ test("an unknown network or an invalid receiveIndex is refused up front", () => 
   assert.equal(compareRecoveryArtifacts(artifacts, { network: "mainnet", receiveIndex: 0 }).verdict, "consistent");
 });
 
+test("a descriptor key with two origins, or an origin not directly before it, is refused", () => {
+  // Muse (review of ff6854a): a second "[...]" was ignored. BIP-380 allows at
+  // most one key origin, directly before the key.
+  const opts = { network: "mainnet", receiveIndex: 0 };
+  for (const body of [
+    `wpkh([${BIP84_FPR}/84'/0'/0'][deadbeef/84'/0'/1']${BIP84_XPUB}/0/*)`,
+    `wpkh(${BIP84_XPUB}[${BIP84_FPR}/84'/0'/0']/0/*)`,
+  ]) {
+    const out = compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: desc(body) }, opts);
+    assert.equal(out.verdict, "inconsistent", body);
+    assert.equal(out.mismatchAt, "Support", body);
+  }
+  assert.equal(compareRecoveryArtifacts({ mnemonic: BIP84_MNEMONIC, descriptor: BIP84_DESC }, opts).verdict, "consistent");
+});
+
 test("a seed outside BIP-32's 16 to 64 bytes is refused", () => {
   // Red-team RE-3: a 1-byte "seed" was accepted and could report consistent
   // against a key derived from it. BIP-32 seeds are 128 to 512 bits.

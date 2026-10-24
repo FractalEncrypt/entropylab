@@ -237,6 +237,11 @@ function parseDescriptorClaims(descriptor) {
   const originMatch = arg.match(ORIGIN_RE);
   let originFingerprint = null;
   let originPath = null;
+  // BIP-380: at most one key origin, and only directly before the key. A
+  // second "[...]" would otherwise be ignored (Muse, review of ff6854a).
+  if ((arg.match(/\[/g) ?? []).length > 1 || (originMatch && originMatch.index !== 0)) {
+    return { error: "descriptor key must have at most one origin, directly before the key" };
+  }
   if (originMatch) {
     originFingerprint = originMatch[1].toLowerCase();
     // HDKey.derive wants 'h'/'H' normalized to "'".
