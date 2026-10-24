@@ -11,6 +11,8 @@
 // separator. The URI is therefore parsed the same way here, keeping the raw
 // `pj` value.
 
+import { Address as BtcAddress, NETWORK, TEST_NETWORK } from "@scure/btc-signer";
+import { parseBitcoinUri } from "./bip321.js";
 import { secp256k1, secp256k1Ready } from "./secp256k1.js";
 
 // Callers must await secp256k1Ready before calling decodePayjoinUri; the WASM
@@ -18,11 +20,16 @@ import { secp256k1, secp256k1Ready } from "./secp256k1.js";
 
 const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const BECH32_UPPER = "QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L";
+const BTC_REGTEST = { ...TEST_NETWORK, bech32: "bcrt" };
 
 function assertValidCompressedPubkey(bytes, what) {
   try {
     secp256k1.Point.fromBytes(bytes);
-  } catch {
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error);
+    if (/not ready|loading|WASM/i.test(message)) {
+      throw new Error("Key checks are still loading; try again.");
+    }
     throw new Error(`The ${what} is not a valid secp256k1 point.`);
   }
 }
@@ -31,6 +38,22 @@ function bytesToHex(bytes) {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return hex;
+}
+
+function decodeAddress(address) {
+  if (!address) return { address: null, network: null };
+  const networks = [
+    ["mainnet", NETWORK],
+    ["testnet", TEST_NETWORK],
+    ["regtest", BTC_REGTEST],
+  ];
+  for (const [network, params] of networks) {
+    try {
+      BtcAddress(params).decode(address);
+      return { address, network };
+    } catch {}
+  }
+  throw new Error("The URI's address is not a valid Bitcoin address.");
 }
 
 // BIP 77's fragment parameters are bech32 strings without a checksum: the HRP
@@ -90,11 +113,14 @@ function parseV1Endpoint(pjValue) {
   } catch {
     throw new Error("The pj parameter is not a valid URL.");
   }
+  if (url.username || url.password) {
+    throw new Error("The pj endpoint must not carry userinfo.");
+  }
   const scheme = url.protocol.replace(/:$/, "").toLowerCase();
   const host = url.hostname.toLowerCase();
   if (!host) throw new Error("The pj endpoint is missing a host.");
-  if (scheme === "https") return { endpoint: pjValue, origin: url.origin, host };
-  if (scheme === "http" && host.endsWith(".onion")) return { endpoint: pjValue, origin: url.origin, host };
+  if (scheme === "https") return { endpoint: url.href, origin: url.origin, host };
+  if (scheme === "http" && host.endsWith(".onion")) return { endpoint: url.href, origin: url.origin, host };
   throw new Error("A BIP 78 payjoin endpoint must be https, or http on a .onion host.");
 }
 
@@ -159,6 +185,9 @@ function parseV2(pjValue, now) {
   } catch {
     throw new Error("The pj parameter's mailbox URL is not a valid URL.");
   }
+  if (url.search) throw new Error("The mailbox URL must not carry a query string.");
+  if (url.username || url.password) throw new Error("The mailbox URL must not carry userinfo.");
+  if (url.hash) throw new Error("The mailbox URL must not carry a fragment.");
   const scheme = url.protocol.replace(/:$/, "").toLowerCase();
   const host = url.hostname.toLowerCase();
   if (!host) throw new Error("The mailbox URL is missing a host.");
@@ -202,6 +231,7 @@ export function decodePayjoinUri(text, now = Math.floor(Date.now() / 1000)) {
   if (literalFragment !== undefined) {
     throw new Error("A payjoin URI must percent-encode # as %23; a literal fragment is not part of the pj value.");
   }
+  const { address: checkedAddress, network } = decodeAddress(address);
   const pjoss = params.filter((param) => param.key === "pjos");
   if (pjoss.length > 1) throw new Error("A bitcoin: URI carries at most one pjos parameter.");
   const pjosRaw = pjoss[0]?.value;
@@ -211,15 +241,18 @@ export function decodePayjoinUri(text, now = Math.floor(Date.now() / 1000)) {
   const pjos = pjosRaw ?? null;
   const amounts = params.filter((param) => param.key === "amount");
   if (amounts.length > 1) throw new Error("A bitcoin: URI carries at most one amount.");
-  const amount = amounts[0]?.value ?? null;
+  const amount = amounts.length
+    ? parseBitcoinUri(`bitcoin:?amount=${encodeURIComponent(amounts[0].value)}`).amountSats
+    : null;
   if (pj.includes("#")) {
     const v2 = parseV2(pj, now);
-    return { kind: "v2", address, amount, pjos, ...v2 };
+    return { kind: "v2", address: checkedAddress, network, amount, pjos, ...v2 };
   }
   const v1 = parseV1Endpoint(pj);
   return {
     kind: "v1",
-    address,
+    address: checkedAddress,
+    network,
     amount,
     pjos,
     endpoint: v1.endpoint,

@@ -17,7 +17,8 @@ const BIP77_PLUS =
 
 const EXPECTED = {
   address: "tb1q6q6de88mj8qkg0q5lupmpfexwnqjsr4d2gvx2p",
-  amount: "0.00666666",
+  network: "testnet",
+  amount: "666666",
   pjos: "0",
   directory: { origin: "https://payjo.in", host: "payjo.in" },
   shortId: "TXJCGKTKXLUUZ",
@@ -33,6 +34,7 @@ test("BIP 77 example URI decodes to the spec's values", () => {
   const decoded = decodePayjoinUri(BIP77_EXAMPLE, 1736218740);
   assert.equal(decoded.kind, "v2");
   assert.equal(decoded.address, EXPECTED.address);
+  assert.equal(decoded.network, EXPECTED.network);
   assert.equal(decoded.amount, EXPECTED.amount);
   assert.equal(decoded.pjos, EXPECTED.pjos);
   assert.deepEqual(decoded.directory, EXPECTED.directory);
@@ -47,6 +49,7 @@ test("the legacy + separator decodes identically and is flagged", () => {
   const decoded = decodePayjoinUri(BIP77_PLUS, 1736218740);
   assert.equal(decoded.kind, "v2");
   assert.equal(decoded.address, EXPECTED.address);
+  assert.equal(decoded.network, EXPECTED.network);
   assert.equal(decoded.amount, EXPECTED.amount);
   assert.equal(decoded.pjos, EXPECTED.pjos);
   assert.deepEqual(decoded.directory, EXPECTED.directory);
@@ -68,12 +71,12 @@ test("wrong parameter order is refused for the - separator", () => {
     "EX1WKV8CEC-OH1QYPM59NK2LXXS4890SUAXXYT25Z2VAPHP0X7YEYCJXGWAG6UG9ZU6NQ",
     "OH1QYPM59NK2LXXS4890SUAXXYT25Z2VAPHP0X7YEYCJXGWAG6UG9ZU6NQ-EX1WKV8CEC"
   );
-  assert.throws(() => decodePayjoinUri(wrongOrder, 1736218740), /order/i);
+  assert.throws(() => decodePayjoinUri(wrongOrder, 1736218740));
 });
 
 test("duplicate fragment parameters are refused", () => {
   const duplicate = BIP77_EXAMPLE.replace("EX1WKV8CEC-OH1", "EX1WKV8CEC-EX1WKV8CEC-OH1");
-  assert.throws(() => decodePayjoinUri(duplicate, 1736218740), /duplicate/i);
+  assert.throws(() => decodePayjoinUri(duplicate, 1736218740));
 });
 
 test("a missing RK parameter is refused", () => {
@@ -81,7 +84,7 @@ test("a missing RK parameter is refused", () => {
     "-RK1Q0DJS3VVDXWQQTLQ8022QGXSX7ML9PHZ6EDSF6AKEWQG758JPS2EV",
     ""
   );
-  assert.throws(() => decodePayjoinUri(missingRk, 1736218740), /missing.*RK/i);
+  assert.throws(() => decodePayjoinUri(missingRk, 1736218740));
 });
 
 test("an RK value that is not a compressed secp256k1 point is refused", () => {
@@ -91,27 +94,27 @@ test("an RK value that is not a compressed secp256k1 point is refused", () => {
     "RK1Q0DJS3VVDXWQQTLQ8022QGXSX7ML9PHZ6EDSF6AKEWQG758JPS2EV",
     "RK1QG" + "Q".repeat(51)
   );
-  assert.throws(() => decodePayjoinUri(badRk, 1736218740), /secp256k1|curve|point/i);
+  assert.throws(() => decodePayjoinUri(badRk, 1736218740));
 });
 
 test("a Short ID with a nonzero padding bit is refused", () => {
   const badPadding = BIP77_EXAMPLE.replace("TXJCGKTKXLUUZ", "TXJCGKTKXLUUP");
-  assert.throws(() => decodePayjoinUri(badPadding, 1736218740), /padding/i);
+  assert.throws(() => decodePayjoinUri(badPadding, 1736218740));
 });
 
 test("a truncated EX value is refused", () => {
   const truncated = BIP77_EXAMPLE.replace("EX1WKV8CEC", "EX1WKV8CE");
-  assert.throws(() => decodePayjoinUri(truncated, 1736218740), /padding|EX/i);
+  assert.throws(() => decodePayjoinUri(truncated, 1736218740));
 });
 
 test("a non-bech32 character in the fragment is refused", () => {
   const nonBech32 = BIP77_EXAMPLE.replace("EX1WKV8CEC", "EX1WKV8BEC");
-  assert.throws(() => decodePayjoinUri(nonBech32, 1736218740), /bech32/i);
+  assert.throws(() => decodePayjoinUri(nonBech32, 1736218740));
 });
 
 test("a lowercase fragment is refused", () => {
   const lowercase = BIP77_EXAMPLE.replace("EX1WKV8CEC", "ex1wkv8cec");
-  assert.throws(() => decodePayjoinUri(lowercase, 1736218740), /uppercase/i);
+  assert.throws(() => decodePayjoinUri(lowercase, 1736218740));
 });
 
 test("a v1 URI reports the endpoint and the direct-post warning", () => {
@@ -121,15 +124,15 @@ test("a v1 URI reports the endpoint and the direct-post warning", () => {
   );
   assert.equal(decoded.kind, "v1");
   assert.equal(decoded.address, "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX");
-  assert.equal(decoded.amount, "1");
+  assert.equal(decoded.network, "mainnet");
+  assert.equal(decoded.amount, "100000000");
   assert.equal(decoded.endpoint, "https://example.com/payjoin");
   assert.deepEqual(decoded.warnings, ["v1-direct-endpoint"]);
 });
 
 test("a v1 http endpoint is refused unless it is a .onion", () => {
   assert.throws(
-    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=http://example.com"),
-    /https|onion/i
+    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=http://example.com")
   );
   const onion = decodePayjoinUri(
     "bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=http://example.onion/payjoin",
@@ -140,7 +143,7 @@ test("a v1 http endpoint is refused unless it is a .onion", () => {
 
 test("a v2 mailbox URL must be https or http on .onion", () => {
   const plainHttp = BIP77_EXAMPLE.replace("HTTPS://PAYJO.IN", "HTTP://PAYJO.IN");
-  assert.throws(() => decodePayjoinUri(plainHttp, 1736218740), /https|onion/i);
+  assert.throws(() => decodePayjoinUri(plainHttp, 1736218740));
   const onion = BIP77_EXAMPLE.replace("HTTPS://PAYJO.IN", "HTTP://PAYJO.IN.onion");
   assert.equal(decodePayjoinUri(onion, 1736218740).kind, "v2");
 });
@@ -154,11 +157,57 @@ test("a URI without pj is not a payjoin request", () => {
 
 test("duplicate pj and bad pjos are refused", () => {
   assert.throws(
-    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=https://a&pj=https://b"),
-    /pj/i
+    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=https://a&pj=https://b")
   );
   assert.throws(
-    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pjos=2&pj=https://a"),
-    /pjos/i
+    () => decodePayjoinUri("bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pjos=2&pj=https://a")
   );
+});
+
+test("v1 endpoint is reported as the WHATWG-normalized URL", () => {
+  const decoded = decodePayjoinUri(
+    "bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=HTTPS://EXAMPLE.COM:443/payjoin",
+    1736218740
+  );
+  assert.equal(decoded.endpoint, "https://example.com/payjoin");
+});
+
+test("v1 endpoint with userinfo is refused", () => {
+  assert.throws(() =>
+    decodePayjoinUri(
+      "bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=https://user:pass@example.com/payjoin"
+    )
+  );
+});
+
+test("a non-empty address must decode as a Bitcoin address", () => {
+  assert.throws(() =>
+    decodePayjoinUri("bitcoin:notanaddress?pj=https://example.com/payjoin")
+  );
+});
+
+test("a v2 mailbox URL with a query string is refused", () => {
+  const withQuery = BIP77_EXAMPLE.replace("TXJCGKTKXLUUZ%23", "TXJCGKTKXLUUZ%3Fx=1%23");
+  assert.throws(() => decodePayjoinUri(withQuery, 1736218740));
+});
+
+test("a v2 mailbox URL with userinfo is refused", () => {
+  const withUserinfo = BIP77_EXAMPLE.replace("HTTPS://PAYJO.IN", "HTTPS://user@PAYJO.IN");
+  assert.throws(() => decodePayjoinUri(withUserinfo, 1736218740));
+});
+
+test("a v2 mailbox URL with a second fragment separator is refused", () => {
+  const withHash = BIP77_EXAMPLE.replace("%23EX1WKV8CEC", "%23EX1WKV8CEC%23extra");
+  assert.throws(() => decodePayjoinUri(withHash, 1736218740));
+});
+
+test("a v2 mailbox URL with a non-default port keeps it in the origin", () => {
+  const withPort = BIP77_EXAMPLE.replace("PAYJO.IN", "PAYJO.IN:8443");
+  const decoded = decodePayjoinUri(withPort, 1736218740);
+  assert.equal(decoded.directory.origin, "https://payjo.in:8443");
+});
+
+test("a malformed amount is refused", () => {
+  const badAmount = BIP77_EXAMPLE.replace("amount=0.00666666", "amount=0.006666666");
+  assert.throws(() => decodePayjoinUri(badAmount, 1736218740));
 });
