@@ -13,12 +13,16 @@
 //   artifact subsets that share no checkable claim produce explicit
 //   "insufficient" outcomes with a named failing step, never a silent pass.
 // - A user pasting a seed here extends the same trust they already place
-//   in EntropyLab's other workspaces; nothing new is persisted or exposed.
+//   in EntropyLab's other workspaces. Byte buffers (seed bytes, decoded
+//   base58 payloads) are zeroed after use; JS strings (mnemonic, keys)
+//   cannot be wiped and are best effort.
 //
 // Scope (v1): single-signature templates — pkh, wpkh, sh(wpkh), tr — with
-// one extended public key and an optional [fingerprint/path] key origin.
-// Multisig (wsh/multi/sortedmulti, Ypub/Zpub), miniscript, combo(), and
-// raw-hex-key-only descriptors are reported UNSUPPORTED, not INVALID.
+// one extended public key, an optional [fingerprint/path] key origin, and a
+// /0/*, /1/* or /<0;1>/* key path. tr() is key-path only: a script tree is
+// outside scope. Multisig (wsh/multi/sortedmulti, Ypub/Zpub), miniscript,
+// combo(), and raw-hex-key-only descriptors are reported UNSUPPORTED, not
+// INVALID.
 
 import { HDKey } from "./hdkey.js";
 import { mnemonicToSeedSync, validateMnemonic } from "./bip39.js";
@@ -106,6 +110,17 @@ function versionsForNetwork(network) {
   return network === "mainnet" ? undefined : BITCOIN_TESTNET_VERSIONS;
 }
 
+// bech32/bech32m addresses are case-insensitive (BIP-173: all-lower or
+// all-upper; a mixed-case string is invalid); Base58 is case-sensitive and
+// must match exactly.
+function addressesEqual(a, b) {
+  if (a === b) return true;
+  const bech32 = /^(bc|tb|bcrt)1/i;
+  const oneCase = (s) => s === s.toLowerCase() || s === s.toUpperCase();
+  if (bech32.test(a) && bech32.test(b) && oneCase(a) && oneCase(b)) return a.toLowerCase() === b.toLowerCase();
+  return false;
+}
+
 // The argument of the descriptor's single key function, e.g. the
 // "[fpr/path]xpub/0/*" inside wpkh(...) or sh(wpkh(...)).
 function keyArgumentOf(text, fn) {
@@ -134,12 +149,15 @@ function isAccountPath(path) {
 }
 
 // Parse a single-signature descriptor into its claims. Returns { error } when
-// the template, checksum, key shape or origin is outside v1 scope; the caller
-// turns that into a named Support failure.
+// the template, key shape, key path or origin is outside v1 scope; the caller
+// turns that into a named Support failure. The checksum is verified whenever
+// it is present; a descriptor without one is accepted and flagged
+// checksumAbsent so the caller can surface it.
 function parseDescriptorClaims(descriptor) {
   const text = String(descriptor ?? "").trim();
   const hash = text.lastIndexOf("#");
   let body = text;
+  let checksumAbsent = false;
   if (hash >= 0) {
     const checksum = text.slice(hash + 1);
     body = text.slice(0, hash);
@@ -152,6 +170,8 @@ function parseDescriptorClaims(descriptor) {
     if (checksum.length !== 8 || expected !== checksum) {
       return { error: "descriptor checksum does not match its body" };
     }
+  } else {
+    checksumAbsent = true;
   }
   const fnMatch = body.match(/^([a-z]+)\(/);
   if (!fnMatch) return { error: "descriptor template outside v1 scope (pkh/wpkh/sh(wpkh)/tr, single extended key)" };
@@ -165,6 +185,13 @@ function parseDescriptorClaims(descriptor) {
 
   const arg = keyArgumentOf(body, fn);
   if (arg == null) return { error: "descriptor key argument could not be read" };
+
+  // tr() is single-key only in v1: a script tree (or any second argument)
+  // is outside scope and must be refused, not silently ignored.
+  if (fn === "tr" && /[,{]/.test(arg)) {
+    return { error: "tr() with a script tree or extra arguments is outside v1 single-key scope" };
+  }
+
   const keyMatches = arg.match(EXTENDED_PUB_RE) ?? [];
   if (keyMatches.length === 0) return { error: "descriptor key is not a single extended public key" };
   if (keyMatches.length > 1) return { error: "descriptor carries more than one extended key (single-sig v1 scope)" };
@@ -176,6 +203,18 @@ function parseDescriptorClaims(descriptor) {
   if (EXTENDED_PUB_VERSIONS[prefix] == null) return { error: "extended key prefix is not recognized" };
   const coreXpub = toCoreExtendedPub(key, coreVersionFor(prefix));
   if (!coreXpub) return { error: "descriptor key is not a recognized public extended key" };
+
+  // The key path after the xpub selects the branch. v1 understands only the
+  // receive branch (/0/*), the change branch (/1/*) and the multipath form
+  // (/<0;1>/*); anything else is a named Support failure.
+  const keyIndex = arg.indexOf(key);
+  const afterKey = arg.slice(keyIndex + key.length);
+  const branchMatch = /^\/(0|1)\/\*$/.exec(afterKey);
+  const multiMatch = /^\/<0;1>\/\*$/.exec(afterKey);
+  if (!branchMatch && !multiMatch) {
+    return { error: "descriptor key path is not /0/*, /1/* or /<0;1>/*" };
+  }
+  const branch = branchMatch && branchMatch[1] === "1" ? 1 : 0;
 
   const originMatch = arg.match(ORIGIN_RE);
   let originFingerprint = null;
@@ -197,6 +236,8 @@ function parseDescriptorClaims(descriptor) {
     keyNetwork: networkOfPrefix(prefix),
     originFingerprint,
     originPath,
+    branch,
+    checksumAbsent,
   };
 }
 
@@ -206,14 +247,40 @@ function stepOk(name) {
 function stepFail(name, detail) {
   return { name, ok: false, detail };
 }
+// Attach the descriptor checksum status to the result when a descriptor was
+// supplied: "verified" when present and matching, "absent" when omitted.
+function withChecksum(result, checksumStatus) {
+  if (checksumStatus) result.checksum = checksumStatus;
+  return result;
+}
 
-// Derive the canonical claims a seed/mnemonic makes about a wallet, using the
-// descriptor's origin path when one is available (otherwise BIP-84 account 0).
-function claimsFromSeed(master, descriptorClaims) {
-  const fingerprintHex = master.fingerprint.toString(16).padStart(8, "0");
-  const path = descriptorClaims?.originPath ?? "/84'/0'/0'";
-  const account = master.derive("m" + path);
-  return { fingerprintHex, account };
+// Candidate account paths for a supplied key. With a descriptor origin the
+// path is fixed; otherwise the SLIP-132 prefix names the purpose, and a plain
+// xpub/tpub is tried at the four standard purposes on its own network.
+function candidatePathsFor(keyClaim, descriptorClaims) {
+  if (descriptorClaims?.originPath) return [descriptorClaims.originPath];
+  const coin = keyClaim.network === "testnet" ? 1 : 0;
+  const prefix = keyClaim.keyPrefix;
+  if (prefix === "ypub" || prefix === "upub") return [`/49'/${coin}'/0'`];
+  if (prefix === "zpub" || prefix === "vpub") return [`/84'/${coin}'/0'`];
+  return [`/44'/${coin}'/0'`, `/49'/${coin}'/0'`, `/84'/${coin}'/0'`, `/86'/${coin}'/0'`];
+}
+
+// Account-level purpose → the script type its addresses use. Used to derive
+// candidate addresses when no descriptor pins the template.
+const PURPOSE_SCRIPT_TYPE = [
+  { purpose: 44, scriptType: "p2pkh" },
+  { purpose: 49, scriptType: "p2sh-p2wpkh" },
+  { purpose: 84, scriptType: "p2wpkh" },
+  { purpose: 86, scriptType: "p2tr" },
+];
+
+// Purposes implied by a key prefix: SLIP-132 names one, a plain xpub/tpub
+// could be any of the four standard purposes.
+function purposesForPrefix(prefix) {
+  if (prefix === "ypub" || prefix === "upub") return PURPOSE_SCRIPT_TYPE.filter((p) => p.purpose === 49);
+  if (prefix === "zpub" || prefix === "vpub") return PURPOSE_SCRIPT_TYPE.filter((p) => p.purpose === 84);
+  return PURPOSE_SCRIPT_TYPE;
 }
 
 /**
@@ -242,6 +309,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
   // ---- Descriptor claims (parse once; several comparisons reuse them).
   let descriptorClaims = null;
   let descriptorAddress = null;
+  let checksumStatus = null;
   if (supplied.descriptor) {
     let parsed;
     try {
@@ -253,6 +321,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       steps.push(stepFail("Support", parsed.error));
     } else {
       descriptorClaims = parsed;
+      checksumStatus = parsed.checksumAbsent ? "absent" : "verified";
       try {
         descriptorAddress = descriptorDerive(supplied.descriptor, receiveIndex, descriptorClaims.keyNetwork).address;
       } catch (err) {
@@ -264,7 +333,7 @@ export function compareRecoveryArtifacts(artifacts, opts) {
 
   // ---- Every supplied key becomes a claim, so none can be shadowed.
   const keyClaims = [];
-  const addKeyClaim = (source, keyText, scriptTypeClaim) => {
+  const addKeyClaim = (source, keyText) => {
     const prefix = keyText.slice(0, 4);
     if (/^[YZUV]pub$/.test(prefix)) {
       // Ypub/Zpub/Upub/Vpub are multisig SLIP-132 prefixes. v1 is single-sig
@@ -289,37 +358,42 @@ export function compareRecoveryArtifacts(artifacts, opts) {
       steps.push(stepFail("Support", `${source} does not parse: ${err.message}`));
       return;
     }
-    keyClaims.push({ source, coreXpub, network: keyNetwork, scriptTypeClaim });
+    // The prefix, not the field name, decides the script-type claim: a
+    // SLIP-132 key keeps its claim whichever field it arrives in.
+    const scriptTypeClaim = SLIP132_SCRIPT_TYPE[prefix] ?? null;
+    keyClaims.push({ source, coreXpub, network: keyNetwork, keyPrefix: prefix, scriptTypeClaim });
   };
 
-  if (supplied.xpub) addKeyClaim("xpub", supplied.xpub, null);
-  if (supplied.slip132) {
-    addKeyClaim("slip132", supplied.slip132, SLIP132_SCRIPT_TYPE[supplied.slip132.slice(0, 4)] ?? null);
-  }
+  if (supplied.xpub) addKeyClaim("xpub", supplied.xpub);
+  if (supplied.slip132) addKeyClaim("slip132", supplied.slip132);
   if (descriptorClaims) {
     keyClaims.push({
       source: "descriptor",
       coreXpub: descriptorClaims.coreXpub,
       network: descriptorClaims.keyNetwork,
+      keyPrefix: descriptorClaims.keyPrefix,
       scriptTypeClaim: SLIP132_SCRIPT_TYPE[descriptorClaims.keyPrefix] ?? null,
     });
   }
 
+  // ---- Network enforcement: opts.network is the expected network. A key or
+  // descriptor on another network is a mismatch, never a silent pass.
+  for (const claim of keyClaims) {
+    if (claim.network !== network) {
+      steps.push(stepFail("Network", `${claim.source} is ${claim.network}, expected ${network}`));
+    }
+  }
+
   // ---- Seed / mnemonic side: master fingerprint + account key. The
   // descriptor's key network decides the version words, so a testnet
-  // descriptor is compared against testnet-derived keys.
-  const seedNetwork = descriptorClaims?.keyNetwork ?? network;
+  // descriptor is compared against testnet-derived keys; with no descriptor
+  // the first supplied key's network is used.
+  const seedNetwork = descriptorClaims?.keyNetwork ?? keyClaims[0]?.network ?? network;
   const versions = versionsForNetwork(seedNetwork);
   const seedClaimsList = [];
   const addSeedClaim = (source, master) => {
-    const claims = claimsFromSeed(master, descriptorClaims);
-    seedClaimsList.push({ source, ...claims });
-    keyClaims.push({
-      source,
-      coreXpub: claims.account.neutered().publicExtendedKey,
-      network: seedNetwork,
-      scriptTypeClaim: null,
-    });
+    const fingerprintHex = master.fingerprint.toString(16).padStart(8, "0");
+    seedClaimsList.push({ source, master, fingerprintHex });
   };
 
   if (supplied.mnemonic) {
@@ -373,6 +447,43 @@ export function compareRecoveryArtifacts(artifacts, opts) {
     }
   }
 
+  // ---- Seed vs key: derive the seed at the candidate paths for each key.
+  // With a descriptor origin the path is fixed; otherwise the purpose comes
+  // from the SLIP-132 prefix, and a plain xpub/tpub is tried at the four
+  // standard purposes on its own network. The matched path is the detail.
+  const descriptorKeyClaim = keyClaims.find((c) => c.source === "descriptor") ?? null;
+  const seedAccounts = new Map();
+  for (const seedClaim of seedClaimsList) {
+    const perKey = new Map();
+    seedAccounts.set(seedClaim, perKey);
+    for (const keyClaim of keyClaims) {
+      if (keyClaim.network !== seedNetwork) {
+        steps.push(stepFail("Network", `${seedClaim.source} is ${seedNetwork}, ${keyClaim.source} is ${keyClaim.network}`));
+        continue;
+      }
+      const candidates = candidatePathsFor(keyClaim, descriptorClaims);
+      let matched = null;
+      for (const path of candidates) {
+        let account;
+        try {
+          account = seedClaim.master.derive("m" + path);
+        } catch {
+          continue;
+        }
+        if (account.neutered().publicExtendedKey === keyClaim.coreXpub) {
+          matched = { path, account };
+          break;
+        }
+      }
+      if (matched) {
+        perKey.set(keyClaim, matched);
+        steps.push({ name: "Account key", ok: true, detail: `matched m${matched.path}` });
+      } else {
+        steps.push(stepFail("Account key", `${seedClaim.source} does not derive ${keyClaim.source} at ${candidates.join(" or ")}`));
+      }
+    }
+  }
+
   if (descriptorClaims?.originFingerprint) {
     for (const claim of seedClaimsList) {
       if (claim.fingerprintHex === descriptorClaims.originFingerprint) {
@@ -402,39 +513,101 @@ export function compareRecoveryArtifacts(artifacts, opts) {
 
   // Address comparisons: descriptor side and (when possible) seed side.
   if (supplied.address && descriptorAddress) {
-    if (supplied.address === descriptorAddress) steps.push(stepOk("Receive address"));
+    if (addressesEqual(supplied.address, descriptorAddress)) steps.push(stepOk("Receive address"));
     else steps.push(stepFail("Receive address", `descriptor derives ${descriptorAddress}, supplied ${supplied.address}`));
   } else if (descriptorAddress && descriptorClaims) {
     // Cross-check the seed against the descriptor at the receive index.
     // This catches path/script confusion (e.g. same key under pkh vs wpkh)
-    // even when the account-key comparison happens to match.
+    // even when the account-key comparison happens to match. The descriptor's
+    // key path selects the branch (receive 0 or change 1).
     for (const claim of seedClaimsList) {
+      const perKey = seedAccounts.get(claim);
+      const match = descriptorKeyClaim ? perKey.get(descriptorKeyClaim) : null;
+      if (!match) continue; // Account key failure already reported
       let seedAddress = null;
       try {
-        const child = claim.account.derive(`m/0/${receiveIndex}`);
+        const child = match.account.derive(`m/${descriptorClaims.branch}/${receiveIndex}`);
         seedAddress = addressFor(descriptorClaims.scriptType, child.publicKey, seedNetwork);
       } catch (err) {
         steps.push(stepFail("Support", `seed side does not derive at index ${receiveIndex}: ${err.message}`));
         continue;
       }
-      if (seedAddress === descriptorAddress) steps.push(stepOk("Receive address"));
+      if (addressesEqual(seedAddress, descriptorAddress)) steps.push(stepOk("Receive address"));
       else steps.push(stepFail("Receive address", `seed side derives ${seedAddress}, descriptor derives ${descriptorAddress}`));
+    }
+  } else if (supplied.address && !descriptorClaims) {
+    // No descriptor: derive candidate addresses from every supplied key and
+    // seed (receive and change chains, indexes 0-19) and look for the
+    // supplied address. A supplied address is never ignored.
+    const SCAN = 20;
+    let matched = null;
+    const tried = [];
+    const scanAccount = (account, scriptType, claimNetwork, label) => {
+      for (const branch of [0, 1]) {
+        for (let i = 0; i < SCAN; i++) {
+          let addr;
+          try {
+            const child = account.derive(`m/${branch}/${i}`);
+            addr = addressFor(scriptType, child.publicKey, claimNetwork);
+          } catch {
+            continue;
+          }
+          if (addressesEqual(addr, supplied.address)) {
+            matched = `${label}/${branch}/${i}`;
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    for (const keyClaim of keyClaims) {
+      if (matched) break;
+      let account;
+      try {
+        account = HDKey.fromExtendedKey(keyClaim.coreXpub, versionsForNetwork(keyClaim.network));
+      } catch {
+        continue;
+      }
+      for (const { scriptType } of purposesForPrefix(keyClaim.keyPrefix)) {
+        tried.push(`${keyClaim.source} ${scriptType}`);
+        if (scanAccount(account, scriptType, keyClaim.network, keyClaim.source)) break;
+      }
+    }
+    for (const seedClaim of seedClaimsList) {
+      if (matched) break;
+      const coin = seedNetwork === "testnet" ? 1 : 0;
+      for (const { purpose, scriptType } of PURPOSE_SCRIPT_TYPE) {
+        let account;
+        try {
+          account = seedClaim.master.derive(`m/${purpose}'/${coin}'/0'`);
+        } catch {
+          continue;
+        }
+        const label = `${seedClaim.source} m/${purpose}'/${coin}'/0'`;
+        tried.push(label);
+        if (scanAccount(account, scriptType, seedNetwork, label)) break;
+      }
+    }
+    if (matched) {
+      steps.push({ name: "Receive address", ok: true, detail: `matched ${matched}` });
+    } else if (tried.length > 0) {
+      steps.push(stepFail("Receive address", `address not among the first 20 receive/change addresses of ${tried.join(", ")}`));
     }
   }
 
   // A supplied artifact that could not be checked is never a pass.
   if (steps.some((s) => s.name === "Support" && !s.ok)) {
-    return { steps, verdict: "inconsistent", mismatchAt: "Support" };
+    return withChecksum({ steps, verdict: "inconsistent", mismatchAt: "Support" }, checksumStatus);
   }
   const comparable = steps.filter((s) => s.name !== "Support");
   if (comparable.length === 0) {
     // Two+ artifacts were supplied but none share a checkable claim.
-    return { steps, verdict: "insufficient" };
+    return withChecksum({ steps, verdict: "insufficient" }, checksumStatus);
   }
   const firstFailure = comparable.find((s) => !s.ok);
   if (firstFailure) {
-    return { steps, verdict: "inconsistent", mismatchAt: firstFailure.name };
+    return withChecksum({ steps, verdict: "inconsistent", mismatchAt: firstFailure.name }, checksumStatus);
   }
-  return { steps, verdict: "consistent" };
+  return withChecksum({ steps, verdict: "consistent" }, checksumStatus);
 }
 

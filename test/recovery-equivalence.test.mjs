@@ -90,6 +90,9 @@ const BIP84_ADDR0 = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const BIP84_ADDR1 = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g";
 const BIP49_YPUB =
   "ypub6Ww3ibxVfGzLrAH1PNcjyAWenMTbbAosGNB6VvmSEgytSER9azLDWCxoJwW7Ke7icmizBMXrzBx9979FfaHxHcrArf3zbeJJJUZPf663zsP";
+// BIP-86 test vector: m/86'/0'/0' xpub of the same mnemonic.
+const BIP86_XPUB =
+  "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ";
 
 // Fixture construction helpers — existing repo primitives, not the new code:
 
@@ -257,6 +260,81 @@ test("descriptor origin that is not an account path → inconsistent at Support"
   assert.equal(out.mismatchAt, "Support");
 });
 
+// ---- Descriptor key path (RE-2) ----------------------------------------
+
+test("change-branch descriptor (/1/*) of the same wallet → consistent", () => {
+  const changeDesc = desc(`wpkh([${BIP84_FPR}/84'/0'/0']${BIP84_XPUB}/1/*)`);
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, descriptor: changeDesc },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true, "seed-side change-branch cross-check ran and matched");
+});
+
+test("descriptor key path /0/5/* → inconsistent at Support", () => {
+  const bad = desc(`wpkh([${BIP84_FPR}/84'/0'/0']${BIP84_XPUB}/0/5/*)`);
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, descriptor: bad },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Support");
+  const support = out.steps.find((s) => s.name === "Support" && !s.ok);
+  assert.ok(support, "a Support failure is reported");
+  assert.ok(support.detail.includes("key path"), `Support detail names the key path: ${support.detail}`);
+});
+
+// ---- Taproot scope (RE-3) ----------------------------------------------
+
+test("tr() with a script tree → inconsistent at Support", () => {
+  const body = `tr([${BIP84_FPR}/86'/0'/0']${BIP86_XPUB}/0/*,{pk(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)})`;
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, descriptor: desc(body) },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Support");
+  const support = out.steps.find((s) => s.name === "Support" && !s.ok);
+  assert.ok(support, "a Support failure is reported");
+  assert.ok(support.detail.includes("script tree"), `Support detail names the script tree: ${support.detail}`);
+});
+
+// ---- No descriptor, no guessed path (RE-4) -----------------------------
+
+test("BIP-49 ypub of the seed (no descriptor) → consistent at Account key", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, slip132: BIP49_YPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const acct = out.steps.find((s) => s.name === "Account key");
+  assert.ok(acct && acct.ok === true);
+});
+
+test("BIP-86 xpub of the seed (no descriptor) → consistent at Account key", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, xpub: BIP86_XPUB },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const acct = out.steps.find((s) => s.name === "Account key");
+  assert.ok(acct && acct.ok === true);
+});
+
+// ---- Checksum wording (RE-5) -------------------------------------------
+
+test("descriptor without a checksum is accepted and flagged checksum: 'absent'", () => {
+  const noChecksum = `wpkh([${BIP84_FPR}/84'/0'/0']${BIP84_XPUB}/0/*)`;
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, descriptor: noChecksum },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  assert.equal(out.checksum, "absent");
+});
+
 // ---- Fail closed on a failed check (RE-3) ------------------------------
 
 test("descriptor with a bad checksum → inconsistent at Support, never consistent", () => {
@@ -345,4 +423,132 @@ test("malformed artifacts never throw; each becomes a named Support failure", ()
       assert.equal(out.mismatchAt, "Support");
     });
   }
+});
+
+// ---- Address without a descriptor (R3-1) -------------------------------
+
+test("mnemonic + first receive address, no descriptor → consistent at Receive address", () => {
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true, "address was checked against derived candidates");
+});
+
+test("xpub + first receive address, no descriptor → consistent at Receive address", () => {
+  const out = compareRecoveryArtifacts(
+    { xpub: BIP84_XPUB, address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true);
+});
+
+test("SLIP-132 zpub + first receive address, no descriptor → consistent at Receive address", () => {
+  const out = compareRecoveryArtifacts(
+    { slip132: BIP84_ZPUB, address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true);
+});
+
+test("BIP-49 ypub + first receive address, no descriptor → consistent at Receive address", () => {
+  // BIP-49 spec vector: m/49'/0'/0'/0/0 of the same mnemonic.
+  const out = compareRecoveryArtifacts(
+    { slip132: BIP49_YPUB, address: "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf" },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true);
+});
+
+test("mnemonic + an address from another wallet, no descriptor → inconsistent at Receive address", () => {
+  // BIP-173 test-vector P2WPKH address (witness program of the generator
+  // point), not derived from the BIP-84 mnemonic.
+  const out = compareRecoveryArtifacts(
+    { mnemonic: BIP84_MNEMONIC, address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Receive address");
+  const receive = out.steps.find((s) => s.name === "Receive address" && !s.ok);
+  assert.ok(receive, "a Receive address failure is reported");
+  assert.ok(receive.detail.includes("not among the first 20"), `detail names the scan: ${receive.detail}`);
+});
+
+test("address alone (nothing to derive from) → insufficient", () => {
+  const out = compareRecoveryArtifacts(
+    { address: BIP84_ADDR0 },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "insufficient");
+});
+
+// ---- SLIP-132 prefix wins over field name (R3-2) -----------------------
+
+test("SLIP-132 prefix in the xpub field keeps its script-type claim → inconsistent at Script type", () => {
+  const ypubAsWpkh = desc(`wpkh([${BIP84_FPR}/49'/0'/0']${BIP49_XPUB}/0/*)`);
+  const out = compareRecoveryArtifacts(
+    { xpub: BIP49_YPUB, descriptor: ypubAsWpkh },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Script type");
+});
+
+// ---- bech32 case-insensitivity (R3-3) ----------------------------------
+
+test("bech32 address compares case-insensitively → consistent", () => {
+  const out = compareRecoveryArtifacts(
+    { descriptor: BIP84_DESC, address: BIP84_ADDR0.toUpperCase() },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "consistent");
+  const receive = out.steps.find((s) => s.name === "Receive address");
+  assert.ok(receive && receive.ok === true);
+});
+
+test("mixed-case bech32 address is invalid (BIP-173) → inconsistent", () => {
+  const mixed = BIP84_ADDR0.slice(0, 6) + BIP84_ADDR0.slice(6).toUpperCase();
+  const out = compareRecoveryArtifacts(
+    { descriptor: BIP84_DESC, address: mixed },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Receive address");
+});
+
+test("Base58 address compares exactly (case matters) → inconsistent", () => {
+  const out = compareRecoveryArtifacts(
+    { slip132: BIP49_YPUB, address: "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf".toLowerCase() },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Receive address");
+});
+
+// ---- opts.network enforcement (R3-4) -----------------------------------
+
+test("mainnet key + descriptor with opts.network testnet → inconsistent at Network", () => {
+  const out = compareRecoveryArtifacts(
+    { xpub: BIP84_XPUB, descriptor: BIP84_DESC },
+    { network: "testnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Network");
+});
+
+test("testnet key + descriptor with opts.network mainnet → inconsistent at Network", () => {
+  const out = compareRecoveryArtifacts(
+    { xpub: BIP84_TESTNET_TPUB, descriptor: BIP84_TESTNET_DESC },
+    { network: "mainnet", receiveIndex: 0 },
+  );
+  assert.equal(out.verdict, "inconsistent");
+  assert.equal(out.mismatchAt, "Network");
 });
