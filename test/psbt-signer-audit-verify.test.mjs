@@ -496,6 +496,7 @@ test("the Inspector's own verdict caps the signature it names, and only that one
   assert.equal(validOf(withProblem("partial_sig_unchecked", mine)), null, "named unchecked: never valid");
   assert.equal(validOf(withProblem("partial_sig_invalid", other)), true, "another signer's invalid signature does not blame this one");
   assert.equal(validOf(withProblem("partial_sig_invalid", "unattributed")), null, "a problem naming no key leaves the input uncertain, never invalid");
+  assert.equal(validOf(withProblem("partial_sig_invalid", `partial signature (pubkey ${hexOf(PUB).slice(0, 8)}…) short`)), null, "only the decoder's exact 16-digit form names a key");
   assert.equal(validOf(withProblem("partial_sig_invalid", mine, "input 1")), true, "another input's problem does not cap this one");
   const budget = psbtSignerAuditVerification(beforeDoc, withProblem("verification_budget", "budget exhausted", "psbt"));
   assert.equal(budget.signatures[0].valid, null);

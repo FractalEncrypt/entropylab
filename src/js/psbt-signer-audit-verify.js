@@ -452,7 +452,8 @@ const decoderCaps = (doc) => {
     if (!match || !kind) continue;
     const [family, verdict] = kind, index = Number(match[1]), message = String(problem.message ?? "");
     const cap = caps.get(index) ?? { keyed: [], keyPath: null, unattributed: new Set() };
-    const named = /\((?:pubkey|xonly) ([0-9a-fA-F]{8,})/.exec(message);
+    // Exactly the decoder's form: 16 hex digits then "…" (verify.rs `short`).
+    const named = /\((?:pubkey|xonly) ([0-9a-fA-F]{16})…\)/.exec(message);
     if (named) cap.keyed.push({ family, prefix: named[1].toLowerCase(), verdict });
     else if (family === "tap" && /^key-path\b/.test(message)) cap.keyPath = verdict;
     else cap.unattributed.add(family);
