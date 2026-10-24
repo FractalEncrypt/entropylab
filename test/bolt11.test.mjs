@@ -3,7 +3,13 @@
 // input rejection. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { bolt11Decode } from "../src/js/bolt11.js";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const specExamples = JSON.parse(readFileSync(join(root, "test/fixtures/bolt11-spec-examples.json"), "utf8"));
 
 // The BOLT11 spec's example invoices are all signed with priv_key
 // e126f68f7eafcc8b74f54d269fe206be715000f94dac067d1c04a8ca3b2db734,
@@ -18,15 +24,12 @@ const COFFEE =
 // "Please make a donation of any amount ... to me"
 const DONATION =
   "lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql";
-// Same donation invoice with a high-S (malleated) signature: a reader MUST
-// still accept it and recover with the encoded recovery id.
-const HIGH_S =
-  "lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap2r09nt4ndd0unm3z9u5t48y6ucv4r5sg7lk98c77ctvjczkspk5qprc90gx";
+
 // "Please send 0.0025 BTC for a cup of nonsense (ナンセンス 1杯)"
 const NONSENSE =
   "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpu9qrsgqhtjpauu9ur7fw2thcl4y9vfvh4m9wlfyz2gem29g5ghe2aak2pm3ps8fdhtceqsaagty2vph7utlgj48u0ged6a337aewvraedendscp573dxr";
 // "Please send 0.01 BTC with payment metadata 0x01fafaf0" — the metadata
-// lives in tag 'm' (27), unknown and odd, so it is skipped and listed.
+// lives in tag 'm' (27), unknown, so it is skipped and listed.
 const METADATA =
   "lnbc10m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdp9wpshjmt9de6zqmt9w3skgct5vysxjmnnd9jx2mq8q8a04uqsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9q2gqqqqqqsgq7hf8he7ecf7n4ffphs6awl9t6676rrclv9ckg3d3ncn7fct63p6s365duk5wrk202cfy3aj5xnnp5gs3vrdvruverwwq7yzhkf5a3xqpd05wjc";
 
@@ -42,7 +45,7 @@ test("spec vector: coffee invoice decodes with recovered node id and valid signa
   assert.equal(d.paymentSecret, SPEC_SECRET);
   assert.equal(d.nodeId, SPEC_NODE_ID);
   assert.equal(d.signatureValid, true);
-  assert.deepEqual(d.unknownOddTags, []);
+  assert.deepEqual(d.unknownTags, []);
 });
 
 test("spec vector: amountless donation invoice", () => {
@@ -53,11 +56,6 @@ test("spec vector: amountless donation invoice", () => {
   assert.equal(d.signatureValid, true);
 });
 
-test("spec vector: high-S signature is accepted (no low-S rule without an n field)", () => {
-  const d = bolt11Decode(HIGH_S);
-  assert.equal(d.signatureValid, true);
-  assert.equal(d.description, "Please consider supporting this project");
-});
 
 test("spec vector: UTF-8 description", () => {
   const d = bolt11Decode(NONSENSE);
@@ -65,10 +63,10 @@ test("spec vector: UTF-8 description", () => {
   assert.equal(d.nodeId, SPEC_NODE_ID);
 });
 
-test("spec vector: unknown odd tag (payment metadata) is skipped and listed", () => {
+test("spec vector: unknown tag (payment metadata) is skipped and listed", () => {
   const d = bolt11Decode(METADATA);
   assert.equal(d.amountMsat, "1000000000"); // 10m = 0.01 BTC
-  assert.deepEqual(d.unknownOddTags, [27]);
+  assert.deepEqual(d.unknownTags, [27]);
   assert.equal(d.signatureValid, true);
 });
 
@@ -151,15 +149,25 @@ const alterTagType = (invoice, fromType, toType) => {
   return hrp + "1" + [...words, ...checksum].map((w) => CHARSET[w]).join("");
 };
 
-test("rejects: unknown even tag (unknown odd tags are skipped instead)", () => {
-  // The metadata invoice carries unknown odd tag 27; flipping it to 26
-  // (even) turns a skippable field into a hard failure.
-  assert.throws(
-    () => bolt11Decode(alterTagType(METADATA, 27, 26)),
-    (e) => /unknown required field/.test(e.key)
-  );
-  // Sanity: the untouched invoice still decodes.
-  assert.equal(bolt11Decode(METADATA).signatureValid, true);
+test("unknown tags are skipped whatever their type number", () => {
+  // The spec's "Same, but including fields which must be ignored." example
+  // carries an unknown field of type 10 ('2'), which is even: BOLT11 has no
+  // even/odd rule (that belongs to BOLT 1 TLVs and BOLT 12), so a reader
+  // must skip it and report it, not refuse the invoice.
+  const example = specExamples.examples.find((e) => /must be ignored/.test(e.description));
+  assert.ok(example, "the spec's 'fields which must be ignored' example must be in the fixture");
+  const d = bolt11Decode(example.invoice);
+  assert.equal(d.signatureValid, true);
+  assert.equal(d.amountMsat, "2500000000"); // 25m = 0.025 BTC
+  assert.equal(d.description, "coffee beans");
+  assert.deepEqual(d.unknownTags, [10]);
+  assert.equal(d.fallbacks.length, 0); // fallback version 19 is unknown: skipped
+
+  // The metadata invoice's unknown tag 27 flipped to 26 (even) must be
+  // skipped too. The edit breaks the signature, but with no declared `n`
+  // field the reader recovers the node id, so the decode still succeeds and
+  // reports the even tag instead of refusing it.
+  assert.deepEqual(bolt11Decode(alterTagType(METADATA, 27, 26)).unknownTags, [26]);
 });
 
 // A description is untrusted text: invalid UTF-8 must surface as a keyed,
@@ -246,6 +254,22 @@ test("rejects: an hrp with no coin letters (keyed, not a raw TypeError)", () => 
     assert.equal(typeof thrown.key, "string", `${hrp} must fail with a key`);
     assert.ok(thrown.key.length > 0, `${hrp} must fail with a non-empty key`);
   }
+});
+
+test("rejects: an hrp whose coin is an inherited Object property", () => {
+  // "lnconstructor" has a well-formed coin part, but "constructor" is not a
+  // network: a plain NETWORKS[coin] lookup finds Object.prototype's
+  // constructor and would decode as if it named a network.
+  let thrown;
+  try {
+    bolt11Decode(encodeBech32("lnconstructor", [0, 0, 0, 0, 0, 0, 0]));
+  } catch (e) {
+    thrown = e;
+  }
+  assert.ok(thrown, "lnconstructor must be refused");
+  assert.equal(typeof thrown.key, "string", "lnconstructor must fail with a key");
+  assert.match(thrown.key, /unknown network/);
+  assert.deepEqual(thrown.vars, { coin: "constructor" });
 });
 
 // "Please send 0.00967878534 BTC for a list of items within one week, amount
@@ -374,3 +398,17 @@ test("rejects: an integer field longer than 10 words (no float rounding)", () =>
     (e) => typeof e.key === "string" && /too large/.test(e.key)
   );
 });
+
+// ── the BOLT 11 specification's own example sweep ─────────────────────────
+// Every example from the spec's test vectors, valid and invalid, driven by
+// the fixture so a new spec example is a data change, not a code change.
+
+for (const example of specExamples.examples) {
+  test(`BOLT 11 example: ${example.description}`, () => {
+    if (example.valid) {
+      assert.equal(bolt11Decode(example.invoice).signatureValid, true);
+    } else {
+      assert.throws(() => bolt11Decode(example.invoice), (e) => typeof e.key === "string");
+    }
+  });
+}

@@ -142,8 +142,11 @@ const parseHrp = (hrp) => {
   // fail() like every other bad prefix, not with a raw TypeError.
   const coinMatch = rest.match(/^[a-z]+/);
   const coin = coinMatch ? coinMatch[0] : "";
+  // Object.hasOwn, not a truthiness test: an hrp such as "lnconstructor"
+  // would otherwise pick up an inherited Object.prototype property and
+  // decode as if it named a network.
+  if (!Object.hasOwn(NETWORKS, coin)) fail("This invoice is for an unknown network (\"{coin}\").", { coin });
   const network = NETWORKS[coin];
-  if (!network) fail("This invoice is for an unknown network (\"{coin}\").", { coin });
   const amountPart = rest.slice(coin.length);
   if (amountPart === "") return { network, amountMsat: null };
   const match = amountPart.match(/^(\d+)([munp])?$/);
@@ -187,7 +190,7 @@ const parseTags = (words) => {
     routeHintHops: 0,
     paymentSecret: null,
     features: null,
-    unknownOddTags: [],
+    unknownTags: [],
   };
   const seen = new Set();
   let i = 0;
@@ -201,8 +204,10 @@ const parseTags = (words) => {
     const known = [TAG_PAYMENT_HASH, TAG_ROUTE_HINT, TAG_FEATURES, TAG_EXPIRY, TAG_FALLBACK,
       TAG_DESCRIPTION, TAG_PAYMENT_SECRET, TAG_NODE_ID, TAG_DESCRIPTION_HASH, TAG_MIN_FINAL_CLTV];
     if (!known.includes(type)) {
-      if (type % 2 === 0) fail("This invoice has an unknown required field (tag {type}).", { type });
-      out.unknownOddTags.push(type);
+      // BOLT11 has no even/odd rule (that belongs to BOLT 1 TLVs and BOLT
+      // 12): a reader MUST skip every field it does not know, whatever its
+      // type number, and report it.
+      out.unknownTags.push(type);
       continue;
     }
     if (seen.has(type) && type !== TAG_ROUTE_HINT && type !== TAG_FALLBACK) {
