@@ -2873,11 +2873,11 @@ function hodlUpdateAddressEstimate(prefix = "") {
       : change ? hodlTText("First change index to derive · {hardening} · 0 to 2,147,483,647", vars)
       : hodlTText("First {branches} index to derive · {hardening} · 0 to 2,147,483,647", { ...vars, branches: vars.branches.toLowerCase() });
     // Wallets such as Sparrow and Electrum scan about 20 unused addresses
-    // ahead, so coins received deeper show as a zero balance there until the
-    // gap limit is raised.
+    // ahead (indexes 0-19 in a fresh wallet), so coins received at index 20
+    // or deeper show as a zero balance there until the gap limit is raised.
     if (gapNote) {
-      gapNote.hidden = start <= 20;
-      gapNote.textContent = start > 20 ? hodlTText("Wallets only look about 20 unused addresses ahead. If coins arrive at index {n}, raise your wallet's gap limit above that, or the balance will show as zero (Sparrow: Settings → Advanced → Gap limit). EntropyLab's Bitcoin Core export already covers this window.", { n: start.toLocaleString() }) : "";
+      gapNote.hidden = start < 20;
+      gapNote.textContent = start >= 20 ? hodlTText("Wallets only look about 20 unused addresses ahead. If coins arrive at index {n}, raise your wallet's gap limit above that, or the balance will show as zero (Sparrow: Settings → Advanced → Gap limit). EntropyLab's Bitcoin Core export already covers this window.", { n: start.toLocaleString() }) : "";
     }
     help.textContent = both ? hodlTText("Derives {count} receive and {count} change addresses · Max {max}", { count, max })
       : receive ? hodlTText(one ? "Derives {count} receive address · Max {max}" : "Derives {count} receive addresses · Max {max}", { count, max })

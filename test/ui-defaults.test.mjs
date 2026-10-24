@@ -2638,7 +2638,7 @@ test("both Starting address index fields carry a hidden gap-limit note", async (
   }
 });
 
-test("the gap-limit note shows above index 20 for both prefixes, through hodlTText", async () => {
+test("the gap-limit note shows from index 20 for both prefixes, through hodlTText", async () => {
   const { readFileSync } = await import("node:fs");
   const appSource = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
   const start = appSource.indexOf("function hodlUpdateAddressEstimate(");
@@ -2649,8 +2649,10 @@ test("the gap-limit note shows above index 20 for both prefixes, through hodlTTe
   // keyed to the parsed starting index, not a second parse of the field.
   assert.ok(fn.includes("`${prefix}address-start-gap-note`"), "reads the per-prefix gap note");
   assert.match(fn, /let \{ start, range \} = hodlReadAddressWindow\(prefix, false\)/);
-  assert.match(fn, /gapNote\.hidden = start <= 20;/);
-  assert.match(fn, /gapNote\.textContent = start > 20 \? hodlTText\("[^"]*\{n\}[^"]*", \{ n: start\.toLocaleString\(\) \}\) : "";/);
+  // A fresh wallet with the default gap limit scans indexes 0-19, so index 20
+  // is the first one it misses.
+  assert.match(fn, /gapNote\.hidden = start < 20;/);
+  assert.match(fn, /gapNote\.textContent = start >= 20 \? hodlTText\("[^"]*\{n\}[^"]*", \{ n: start\.toLocaleString\(\) \}\) : "";/);
   // An invalid window hides and clears the note.
   assert.match(fn, /catch \(error\) \{[\s\S]*?gapNote\.hidden = true;\s*gapNote\.textContent = "";/);
 });
