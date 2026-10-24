@@ -2627,3 +2627,30 @@ test("Update key carries the fingerprint and LifeHash with it: rows show the res
   assert.match(vanityController, /if \(hodlSpSource === "key:" \+ updated\.id\) hodlPickSpSessionKey\(updated\);\s*if \(hodlBip85Source === "key:" \+ updated\.id\) hodlPickBip85SessionKey\(updated\);/);
   assert.match(vanityController, /let changed = run\.sourceLabel !== match\.savedTo;[\s\S]*?its master fingerprint and LifeHash changed from \{from\} to \{key\}[\s\S]*?\{ key: match\.savedTo, n: match\.index, from: run\.sourceLabel \}\)\);/);
 });
+
+test("both Starting address index fields carry a hidden gap-limit note", async () => {
+  const { readFileSync } = await import("node:fs");
+  const shell = readFileSync(new URL("../src/shell.html", import.meta.url), "utf8");
+  for (const id of ["address-start-gap-note", "msig-address-start-gap-note"]) {
+    const tag = shell.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`))?.[0] ?? "";
+    assert.match(tag, /\bdata-gap-limit-note\b/, `${id} carries data-gap-limit-note`);
+    assert.match(tag, /\bhidden\b/, `${id} starts hidden`);
+  }
+});
+
+test("the gap-limit note shows above index 20 for both prefixes, through hodlTText", async () => {
+  const { readFileSync } = await import("node:fs");
+  const appSource = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
+  const start = appSource.indexOf("function hodlUpdateAddressEstimate(");
+  const end = appSource.indexOf("function hodlInitAddressBenchmark(");
+  assert.ok(start >= 0 && end > start, "hodlUpdateAddressEstimate is present");
+  const fn = appSource.slice(start, end);
+  // The note is looked up per prefix ("" for Keys, "msig-" for MultiSig) and
+  // keyed to the parsed starting index, not a second parse of the field.
+  assert.ok(fn.includes("`${prefix}address-start-gap-note`"), "reads the per-prefix gap note");
+  assert.match(fn, /let \{ start, range \} = hodlReadAddressWindow\(prefix, false\)/);
+  assert.match(fn, /gapNote\.hidden = start <= 20;/);
+  assert.match(fn, /gapNote\.textContent = start > 20 \? hodlTText\("[^"]*\{n\}[^"]*", \{ n: start\.toLocaleString\(\) \}\) : "";/);
+  // An invalid window hides and clears the note.
+  assert.match(fn, /catch \(error\) \{[\s\S]*?gapNote\.hidden = true;\s*gapNote\.textContent = "";/);
+});
