@@ -19,7 +19,8 @@
 // whenever the digest cannot be computed soundly — a missing or
 // conflicting UTXO claim, an OP_CODESEPARATOR, an unsupported sighash or
 // script type, the exhausted check budget, or a secp256k1 facade that is
-// not ready. Never true on a guess.
+// not ready. Never true on a guess, and never truer than the Inspector's own
+// check of the same input (decoderCaps below).
 //
 // Every entry names the exact PSBT key it verified — the pair's keydata
 // with its type byte ("02"+pubkey for a partial signature, "13" for a
@@ -47,6 +48,10 @@ import { wasmExports as hodlWasm, withInput as hodlWasmIn, withOutput as hodlWas
 // MAX_SIGNATURE_CHECKS (psbt-wasm/src/verify.rs) and the Inspector's
 // per-file check budget: past it, signatures are unverified, never valid.
 export const SIGNER_AUDIT_MAX_SIGNATURE_CHECKS = 256;
+// And its separate MAX_LEGACY_DIGEST_BYTES: the bytes hashed to resolve
+// scripts and build digests are bounded too, so a few huge scripts cannot
+// stall the page under the check count (Wicked's review of #1118).
+export const SIGNER_AUDIT_MAX_DIGEST_BYTES = 32 * 1024 * 1024;
 
 const SIG_NAMES = new Set(["PSBT_IN_PARTIAL_SIG", "PSBT_IN_TAP_KEY_SIG", "PSBT_IN_TAP_SCRIPT_SIG"]);
 // BIP-341's defined appended sighash bytes; SIGHASH_DEFAULT exists only as
@@ -192,6 +197,13 @@ const isP2wpkh = (s) => s.length === 22 && s[0] === 0x00 && s[1] === 0x14;
 const isP2wsh = (s) => s.length === 34 && s[0] === 0x00 && s[1] === 0x20;
 const isP2tr = (s) => s.length === 34 && s[0] === 0x51 && s[1] === 0x20;
 const isP2sh = (s) => s.length === 23 && s[0] === 0xa9 && s[1] === 0x14 && s[22] === 0x87;
+// Any BIP-141 witness program: OP_0 or OP_1..OP_16, then a single 2-40 byte
+// push and nothing else. Only P2WPKH, P2WSH and P2TR are understood here;
+// any other program (a future version, or a v0 program of the wrong
+// length) is not signed with a legacy digest, so it must never reach the
+// legacy fallback (Wicked's review of #1118).
+const isWitnessProgram = (s) =>
+  s.length >= 4 && s.length <= 42 && (s[0] === 0x00 || (s[0] >= 0x51 && s[0] <= 0x60)) && s[1] >= 2 && s[1] <= 40 && s[1] === s.length - 2;
 const p2pkhScriptCode = (keyHash) => concatBytes([Uint8Array.of(0x76, 0xa9, 0x14), keyHash, Uint8Array.of(0x88, 0xac)]);
 
 const decodedField = (doc, index, name) => {
@@ -229,8 +241,10 @@ const ecdsaScriptCode = (doc, index, claim) => {
       const script = witnessScriptFor(doc, index, redeem.slice(2));
       return script ? { kind: "bip143", scriptCode: script, amount: claim.value } : null;
     }
+    if (isWitnessProgram(redeem)) return null; // wrapped, but not a program this module verifies
     return { kind: "legacy", scriptCode: redeem };
   }
+  if (isWitnessProgram(spk)) return null; // a witness program this module does not verify
   return { kind: "legacy", scriptCode: spk };
 };
 
@@ -300,21 +314,6 @@ const bip341Digest = (tx, claims, index, sighashType, ext) => {
   return taggedHash("TapSighash", Uint8Array.of(0), message, extension);
 };
 
-// The declared tapscript leaf whose hash is the signature's leaf-hash
-// keydata, or null. The BIP-342 message commits to the leaf hash and the
-// position of the last executed OP_CODESEPARATOR; only a declared leaf
-// pins that position (the caller refuses separators), so an undeclared or
-// mismatched leaf is never verified here.
-const tapLeafFor = (doc, index, leafHash) => {
-  for (const pair of mapPairs(doc, index)) {
-    if (!pair || pair.name !== "PSBT_IN_TAP_LEAF_SCRIPT" || pair.decodeError || !pair.decoded) continue;
-    const script = hexBytes(pair.decoded.script), version = hexBytes(pair.decoded.leafVersion);
-    if (!script || !version || version.length !== 1) continue;
-    if (eqBytes(taggedHash("TapLeaf", version, varintBytes(script.length), script), leafHash)) return script;
-  }
-  return null;
-};
-
 // Verification ran and failed is false. A verifier that cannot parse its
 // inputs returns null — unverified, which the engine treats as critical —
 // never true: a facade that is not ready cannot verify at all, and a throw
@@ -347,9 +346,13 @@ const verifyPartialSig = (ctx, index, pair) => {
   if (sighash !== 1) return null; // only SIGHASH_ALL is reconstructed; weak types are the engine's finding
   const claim = ctx.claims[index];
   if (!claim) return null;
-  const resolved = ecdsaScriptCode(ctx.afterDoc, index, claim);
-  if (!resolved || hasCodeSeparator(resolved.scriptCode)) return null;
+  // Charged before any script decoding or hashing, so every exit below (a
+  // separator, a missing script) still spends a check; the script itself is
+  // resolved once per input.
   if (!ctx.takeBudget()) return null;
+  const resolved = ctx.scriptCodeFor(index, claim);
+  if (!resolved || resolved.codeSeparator) return null;
+  if (!ctx.takeDigestBytes(ctx.rawTx.length + resolved.scriptCode.length)) return null;
   const digest = resolved.kind === "bip143"
     ? bip143AllDigest(ctx.rawTx, index, resolved.scriptCode, resolved.amount)
     : legacyAllDigest(ctx.tx, index, resolved.scriptCode, value);
@@ -393,12 +396,42 @@ const verifyTapScriptSig = (ctx, index, pair) => {
   const xonly = hexBytes(pair.decoded?.xonly ?? lower(pair.key).slice(2, 66));
   const leafHash = hexBytes(pair.decoded?.leafHash ?? lower(pair.key).slice(66, 130));
   if (!xonly || xonly.length !== 32 || !leafHash || leafHash.length !== 32) return null;
-  const leaf = tapLeafFor(ctx.afterDoc, index, leafHash);
-  if (!leaf || hasCodeSeparator(leaf)) return null;
+  // Charged before the leaf lookup hashes any script.
   if (!ctx.takeBudget()) return null;
+  const leaf = ctx.tapLeafFor(index, leafHash);
+  if (!leaf || leaf.codeSeparator) return null;
   const digest = bip341Digest(ctx.tx, ctx.beforeClaims, index, parsed.sighash, { leafHash });
   if (!digest) return null;
   return schnorrVerify(parsed.signature, digest, xonly);
+};
+
+// The Inspector's own verdicts cap this module's (Wicked's review of #1118).
+// psbt-wasm/src/verify.rs applies Core's script and scriptCode rules, so
+// where it found an input's signature invalid, or could not check it (an
+// unsupported witness program, a script that cannot execute, an ECDSA
+// signature on a Taproot input, an exhausted budget), no signature in that
+// input may be reported valid here. "No problem" still proves nothing (the
+// header), so the recomputation above stays the only source of `true`; the
+// cap can only lower a result, never raise one.
+const decoderCaps = (doc) => {
+  const caps = new Map(), problems = Array.isArray(doc?.problems) ? doc.problems : [];
+  let budget = false;
+  for (const problem of problems) {
+    if (problem?.code === "verification_budget") budget = true;
+    const match = /^input (\d+)$/.exec(String(problem?.scope ?? ""));
+    if (!match) continue;
+    const index = Number(match[1]), cap = caps.get(index) ?? { partial: null, tap: null };
+    if (problem.code === "partial_sig_invalid") cap.partial = "invalid";
+    else if ((problem.code === "partial_sig_unchecked" || problem.code === "partial_sig_on_taproot") && cap.partial !== "invalid") cap.partial = "unchecked";
+    else if (problem.code === "tap_sig_invalid") cap.tap = "invalid";
+    caps.set(index, cap);
+  }
+  return { caps, budget };
+};
+const capped = (valid, cap, decoderBudget) => {
+  if (cap === "invalid") return false;
+  if (cap === "unchecked") return null;
+  return decoderBudget && valid === true ? null : valid;
 };
 
 // The pubkey the engine's Phase F reports: the partial signature's keydata,
@@ -428,7 +461,7 @@ export function psbtSignerAuditVerification(beforeDoc, afterDoc) {
     claims.push(inputClaim(afterDoc, index));
     beforeClaims.push(inputClaim(beforeDoc, index));
   }
-  let budgetLeft = SIGNER_AUDIT_MAX_SIGNATURE_CHECKS;
+  let budgetLeft = SIGNER_AUDIT_MAX_SIGNATURE_CHECKS, digestBytesLeft = SIGNER_AUDIT_MAX_DIGEST_BYTES;
   const ctx = { afterDoc, tx, rawTx, claims, beforeClaims, budgetExhausted: false };
   ctx.takeBudget = () => {
     if (budgetLeft > 0) {
@@ -438,14 +471,57 @@ export function psbtSignerAuditVerification(beforeDoc, afterDoc) {
     ctx.budgetExhausted = true;
     return false;
   };
+  ctx.takeDigestBytes = (bytes) => {
+    if (bytes <= digestBytesLeft) {
+      digestBytesLeft -= bytes;
+      return true;
+    }
+    digestBytesLeft = 0;
+    ctx.budgetExhausted = true;
+    return false;
+  };
+  // Script resolution (decoding, hashing a witness or redeem script) and the
+  // separator walk run once per input, however many signatures it carries;
+  // the bytes hashed count against the digest budget.
+  const scriptCodes = new Map(), tapLeaves = new Map();
+  ctx.scriptCodeFor = (index, claim) => {
+    if (!scriptCodes.has(index)) {
+      const witness = decodedField(afterDoc, index, "PSBT_IN_WITNESS_SCRIPT"), redeem = decodedField(afterDoc, index, "PSBT_IN_REDEEM_SCRIPT");
+      const resolved = ctx.takeDigestBytes((witness?.length ?? 0) + (redeem?.length ?? 0)) ? ecdsaScriptCode(afterDoc, index, claim) : null;
+      scriptCodes.set(index, resolved && { ...resolved, codeSeparator: hasCodeSeparator(resolved.scriptCode) });
+    }
+    return scriptCodes.get(index);
+  };
+  // The declared tapscript leaf whose hash is the signature's leaf-hash
+  // keydata, or null. The BIP-342 message commits to the leaf hash and the
+  // position of the last executed OP_CODESEPARATOR; only a declared leaf
+  // pins that position (the caller refuses separators), so an undeclared or
+  // mismatched leaf is never verified here.
+  ctx.tapLeafFor = (index, leafHash) => {
+    if (!tapLeaves.has(index)) {
+      const leaves = new Map();
+      for (const pair of mapPairs(afterDoc, index)) {
+        if (!pair || pair.name !== "PSBT_IN_TAP_LEAF_SCRIPT" || pair.decodeError || !pair.decoded) continue;
+        const script = hexBytes(pair.decoded.script), version = hexBytes(pair.decoded.leafVersion);
+        if (!script || !version || version.length !== 1 || !ctx.takeDigestBytes(script.length)) continue;
+        leaves.set(lower(hodlHex.encode(taggedHash("TapLeaf", version, varintBytes(script.length), script))), { script, codeSeparator: hasCodeSeparator(script) });
+      }
+      tapLeaves.set(index, leaves);
+    }
+    return tapLeaves.get(index).get(lower(hodlHex.encode(leafHash))) ?? null;
+  };
+  const { caps, budget: decoderBudget } = decoderCaps(afterDoc);
+  if (decoderBudget) complete = false;
   for (let index = 0; index < inputCount; index++) {
     const beforeKeys = new Set(mapPairs(beforeDoc, index).map((pair) => lower(pair?.key)));
     for (const pair of mapPairs(afterDoc, index)) {
       if (!pair || !SIG_NAMES.has(pair.name) || beforeKeys.has(lower(pair.key))) continue;
-      const valid = !rawTx ? null
+      const recomputed = !rawTx ? null
         : pair.name === "PSBT_IN_PARTIAL_SIG" ? verifyPartialSig(ctx, index, pair)
         : pair.name === "PSBT_IN_TAP_KEY_SIG" ? verifyTapKeySig(ctx, index, pair)
         : verifyTapScriptSig(ctx, index, pair);
+      const cap = caps.get(index);
+      const valid = capped(recomputed, pair.name === "PSBT_IN_PARTIAL_SIG" ? cap?.partial : cap?.tap, decoderBudget);
       if (ctx.budgetExhausted) complete = false;
       signatures.push({ index, name: pair.name, key: lower(pair.key), pubkey: entryPubkey(pair), valid });
     }

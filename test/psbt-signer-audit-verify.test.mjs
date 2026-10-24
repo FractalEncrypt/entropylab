@@ -10,12 +10,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as btc from "@scure/btc-signer";
 import { secp256k1 as nobleSecp256k1, schnorr as nobleSchnorr } from "@noble/curves/secp256k1.js";
-import { sha256 as hodlSha256 } from "../src/js/hashes.js";
+import { sha256 as hodlSha256, hash160 as hodlHash160 } from "../src/js/hashes.js";
 import { hex as hodlHex } from "../src/js/coders.js";
 import { secp256k1, secp256k1Ready } from "../src/js/secp256k1.js";
 import { psbtInspectDoc, psbtWasmReady } from "../src/js/psbt-wasm.js";
 import { auditSigner } from "../src/js/psbt-signer-audit.js";
-import { psbtSignerAuditVerification, SIGNER_AUDIT_MAX_SIGNATURE_CHECKS } from "../src/js/psbt-signer-audit-verify.js";
+import { psbtSignerAuditVerification, SIGNER_AUDIT_MAX_SIGNATURE_CHECKS, SIGNER_AUDIT_MAX_DIGEST_BYTES } from "../src/js/psbt-signer-audit-verify.js";
 
 await Promise.all([secp256k1Ready, psbtWasmReady]);
 
@@ -416,6 +416,133 @@ test("a returned PSBT with an input the sent one lacks fails", () => {
 // The hand-rolled BIP-340 path (FIELD_P, BigInt point math, a JS fallback)
 // is gone for good: its field prime was wrong and the page never does curve
 // math in JavaScript.
+// ---- Wicked's review of #1118 ------------------------------------------
+
+// scure options for scripts it does not know (witness v2, a v0 program of
+// the wrong length, unexecutable witness scripts): these fixtures must
+// carry exactly the bytes under test.
+const SCURE_ANY = { allowUnknownOutputs: true, allowUnknownInputs: true, allowUnknownVersion: true, disableScriptCheck: true };
+const derSig = (digest) => concat(nobleSecp256k1.sign(digest, PRIV, { prehash: false, format: "der" }), Uint8Array.of(0x01));
+const auditOf = ({ before, after }) => {
+  const beforeDoc = psbtInspectDoc(before), afterDoc = psbtInspectDoc(after);
+  const verification = psbtSignerAuditVerification(beforeDoc, afterDoc);
+  return { verification, report: auditSigner(beforeDoc, afterDoc, { verification }) };
+};
+
+// A real signature over the LEGACY digest of the script the old fallback
+// used: valid under that rule, so the old code reported it valid.
+const legacySignedSpend = (prevSpk, redeemScript) => {
+  const tx = new btc.Transaction(SCURE_ANY);
+  tx.addInput({ txid: "55".repeat(32), index: 0, witnessUtxo: { script: prevSpk, amount: 100_000n }, ...(redeemScript ? { redeemScript } : {}) });
+  tx.addOutput({ script: DEST, amount: 90_000n });
+  const before = tx.toPSBT();
+  tx.updateInput(0, { partialSig: [[PUB, derSig(tx.preimageLegacy(0, redeemScript ?? prevSpk, btc.SigHash.ALL))]] }, true);
+  return { before, after: tx.toPSBT() };
+};
+
+test("an unsupported witness program is never verified with a legacy digest (native and P2SH-wrapped)", () => {
+  const v2 = concat(Uint8Array.of(0x52, 0x20), hex("33".repeat(32)));
+  const badV0 = hex("00021111");
+  const p2shOf = (redeem) => concat(Uint8Array.of(0xa9, 0x14), hodlHash160(redeem), Uint8Array.of(0x87));
+  for (const [label, spk, redeem] of [["witness v2", v2], ["v0 of length 2", badV0], ["wrapped witness v2", p2shOf(v2), v2], ["wrapped v0 of length 2", p2shOf(badV0), badV0]]) {
+    const { verification, report } = auditOf(legacySignedSpend(spk, redeem));
+    assert.equal(verification.signatures.length, 1, label);
+    assert.notEqual(verification.signatures[0].valid, true, label);
+    assert.notEqual(report.verdict, "pass", label);
+  }
+});
+
+// A real BIP-143 signature over a P2WSH witness script.
+const p2wshSignedSpend = (script) => {
+  const tx = new btc.Transaction(SCURE_ANY);
+  const spk = concat(Uint8Array.of(0x00, 0x20), hodlSha256(script));
+  tx.addInput({ txid: "66".repeat(32), index: 0, witnessUtxo: { script: spk, amount: 100_000n }, witnessScript: script });
+  tx.addOutput({ script: DEST, amount: 90_000n });
+  const before = tx.toPSBT();
+  tx.updateInput(0, { partialSig: [[PUB, derSig(tx.preimageWitnessV0(0, script, btc.SigHash.ALL, 100_000n))]] }, true);
+  return { before, after: tx.toPSBT() };
+};
+
+test("a script that cannot execute never yields a valid signature; an executable one still does", () => {
+  const checksig = concat(Uint8Array.of(0x21), PUB, Uint8Array.of(0xac)); // <PUB> OP_CHECKSIG
+  const accepted = auditOf(p2wshSignedSpend(checksig));
+  assert.equal(accepted.verification.signatures[0].valid, true, "an executable script still verifies");
+  for (const [label, script] of [
+    ["truncated push", concat(Uint8Array.of(0x21), PUB.slice(0, 10))],
+    ["unmatched IF", concat(Uint8Array.of(0x63), checksig)],
+    ["more than 201 opcodes", concat(new Uint8Array(202).fill(0x61), checksig)],
+  ]) {
+    const { verification, report } = auditOf(p2wshSignedSpend(script));
+    assert.equal(verification.signatures.length, 1, label);
+    assert.notEqual(verification.signatures[0].valid, true, label);
+    assert.notEqual(report.verdict, "pass", label);
+  }
+});
+
+test("the Inspector's own verdict caps the audit's: invalid stays invalid, unchecked is never valid", () => {
+  const { before, after } = segwitFixture();
+  const beforeDoc = psbtInspectDoc(before);
+  const withProblem = (code, scope = "input 0") => {
+    const doc = structuredClone(psbtInspectDoc(after));
+    doc.problems = [...(doc.problems ?? []), { scope, code, severity: "error", message: "fixture" }];
+    return doc;
+  };
+  assert.equal(psbtSignerAuditVerification(beforeDoc, psbtInspectDoc(after)).signatures[0].valid, true, "uncapped, the fixture verifies");
+  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_invalid")).signatures[0].valid, false);
+  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_unchecked")).signatures[0].valid, null);
+  assert.equal(psbtSignerAuditVerification(beforeDoc, withProblem("partial_sig_invalid", "input 1")).signatures[0].valid, true, "another input's problem does not cap this one");
+  const budget = psbtSignerAuditVerification(beforeDoc, withProblem("verification_budget", "psbt"));
+  assert.equal(budget.signatures[0].valid, null);
+  assert.equal(budget.complete, false);
+});
+
+// A hand-built document (as in the budget test above): one P2WSH input with
+// the given witness script and `count` garbage-but-well-shaped signatures.
+const p2wshDoc = (script, count) => {
+  const spk = "0020" + hexOf(hodlSha256(script));
+  const utxo = { key: "01", value: "a086010000000000" + "22" + spk, name: "PSBT_IN_WITNESS_UTXO", decoded: { value: "100000", scriptPubKey: spk } };
+  const witnessScript = { key: "05", value: hexOf(script), name: "PSBT_IN_WITNESS_SCRIPT", decoded: { hex: hexOf(script) } };
+  const der = "3044" + "0220" + "11".repeat(32) + "0220" + "11".repeat(32);
+  const sigs = Array.from({ length: count }, (_, n) => {
+    const pubkey = "02" + (n + 1).toString(16).padStart(64, "0");
+    return { key: "02" + pubkey, value: der + "01", name: "PSBT_IN_PARTIAL_SIG", decoded: { pubkey, signature: der, sighashByte: 1, sighash: "SIGHASH_ALL" } };
+  });
+  const doc = (pairs) => ({
+    psbtVersion: 0,
+    tx: { version: 2, locktime: 0, inputs: [{ txid: "11".repeat(32), vout: 0, scriptSig: "", sequence: 4294967295 }], outputs: [{ value: "1000", scriptPubKey: "51" }] },
+    globals: [],
+    inputs: [pairs],
+    outputs: [[]],
+  });
+  return { beforeDoc: doc([utxo, witnessScript]), afterDoc: doc([utxo, witnessScript, ...sigs]) };
+};
+
+test("every signature spends the check budget, even one that exits early on a separator", () => {
+  // OP_CODESEPARATOR <key> OP_CHECKSIG: every signature exits early. The old
+  // code charged the budget only after that exit, so 257 of them still came
+  // back complete.
+  const script = concat(Uint8Array.of(0xab, 0x21), PUB, Uint8Array.of(0xac));
+  const { beforeDoc, afterDoc } = p2wshDoc(script, SIGNER_AUDIT_MAX_SIGNATURE_CHECKS + 1);
+  const verification = psbtSignerAuditVerification(beforeDoc, afterDoc);
+  assert.equal(verification.complete, false);
+  assert.ok(verification.signatures.every((entry) => entry.valid === null));
+});
+
+test("bytes hashed are bounded too: a huge witness script stops being checked past the digest budget", () => {
+  assert.equal(SIGNER_AUDIT_MAX_DIGEST_BYTES, 32 * 1024 * 1024); // psbt-wasm/src/verify.rs MAX_LEGACY_DIGEST_BYTES
+  // 1 MiB of OP_NOP then <key> OP_CHECKSIG: no separator, so each signature
+  // hashes the whole script. 40 of them is far under the check count but
+  // past 32 MiB of hashing.
+  const script = concat(new Uint8Array(1024 * 1024).fill(0x61), Uint8Array.of(0x21), PUB, Uint8Array.of(0xac));
+  const { beforeDoc, afterDoc } = p2wshDoc(script, 40);
+  const started = Date.now();
+  const verification = psbtSignerAuditVerification(beforeDoc, afterDoc);
+  assert.equal(verification.complete, false);
+  assert.ok(verification.signatures.some((entry) => entry.valid === null), "signatures past the digest budget are unverified");
+  assert.ok(verification.signatures.every((entry) => entry.valid !== true));
+  assert.ok(Date.now() - started < 20000, "bounded work");
+});
+
 test("the shipped verifier does no curve math and imports no @noble code", () => {
   const source = readFileSync(new URL("../src/js/psbt-signer-audit-verify.js", import.meta.url), "utf8");
   assert.ok(!/from\s*["']@noble/.test(source), "psbt-signer-audit-verify.js must not import @noble; BIP-340 runs on the WASM facade");
