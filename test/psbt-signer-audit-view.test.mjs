@@ -284,7 +284,7 @@ test("an undecodable-document report renders the error finding, unknown checks, 
   assert.ok(html.includes('data-audit-tier="fail"'));
   assert.ok(html.includes('data-audit-code="DOC_UNDECODABLE"'));
   assert.ok(html.includes('data-audit-check="transactionBody" data-audit-tone="warn"'));
-  assert.ok(!html.includes("<details"), "no diff block without a diff");
+  assert.ok(!html.includes("data-audit-diff"), "no diff block without a diff");
 });
 
 test("the read-error note names its case, escapes the parser's message, and carries no verdict", () => {
@@ -383,7 +383,7 @@ test("psbtDiffHtml labels: the default output is byte-identical, custom labels r
 test("the view renders the collapsed technical diff with the sent/returned labels", () => {
   const { before, after, diff } = versionBumpDocs();
   const html = psbtSignerAuditHtml(reportFor([], { diff, equal: false }), before, after, "mainnet");
-  assert.ok(html.includes("<details"));
+  assert.ok(html.includes("data-audit-diff"));
   assert.ok(html.includes("the PSBT you sent"));
   assert.ok(html.includes("the returned PSBT"));
   assert.ok(!html.includes("the PSBT in the editor"));

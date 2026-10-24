@@ -11351,8 +11351,16 @@ function hodlPsbtShowMore(event) {
   // A full repaint keeps the signer audit above the inspection (Wicked's
   // review of #1118): it would otherwise vanish while its report stays cached.
   let paintAll = () => {
+    let inputsOpen = output.querySelector?.("[data-psbt-inputs]")?.open;
     output.innerHTML = render(options);
-    if (last.audit) output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(last.audit));
+    if (last.audit) {
+      output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(last.audit));
+      hodlPsbtInsertOverall(output);
+    }
+    if (inputsOpen) {
+      let details = output.querySelector?.("[data-psbt-inputs]");
+      if (details) details.open = true;
+    }
   };
   // Only the new block is rendered and inserted above the list's tail, so a
   // click costs one block however much is already shown. When the render
@@ -11363,6 +11371,16 @@ function hodlPsbtShowMore(event) {
     tail.insertAdjacentHTML("beforebegin", part.chunk);
     tail.innerHTML = part.tail;
     last.limits = limits;
+    // A chunk that reveals a problem must not stay hidden in a collapsed
+    // block: open the inputs block and mark it.
+    if (kind === "inputs") {
+      let inputsDetails = output.querySelector?.("[data-psbt-inputs]");
+      let revealed = part.chunk + String(part.tail ?? "");
+      if (inputsDetails && (revealed.includes("psbt-bad") || revealed.includes("psbt-warn"))) {
+        inputsDetails.open = true;
+        inputsDetails.setAttribute?.("data-has-problem", "");
+      }
+    }
     // The grown window also grows the view's render budget, so the other
     // list's tail (its collected warnings and their count) is rendered again
     // at the new limits. When that render declines or would add a block, the
@@ -12015,6 +12033,20 @@ function hodlInitBip85() {
 function hodlPsbtSignerAuditMarkup(audit) {
   return audit.error !== undefined ? hodlPsbtSignerAuditErrorHtml(audit.error) : hodlPsbtSignerAuditHtml(audit.report, audit.beforeDoc, audit.afterDoc, audit.network);
 }
+// The one-line overall verdict above the signer audit. It reads the audit's
+// own tier from the rendered section and the analysis's overall state from
+// the summary, so it can never disagree with either. It appears only when
+// the audit ran (an error section carries no tier).
+function hodlPsbtInsertOverall(output) {
+  let section = output.querySelector?.("[data-audit-section]"), tier = section?.dataset?.auditTier;
+  if (!tier) return;
+  let analysis = output.querySelector?.("[data-psbt-analysis-overall]")?.dataset?.psbtAnalysisOverall || "",
+    problem = analysis === "problem",
+    state = tier === "fail" || problem ? "bad" : tier === "pass" && analysis === "complete" ? "ok" : "warn",
+    text = state === "bad" ? hodlT("Overall: do not broadcast — see the checks below.") : state === "ok" ? hodlT("Overall: no problems in the listed checks.") : hodlT("Overall: review the warnings below.");
+  output.querySelector?.("[data-psbt-overall]")?.remove?.();
+  section.insertAdjacentHTML("beforebegin", "<p data-psbt-overall data-psbt-overall-state='" + state + "' class='psbt-" + state + "'><strong>" + text + "</strong></p>");
+}
 function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
   let raw = String(document.getElementById("psbt-audit-before")?.value || "").trim();
   if (!raw) return null;
@@ -12044,6 +12076,7 @@ function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
     audit = { error: { kind: stage, detail: exception instanceof Error ? exception.message : String(exception) } };
   }
   output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(audit));
+  hodlPsbtInsertOverall(output);
   return audit;
 }
 // An audit upload belongs to the session it started in. Ending the session
@@ -13103,13 +13136,26 @@ function hodlPsbtAnalysisSummary(checks) {
   let incomplete = checks.some((check) => check.state === "incomplete"),
     problem = checks.some((check) => check.state === "problem"),
     overall = problem && incomplete ? hodlT("ISSUES FOUND — ANALYSIS ALSO INCOMPLETE") : problem ? hodlT("ISSUES FOUND") : incomplete ? hodlT("ANALYSIS INCOMPLETE") : hodlT("LISTED CHECKS COMPLETE"),
-    overallClass = problem ? "psbt-bad" : incomplete ? "psbt-warn" : "psbt-ok";
+    overallClass = problem ? "psbt-bad" : incomplete ? "psbt-warn" : "psbt-ok",
+    overallState = problem ? "problem" : incomplete ? "incomplete" : "complete";
+  // A completed check's detail is coverage, not a problem: it moves into the
+  // one collapsed block below the list. A problem or an incomplete check
+  // keeps its detail inline, where collapsing can never hide it.
+  let covered = [];
   let rows = checks.map((check) => {
-    let label = check.state === "complete" ? hodlT("Completed") : check.state === "problem" ? hodlT("Problem found") : hodlT("Incomplete"),
-      className = check.state === "complete" ? "psbt-ok" : check.state === "problem" ? "psbt-bad" : "psbt-warn";
-    return "<li><span class='label'>" + hodlEscapeHtml(check.label) + "</span> — <span class='" + className + "'>" + label + "</span><br><span class='muted'>" + hodlEscapeHtml(check.detail) + "</span></li>";
+    let state = check.state === "complete" ? "complete" : check.state === "problem" ? "problem" : "incomplete",
+      label = state === "complete" ? hodlT("Completed") : state === "problem" ? hodlT("Problem found") : hodlT("Incomplete"),
+      className = state === "complete" ? "psbt-ok" : state === "problem" ? "psbt-bad" : "psbt-warn";
+    if (state === "complete") {
+      covered.push("<li><span class='label'>" + hodlEscapeHtml(check.label) + "</span>: " + hodlEscapeHtml(check.detail) + "</li>");
+      return "<li data-psbt-check-state='complete'><span class='label'>" + hodlEscapeHtml(check.label) + "</span> — <span class='" + className + "'>" + label + "</span></li>";
+    }
+    return "<li data-psbt-check-state='" + state + "'><span class='label'>" + hodlEscapeHtml(check.label) + "</span> — <span class='" + className + "'>" + label + "</span><br><span class='muted'>" + hodlEscapeHtml(check.detail) + "</span></li>";
   }).join("");
-  return "<section class='psbt-analysis-summary' aria-label='" + hodlTAttr("PSBT security analysis status") + "'><p class='label psbt-section-label'>" + hodlT("PSBT security analysis") + "</p><p class='" + overallClass + "'><strong>" + overall + "</strong></p><ul>" + rows + "</ul><p class='edge-note is-private'>" + hodlT("Completed means only that the named check ran on the information available here. It does not prove that the PSBT claims are true or that the transaction is safe to sign.") + "</p></section>";
+  let coveredBlock = covered.length
+    ? "<details class='derivation-advanced' data-psbt-analysis-details><summary>" + hodlT("Show what each completed check covered") + "</summary><ul>" + covered.join("") + "</ul></details>"
+    : "";
+  return "<section class='psbt-analysis-summary' data-psbt-analysis-overall='" + overallState + "' aria-label='" + hodlTAttr("PSBT security analysis status") + "'><p class='label psbt-section-label'>" + hodlT("PSBT security analysis") + "</p><p class='" + overallClass + "'><strong>" + overall + "</strong></p><ul>" + rows + "</ul>" + coveredBlock + "<p class='edge-note is-private'>" + hodlT("Completed means only that the named check ran on the information available here. It does not prove that the PSBT claims are true or that the transaction is safe to sign.") + "</p></section>";
 }
 // The Taproot nonce-reuse warning: the same key, or different keys (a
 // reused nonce leaks related keys; DeepSeek's red-team of #1051, F1).
@@ -13277,7 +13323,9 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   html.push("<div data-psbt-tail='outputs'>" + outputsTail + "</div>");
   html.push(hodlOwnershipWarning(tx.outputs, network, ownershipMap));
   html.push("<hr class='result-divider'>");
-  html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
+  // The inputs render into their own list so the whole section can be wrapped
+  // in one collapsed block whose open state depends on what the inputs hold.
+  let inputsHtml = [];
   psbt.inputs.forEach((entries, index) => {
     // This input's warning paragraphs are collected from here and placed at
     // the end of the loop (see there).
@@ -13579,7 +13627,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       // earlier input that has any could have shown a different split: the
       // click then repaints the whole run instead.
       if (only && index < only.from && own.length) splitShown = true;
-      const sink = !only ? html : index >= only.from ? chunk : null;
+      const sink = !only ? inputsHtml : index >= only.from ? chunk : null;
       if (sink) sink.push(sectionHtml);
       // One unit stays reserved for every later section in the window, so
       // one input's warnings can never starve the inputs after it.
@@ -13598,18 +13646,40 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   const inputsTail = (psbt.inputs.length > shownInputs ? elidedNote("inputs", psbt.inputs.length - shownInputs) + moreButton("inputs", psbt.inputs.length - shownInputs) : "")
     + cappedHtml(warnings, (warning) => warning, "warnings", (n) => hodlT("…and {n} more warnings (not rendered).", { n }), budget);
   if (only?.kind === "inputs") return splitShown ? null : { chunk: chunk.join(""), tail: inputsTail };
+  // The whole inputs section is one collapsed block. It opens when any input
+  // carries a problem or a warning, so collapsing never hides one.
+  let inputsBody = inputsHtml.join(""), inputsAll = inputsBody + inputsTail, inputsProblem = inputsAll.includes("psbt-bad") || inputsAll.includes("psbt-warn");
+  html.push("<details class='derivation-advanced' data-psbt-inputs" + (inputsProblem ? " open data-has-problem" : "") + "><summary>" + hodlT("Inputs ({count}): what this transaction spends", { count: tx.inputs.length }) + "</summary>");
+  html.push("<p class='label psbt-section-label'>" + hodlT("Tx inputs") + " <span class='label-value'>(" + tx.inputs.length + ")</span></p><p class='muted label-description'>" + hodlT("Where this transaction’s outputs are spending from") + "</p>");
+  html.push(inputsBody);
   html.push("<div data-psbt-tail='inputs'>" + inputsTail + "</div>");
-  html.push("<hr class='result-divider'>");
+  // The collapsed block draws its own bottom border, so no divider follows it.
+  html.push("</details>");
   html.push("<p class='label psbt-section-label'>" + hodlT("Tx fees") + "</p><p class='muted label-description'>" + hodlT("Remainder of total inputs after total outputs are accounted for") + "</p>");
+  let feeKnown = false, feeValue = 0n;
   if (conflictedInputs.length) html.push("<p class='psbt-bad'><strong>" + hodlT("Fee unknown") + "</strong> — " + hodlT("input(s) {inputs} carry conflicting witness and non-witness UTXO amounts.", { inputs: conflictedInputs.join(", ") }) + "</p>");
   else if (knownInputs === tx.inputs.length) {
     let outputSum = tx.outputs.reduce((sum, output) => sum + output.amount, 0n), fee = inputSum - outputSum;
-    if (fee >= 0n) html.push("<p class='psbt-kv'><strong>" + hodlT("Unverified fee (PSBT previous-output claims)") + "</strong><br><span class='psbt-amount'>" + hodlSats(fee) + " BTC</span></p>");
-    else {
+    if (fee >= 0n) {
+      feeKnown = true;
+      feeValue = fee;
+      html.push("<p class='psbt-kv'><strong>" + hodlT("Unverified fee (PSBT previous-output claims)") + "</strong><br><span class='psbt-amount'>" + hodlSats(fee) + " BTC</span></p>");
+    } else {
       feeInconsistent = 1;
       html.push("<p class='psbt-bad'><strong>" + hodlT("Inconsistent claimed amounts:") + "</strong> " + hodlT("outputs exceed claimed inputs by {amount} BTC.", { amount: hodlSats(-fee) }) + "</p>");
     }
   } else html.push("<p class='muted'>" + hodlT("Fee unknown — some inputs do not include a claimed previous-output amount.") + "</p>");
+  // The one-line answer above the detail: what this transaction sends, in how
+  // many outputs, and the fee the section above computed. The change part
+  // appears only when the loaded key's ownership map claims an output.
+  let glanceTotal = tx.outputs.reduce((sum, output) => sum + output.amount, 0n),
+    glanceCount = tx.outputs.length,
+    glanceChange = 0n;
+  if (ownershipMap.size) for (const output of tx.outputs) if (ownershipMap.has(hodlHex.encode(output.script))) glanceChange += output.amount;
+  let glanceText = glanceCount === 1
+    ? (feeKnown ? hodlT("Sends {total} BTC in 1 output · fee {fee} sats", { total: hodlSats(glanceTotal), fee: String(feeValue) }) : hodlT("Sends {total} BTC in 1 output · fee unknown", { total: hodlSats(glanceTotal) }))
+    : (feeKnown ? hodlT("Sends {total} BTC in {count} outputs · fee {fee} sats", { total: hodlSats(glanceTotal), count: glanceCount, fee: String(feeValue) }) : hodlT("Sends {total} BTC in {count} outputs · fee unknown", { total: hodlSats(glanceTotal), count: glanceCount }));
+  let glance = "<p class='psbt-kv' data-psbt-glance>" + glanceText + (glanceChange > 0n ? " · " + hodlT("{change} BTC returns to your key", { change: hodlSats(glanceChange) }) : "") + "</p>";
   html.push("<p class='edge-note is-public'>" + hodlT("Witness-UTXO amounts are unverified PSBT claims; non-witness UTXO amounts are cross-checked against the embedded previous transaction. Neither is checked against the blockchain.") + "</p>");
   if (inscriptionReport.envelopes.length) {
     let count = inscriptionReport.envelopes.length;
@@ -13722,7 +13792,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     },
   ];
   if (view === "nonce") return nonceHtml.join("");
-  html.unshift(hodlPsbtAnalysisSummary(checks));
+  html.unshift(hodlPsbtAnalysisSummary(checks), glance);
   return (view === "inspect" ? html : html.concat(nonceHtml)).join("");
 }
 // Same three views as hodlRenderPsbt. A raw transaction has no summary table,
