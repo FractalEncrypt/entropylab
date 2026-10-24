@@ -343,7 +343,10 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   // Defense in depth: a signature the engine could not check (or found
   // invalid) is never painted as a pass, whatever the verdict says.
   const signatures = report?.checks?.signatures;
-  const tier = report?.verdict === "fail" || signatures === "unverified" || signatures === "invalid"
+  // A missing report or verdict is never a pass: only an exact "pass" may
+  // paint the pass tier, so a report the engine did not produce cannot show
+  // "No changes to your transaction".
+  const tier = report?.verdict !== "pass" || signatures === "unverified" || signatures === "invalid"
     ? "fail"
     : findings.some((f) => f.severity === "warning") ? "pass-warnings" : "pass";
   const note = tier === "fail"

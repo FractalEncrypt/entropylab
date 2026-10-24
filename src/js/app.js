@@ -12024,14 +12024,10 @@ function hodlPsbtClearSignerAudit() {
   section.remove();
   // The verdict belonged to the exact pair of PSBTs it was computed from, so
   // retiring it must also let the user re-run Inspect on those same inputs.
-  // The run stamp still matches the fields, so the input sync above leaves
-  // Inspect disabled; re-enable it here, but only when there is something to
-  // inspect.
-  const go = document.getElementById("psbt-go");
-  if (go && String(document.getElementById("psbt-text")?.value || "").trim()) {
-    go.disabled = false;
-    go.setAttribute("aria-disabled", "false");
-  }
+  // Let the ordinary input sync decide the button state: it applies the
+  // decode check and the run stamp, so a field that does not decode never
+  // enables Inspect.
+  hodlSyncPsbtControls();
 }
 function hodlRunPsbt() {
   let output = document.getElementById("psbt-out"), manual = document.getElementById("psbt-key").value;

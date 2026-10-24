@@ -138,6 +138,15 @@ test("a pass verdict with an unverified or invalid signature check renders the f
   }
 });
 
+test("a missing report or verdict renders the fail tier, never a pass", () => {
+  for (const report of [undefined, null, {}, { verdict: undefined }, { verdict: "unknown" }]) {
+    const html = psbtSignerAuditHtml(report, null, null, "mainnet");
+    assert.ok(html.includes('data-audit-tier="fail"'), `${String(report)} must render the fail tier`);
+    assert.ok(html.includes('data-audit-verdict="fail"'), `${String(report)} must render the fail note`);
+    assert.ok(!html.includes('data-audit-verdict="pass"'), `${String(report)} must not render the pass note`);
+  }
+});
+
 test("the closing limitation note always renders", () => {
   for (const findings of [[], [findingFor("METADATA_ADDED")], [findingFor("NONCE_REUSE")]]) {
     const html = psbtSignerAuditHtml(reportFor(findings), null, null, "mainnet");
@@ -277,18 +286,18 @@ test("the app-wide session wipe also retires a shown signer-audit verdict", () =
   assert.ok(cleared - emptied < 400, "the call belongs right after the #psbt-audit-before wipe");
 });
 
-// Item 2: retiring a shown verdict must not strand the user — Inspect is
-// re-enabled for the same inputs, the way an ordinary edit re-enables it.
+// Item 2: retiring a shown verdict must not bypass the Inspect button's own
+// rules — the ordinary input sync decides the button state, so a field that
+// does not decode never enables Inspect.
 test("retiring a shown signer-audit verdict re-enables Inspect for the same inputs", () => {
   const source = readFileSync(new URL("../src/js/app.js", import.meta.url), "utf8");
   const start = source.indexOf("function hodlPsbtClearSignerAudit()");
   assert.ok(start >= 0, "fixture: hodlPsbtClearSignerAudit is in app.js");
   const next = source.indexOf("\nfunction ", start + 1);
   const body = source.slice(start, next === -1 ? undefined : next);
-  assert.ok(body.includes('"psbt-go"'), "the retirement must touch the Inspect button");
-  assert.ok(body.includes('"psbt-text"'), "the re-enable must be guarded by a PSBT to inspect");
-  assert.ok(/disabled\s*=\s*false/.test(body), "the retirement must re-enable Inspect");
-  assert.ok(/aria-disabled["']?\s*,\s*["']false["']/.test(body), "the retirement must clear aria-disabled");
+  assert.ok(body.includes("hodlSyncPsbtControls()"), "the retirement must let the input sync decide the Inspect button");
+  assert.ok(!body.includes('"psbt-go"'), "the retirement must not touch the Inspect button directly");
+  assert.ok(!/disabled\s*=\s*false/.test(body), "the retirement must not force-enable Inspect");
 });
 
 // Item 3: a PSBT with very many inputs must not overflow the argument limit
