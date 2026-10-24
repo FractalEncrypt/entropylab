@@ -54,8 +54,12 @@ const readBigsize = (bytes, offset) => {
 // ── field decoders (value bytes -> displayable JS value) ────────────────────
 
 // Truncated u64/u32, big-endian, zero bytes meaning zero. Returned as a
-// decimal string: a tu64 can exceed 2^53, so a Number would lie.
-const tuField = (bytes) => {
+// decimal string: a tu64 can exceed 2^53, so a Number would lie. BOLT1:
+// leading zeros MUST be omitted, and tu32/tu64 are at most 4/8 bytes.
+const tuField = (name, maxBytes) => (bytes) => {
+  if (bytes.length > maxBytes || (bytes.length > 0 && bytes[0] === 0)) {
+    throw { key: "The {name} field is not a minimally-encoded truncated integer.", vars: { name } };
+  }
   let value = 0n;
   for (const byte of bytes) value = (value << 8n) | BigInt(byte);
   return value.toString();
@@ -97,6 +101,8 @@ const pathsField = (bytes) => {
     if (offset >= bytes.length) throw { key: "Truncated blinded path data." };
     const hops = bytes[offset];
     offset += 1;
+    // BOLT12 offer reader: num_hops 0 means MUST NOT respond.
+    if (hops === 0) throw { key: "A blinded path has no hops." };
     for (let hop = 0; hop < hops; hop++) {
       if (offset + 35 > bytes.length) throw { key: "Truncated blinded path data." };
       const enclen = (bytes[offset + 33] << 8) | bytes[offset + 34];
@@ -132,13 +138,13 @@ const OFFER_FIELDS = [
   [2n, "chains", chainsField],
   [4n, "metadata", hexField],
   [6n, "currency", utf8Field("offer_currency")],
-  [8n, "amount", tuField],
+  [8n, "amount", tuField("offer_amount", 8)],
   [10n, "description", utf8Field("offer_description")],
   [12n, "features", hexField],
-  [14n, "absoluteExpiry", tuField],
+  [14n, "absoluteExpiry", tuField("offer_absolute_expiry", 8)],
   [16n, "paths", pathsField],
   [18n, "issuer", utf8Field("offer_issuer")],
-  [20n, "quantityMax", tuField],
+  [20n, "quantityMax", tuField("offer_quantity_max", 8)],
   [22n, "issuerId", lengthField("offer_issuer_id", 33)],
 ];
 
@@ -146,9 +152,9 @@ const INVREQ_FIELDS = [
   ...OFFER_FIELDS,
   [0n, "invreqMetadata", hexField],
   [80n, "chain", lengthField("invreq_chain", 32)],
-  [82n, "amountMsat", tuField],
+  [82n, "amountMsat", tuField("invreq_amount_msat", 8)],
   [84n, "invreqFeatures", hexField],
-  [86n, "quantity", tuField],
+  [86n, "quantity", tuField("invreq_quantity", 8)],
   [88n, "payerId", lengthField("invreq_payer_id", 33)],
   [89n, "payerNote", utf8Field("invreq_payer_note")],
   [90n, "invreqPaths", pathsField],
@@ -158,10 +164,10 @@ const INVOICE_FIELDS = [
   ...INVREQ_FIELDS,
   [160n, "invoicePaths", pathsField],
   [162n, "payinfoCount", payinfoField],
-  [164n, "createdAt", tuField],
-  [166n, "relativeExpiry", tuField],
+  [164n, "createdAt", tuField("invoice_created_at", 8)],
+  [166n, "relativeExpiry", tuField("invoice_relative_expiry", 4)],
   [168n, "paymentHash", lengthField("invoice_payment_hash", 32)],
-  [170n, "invoiceAmount", tuField],
+  [170n, "invoiceAmount", tuField("invoice_amount", 8)],
   [172n, "fallbacks", hexField],
   [174n, "invoiceFeatures", hexField],
   [176n, "nodeId", lengthField("invoice_node_id", 33)],
@@ -206,7 +212,9 @@ export const bolt12Decode = (text) => {
     throw { key: "Paste a BOLT12 string (lno1…, lnr1…, or lni1…)." };
   }
   const { hrp, words } = decodeEnvelope(text.trim());
-  const table = KINDS[hrp];
+  // Object.hasOwn, not a bare lookup: "constructor" / "__proto__" must not
+  // resolve to Object.prototype members and slip past the prefix allowlist.
+  const table = Object.hasOwn(KINDS, hrp) ? KINDS[hrp] : undefined;
   if (!table) {
     throw { key: "Not a BOLT12 string: the prefix “{hrp}” is not lno, lnr, or lni.", vars: { hrp } };
   }
@@ -235,14 +243,21 @@ export const bolt12Decode = (text) => {
     if (type.value === lastType) throw { key: "Duplicate TLV field type {t}.", vars: { t: type.value.toString() } };
     if (type.value < lastType) throw { key: "TLV field type {t} is out of order.", vars: { t: type.value.toString() } };
     lastType = type.value;
+    // BOLT12 offer reader: an offer may only carry types 1-79 and
+    // 1000000000-1999999999; anything else (including the 240 signature)
+    // is not an offer field and MUST NOT be responded to.
+    if (hrp === "lno" && !((type.value >= 1n && type.value <= 79n) || (type.value >= 1000000000n && type.value <= 1999999999n))) {
+      throw { key: "TLV field type {t} is not valid in an offer.", vars: { t: type.value.toString() } };
+    }
     if (type.value === SIGNATURE_TYPE) {
+      if (value.length !== 64) throw { key: "The signature field has an invalid length." };
       signaturePresent = true;
       continue;
     }
     const field = known.get(type.value);
     if (!field) {
       if (type.value % 2n === 0n) throw { key: "Unknown required TLV field type {t}.", vars: { t: type.value.toString() } };
-      unknownOddTypes.push(Number(type.value));
+      unknownOddTypes.push(type.value.toString());
       continue;
     }
     fields[field.name] = field.decode(value);

@@ -49,6 +49,14 @@ const FEATURES_BIT_99 = "08000000000000000000000000";
 const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 const bigsize = (n) => {
+  if (typeof n === "bigint") {
+    if (n < 0xfdn) return [Number(n)];
+    if (n <= 0xffffn) return [0xfd, Number(n >> 8n), Number(n & 0xffn)];
+    if (n <= 0xffffffffn) return [0xfe, Number(n >> 24n), Number((n >> 16n) & 0xffn), Number((n >> 8n) & 0xffn), Number(n & 0xffn)];
+    const out = [0xff];
+    for (let shift = 56n; shift >= 0n; shift -= 8n) out.push(Number((n >> shift) & 0xffn));
+    return out;
+  }
   if (n < 0xfd) return [n];
   if (n <= 0xffff) return [0xfd, (n >> 8) & 0xff, n & 0xff];
   return [0xfe, (n >>> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
@@ -68,6 +76,13 @@ const encode = (hrp, fields) => hrp + "1" + toWords(tlvBytes(fields)).map((w) =>
 const assertKey = (fn, key) =>
   assert.throws(fn, (error) => {
     assert.equal(error.key, key, `expected key ${JSON.stringify(key)}, got ${JSON.stringify(error.key ?? error.message)}`);
+    return true;
+  });
+
+// New failures are keyed, but their wording is not pinned.
+const assertKeyed = (fn) =>
+  assert.throws(fn, (error) => {
+    assert.equal(typeof error.key, "string");
     return true;
   });
 
@@ -123,9 +138,9 @@ test("recipient visibility: issuer id is a signing key, not a destination", () =
 
 test("collects unknown odd types and decodes around them", () => {
   const odd = bolt12Decode(OFFER_UNKNOWN_ODD);
-  assert.deepEqual(odd.unknownOddTypes, [33]);
+  assert.deepEqual(odd.unknownOddTypes, ["33"]);
   assert.equal(odd.fields.description, "Test vectors");
-  assert.deepEqual(bolt12Decode(OFFER_UNKNOWN_ODD_EXPERIMENTAL).unknownOddTypes, [1000000033]);
+  assert.deepEqual(bolt12Decode(OFFER_UNKNOWN_ODD_EXPERIMENTAL).unknownOddTypes, ["1000000033"]);
 });
 
 test("accepts an all-uppercase string", () => {
@@ -213,7 +228,7 @@ test("decodes strings longer than bech32m's 1023-character cap", () => {
   const long = encode("lno", [[10, "5465737420766563746f7273"], [22, PUBKEY], [1000000033, "00".repeat(1500)]]);
   assert.ok(long.length > 1023, `${long.length} chars`);
   const result = bolt12Decode(long);
-  assert.deepEqual(result.unknownOddTypes, [1000000033]);
+  assert.deepEqual(result.unknownOddTypes, ["1000000033"]);
   assert.equal(result.fields.description, "Test vectors");
 });
 
@@ -308,4 +323,44 @@ test("rejects bad bech32 data padding and an empty payload (spec vectors)", () =
 test("rejects malformed fixed-length fields and invalid UTF-8", () => {
   assertKey(() => bolt12Decode(encode("lno", [[10, "5465737420766563746f7273"], [22, "02ee"]])), "The {name} field has an invalid length.");
   assertKey(() => bolt12Decode(OFFER_BAD_UTF8), "The {name} field is not valid UTF-8.");
+});
+
+test("rejects prototype keys as an unknown prefix", () => {
+  // A bare KINDS[hrp] lookup would resolve these to Object.prototype members.
+  for (const hrp of ["constructor", "__proto__"]) {
+    assertKey(() => bolt12Decode(`${hrp}1qqqq`), "Not a BOLT12 string: the prefix “{hrp}” is not lno, lnr, or lni.");
+  }
+});
+
+test("refuses a blinded path with zero hops", () => {
+  // sciddir_or_pubkey (33) + blinding key (33) + num_hops 0.
+  const zeroHops = "02" + "11".repeat(32) + "22".repeat(33) + "00";
+  assertKeyed(() => bolt12Decode(encode("lno", [[10, "5465737420766563746f7273"], [16, zeroHops], [22, PUBKEY]])));
+});
+
+test("enforces the offer TLV ranges and the 64-byte signature", () => {
+  // BOLT12 offer reader: only types 1-79 and 1000000000-1999999999 are
+  // allowed in an offer; the 240 signature record is not one of them.
+  assertKeyed(() => bolt12Decode(encode("lno", [[10, "5465737420766563746f7273"], [22, PUBKEY], [240, SIGNATURE]])));
+  assertKeyed(() => bolt12Decode(encode("lno", [[10, "5465737420766563746f7273"], [22, PUBKEY], [81, "00"]])));
+  // lnr/lni: the signature TLV 240 is exactly 64 bytes.
+  assertKeyed(() => bolt12Decode(encode("lnr", [[10, "5465737420766563746f7273"], [22, PUBKEY], [240, "ab"]])));
+  assertKeyed(() => bolt12Decode(encode("lni", [[168, PAYMENT_HASH], [240, "ab".repeat(65)]])));
+});
+
+test("refuses over-long or non-minimal truncated integers", () => {
+  // BOLT1: tu64 is at most 8 bytes, tu32 at most 4, and leading zeros MUST
+  // be omitted.
+  assertKeyed(() => bolt12Decode(encode("lno", [[8, "01".repeat(9)], [10, "5465737420766563746f7273"], [22, PUBKEY]])));
+  assertKeyed(() => bolt12Decode(encode("lno", [[8, "0001"], [10, "5465737420766563746f7273"], [22, PUBKEY]])));
+  assertKeyed(() => bolt12Decode(encode("lni", [[166, "01".repeat(5)], [168, PAYMENT_HASH], [170, "030d40"], [176, PUBKEY]])));
+  assertKeyed(() => bolt12Decode(encode("lni", [[166, "0001"], [168, PAYMENT_HASH], [170, "030d40"], [176, PUBKEY]])));
+});
+
+test("reports unknown odd types as exact decimal strings", () => {
+  // 2^64-1 is odd and beyond Number.MAX_SAFE_INTEGER; Number() would round
+  // it to 18446744073709552000.
+  const type = 18446744073709551615n;
+  const result = bolt12Decode(encode("lnr", [[10, "5465737420766563746f7273"], [22, PUBKEY], [type, "00"]]));
+  assert.deepEqual(result.unknownOddTypes, ["18446744073709551615"]);
 });
