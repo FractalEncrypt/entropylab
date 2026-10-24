@@ -147,7 +147,11 @@ const coreMixEntropy = (secrets, transcript, entropyBytes, deps) => {
     if (!(digest instanceof Uint8Array) || digest.length < entropyBytes) {
       throw new Error("coreMixEntropy: the hash returned fewer bytes than requested.");
     }
-    return digest.slice(0, entropyBytes);
+    // An explicit copy: Buffer.prototype.slice is a view, so a Buffer-returning
+    // hash would otherwise hand back memory the finally block zeroes.
+    const entropy = new Uint8Array(entropyBytes);
+    entropy.set(digest.subarray(0, entropyBytes));
+    return entropy;
   } finally {
     secretBytes.fill(0);
     transcriptBytes.fill(0);

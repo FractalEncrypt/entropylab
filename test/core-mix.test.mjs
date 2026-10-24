@@ -194,3 +194,15 @@ test("wipeCoreMixSecrets zeroes every secret", () => {
   wipeCoreMixSecrets(secrets);
   for (const secret of secrets) assert.ok(secret.every((byte) => byte === 0), "every byte is zeroed");
 });
+
+// MiniMax's review of f3ed754: a hash that returns a Node Buffer (whose slice
+// is a view) must not let the finally-block wipe zero the returned entropy.
+test("a Buffer-returning sha256 still yields the same, non-zero entropy", async () => {
+  const { createHash } = await import("node:crypto");
+  const bufferSha256 = (bytes) => createHash("sha256").update(bytes).digest();
+  const secrets = [new Uint8Array(32).fill(7), new Uint8Array(32).fill(9)];
+  const viaBuffer = coreMixEntropy(secrets, "1 2 3 4 5 6", 32, { sha256: bufferSha256 });
+  const viaArray = coreMixEntropy(secrets, "1 2 3 4 5 6", 32, { sha256: (bytes) => new Uint8Array(bufferSha256(bytes)) });
+  assert.ok(viaBuffer.some((byte) => byte !== 0), "not wiped to zeros");
+  assert.deepEqual([...viaBuffer], [...viaArray]);
+});
