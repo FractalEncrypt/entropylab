@@ -24,7 +24,9 @@ export function descriptorReuseHtml(result) {
   return `<div class="edge-note is-private" data-reuse-verdict="reuse"><p><strong>${tHtml("Potential key reuse: this descriptor derives the same public key in more than one place")}</strong></p><ul>${items}</ul>${more}</div>`;
 }
 
-export function initDescriptorReuseCheck(doc = document) {
+// onChange runs after every edit and check, so the page can refresh
+// controls that depend on this section holding text (Clear Inspectors).
+export function initDescriptorReuseCheck(doc = document, { onChange = () => {} } = {}) {
   const text = doc.getElementById("descriptor-reuse-text");
   const go = doc.getElementById("descriptor-reuse-go");
   const out = doc.getElementById("descriptor-reuse-out");
@@ -34,6 +36,7 @@ export function initDescriptorReuseCheck(doc = document) {
   text.addEventListener("input", () => {
     out.innerHTML = "";
     error.textContent = "";
+    onChange();
   });
   go.addEventListener("click", () => {
     out.innerHTML = "";
@@ -44,8 +47,10 @@ export function initDescriptorReuseCheck(doc = document) {
     } catch (failure) {
       // The module's messages never repeat the descriptor or a key.
       error.textContent = String(failure?.message ?? failure);
+      onChange();
       return;
     }
     out.innerHTML = descriptorReuseHtml(result);
+    onChange();
   });
 }

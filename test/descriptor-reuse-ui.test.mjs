@@ -105,7 +105,27 @@ test("the section is preview-only: release builds strip the markup and never wir
   const card = preview.slice(preview.indexOf('id="psbt-card"'), preview.indexOf('id="psbted-card"'));
   assert.ok(card.indexOf('id="psbt-wipe"') < card.indexOf('id="descriptor-reuse-options"'));
   const app = read("src/js/app.js");
-  assert.match(app, /if \(typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__\) initDescriptorReuseCheck\(\);/);
+  assert.match(app, /if \(typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__\) initDescriptorReuseCheck\(document, \{ onChange: hodlSyncPsbtControls \}\);/);
+  // Second line of defence: in a release build the markup is gone, so even a
+  // stray call wires nothing and touches nothing.
+  const asked = [];
+  assert.doesNotThrow(() => initDescriptorReuseCheck({ getElementById: (id) => { asked.push(id); return null; } }, { onChange: () => assert.fail("onChange ran") }));
+  assert.deepEqual(asked, ["descriptor-reuse-text", "descriptor-reuse-go", "descriptor-reuse-out", "descriptor-reuse-error"]);
+});
+
+test("every edit and check tells the page, so Clear Inspectors can enable", () => {
+  const elements = Object.fromEntries(["descriptor-reuse-text", "descriptor-reuse-go", "descriptor-reuse-out", "descriptor-reuse-error"].map((id) => [id, fakeElement()]));
+  let calls = 0;
+  initDescriptorReuseCheck({ getElementById: (id) => elements[id] ?? null }, { onChange: () => { calls++; } });
+  elements["descriptor-reuse-text"].value = `wpkh(${X}/<0;1>/*)`;
+  elements["descriptor-reuse-text"].listeners.input();
+  elements["descriptor-reuse-go"].listeners.click();
+  elements["descriptor-reuse-text"].value = "wpkh(bad)#aaaaaaaa";
+  elements["descriptor-reuse-go"].listeners.click();
+  assert.equal(calls, 3);
+  const app = read("src/js/app.js");
+  const sync = app.slice(app.indexOf("function hodlSyncPsbtControls("), app.indexOf("\nfunction ", app.indexOf("function hodlSyncPsbtControls(") + 1));
+  assert.match(sync, /anything \|\|= Boolean\(value\("descriptor-reuse-text"\) \|\| document\.getElementById\("descriptor-reuse-out"\)\?\.childElementCount\);\s*enable\("psbt-wipe", anything\);/);
 });
 
 test("Clear Inspectors and the session-end sweep clear the pasted descriptor and its verdict", () => {
@@ -113,6 +133,9 @@ test("Clear Inspectors and the session-end sweep clear the pasted descriptor and
   const end = app.slice(app.indexOf("function hodlEndPsbtSession("), app.indexOf("\nfunction ", app.indexOf("function hodlEndPsbtSession(") + 1));
   assert.match(end, /"descriptor-reuse-text"/);
   assert.match(end, /"descriptor-reuse-out", "descriptor-reuse-error"/);
+  const sweep = app.slice(app.indexOf("function hodlInitSecretFieldAutoClear("), app.indexOf("\nfunction ", app.indexOf("function hodlInitSecretFieldAutoClear(") + 1));
+  assert.match(sweep, /"nonce-text", "descriptor-reuse-text"\]/);
+  assert.match(sweep, /for \(let id of \["descriptor-reuse-out", "descriptor-reuse-error"\]\)/);
 });
 
 test("the module never talks to the network", () => {
