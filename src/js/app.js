@@ -54,6 +54,7 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
 import { initCoreWallet } from "./core-wallet-ui.js";
+import { initDescriptorReuseCheck } from "./descriptor-reuse-ui.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
 import { psbtSignerAuditVerification as hodlPsbtSignerAuditVerify } from "./psbt-signer-audit-verify.js";
 import { psbtSignerAuditErrorHtml as hodlPsbtSignerAuditErrorHtml, psbtSignerAuditHtml as hodlPsbtSignerAuditHtml } from "./psbt-signer-audit-view.js";
@@ -11269,13 +11270,13 @@ function hodlEndPsbtSession() {
   hodlPsbtLast = null;
   hodlPsbtInspected = {};
   hodlPsbtSessionSpec = hodlNote("Accessible fields were cleared (best effort).");
-  for (let id of ["psbt-key", "psbt-pass", "psbt-text", "psbt-audit-before", "psbt-ax-transcript", "nonce-key", "nonce-pass", "nonce-text"]) {
+  for (let id of ["psbt-key", "psbt-pass", "psbt-text", "psbt-audit-before", "psbt-ax-transcript", "nonce-key", "nonce-pass", "nonce-text", "descriptor-reuse-text"]) {
     let field = document.getElementById(id);
     if (field) field.value = "";
   }
   hodlClearStationPassphrase("psbt-pass");
   hodlClearStationPassphrase("nonce-pass");
-  for (let id of ["psbt-out", "nonce-out"]) {
+  for (let id of ["psbt-out", "nonce-out", "descriptor-reuse-out", "descriptor-reuse-error"]) {
     let output = document.getElementById(id);
     if (output) output.innerHTML = "";
   }
@@ -19612,6 +19613,8 @@ function hodlInitWorkspace() {
   hodlInitPsbt();
   initPsbtEditor({ networkDefault: () => hodlInspectorNetwork(), copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup, journalLog: hodlJournalLog });
   initCoreWallet({ deps: hodlWalletDatDeps(), onImportIntoStation: hodlCoreImportIntoStation, copiedIcon: hodlCopiedIconMarkup, copyIcon: hodlClipboardIconMarkup });
+  // Unreleased (#164): a release build strips its markup (docs/PREVIEW.md).
+  if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) initDescriptorReuseCheck();
   hodlInitBip85();
   hodlInitVanity();
   hodlInitSp();
@@ -20032,7 +20035,7 @@ function hodlInitSecretFieldAutoClear() {
     // The rendered audit holds change addresses and fingerprints derived
     // from the loaded key; retire it with the field it was computed from.
     try { hodlPsbtClearSignerAudit(); } catch {}
-    for (let id of ["nonce-key", "nonce-pass", "nonce-text"]) {
+    for (let id of ["nonce-key", "nonce-pass", "nonce-text", "descriptor-reuse-text"]) {
       let field = document.getElementById(id);
       if (field) field.value = "";
     }
