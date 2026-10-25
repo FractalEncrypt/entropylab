@@ -829,8 +829,11 @@ function hodlCreateKeyMethodIcon(mode) {
 // mixed with a dice or card transcript. The wallet alone never makes a phrase,
 // and the secrets live only in this holder, wiped on every exit path.
 if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) hodlKeyModes.push("corewallet");
-var hodlCoreMix = null, hodlCoreMixSource = "dice";
+var hodlCoreMix = null, hodlCoreMixSource = "dice", hodlCoreMixGeneration = 0;
 function hodlCoreMixReset() {
+  // Every reset also retires a wallet.dat read still in flight: the file
+  // handler compares this counter after the await and drops the bytes unloaded.
+  hodlCoreMixGeneration++;
   if (hodlCoreMix) wipeCoreMixSecrets(hodlCoreMix.secrets);
   hodlCoreMix = null;
 }
@@ -851,14 +854,34 @@ function hodlCoreMixShowSummary() {
     : hodlTText("{name} · {count} keys · fingerprint {fingerprint}", { name: hodlCoreMix.name, count: hodlCoreMix.count, fingerprint: hodlCoreMix.fingerprint });
   summary.hidden = false;
 }
+// The parsed document keeps its own copy of every record's bytes, and the
+// secrets were taken from them: zero every buffer it still holds, whether the
+// mix succeeded or threw.
+function hodlCoreMixWipeDoc(doc) {
+  if (!doc) return;
+  let records = [...(Array.isArray(doc.records) ? doc.records : []), ...(Array.isArray(doc.others) ? doc.others : [])];
+  for (let entry of Array.isArray(doc.descriptors) ? doc.descriptors : []) {
+    for (let keyRecord of Array.isArray(entry?.keys) ? entry.keys : []) records.push(keyRecord);
+  }
+  for (let record of records) {
+    if (!record || typeof record !== "object") continue;
+    for (let field of Object.keys(record)) {
+      let value = record[field];
+      // ArrayBuffer.isView, not instanceof: a typed array from another realm
+      // (or a Buffer) is still a copy of the secret and must be zeroed.
+      if (ArrayBuffer.isView(value) && typeof value.fill === "function") value.fill(0);
+    }
+  }
+}
 function hodlCoreMixLoadBytes(bytes, name) {
   hodlCoreMixReset();
   let error = document.getElementById("core-mix-error");
   if (error) error.textContent = "";
+  let doc = null;
   try {
-    let doc = hodlCoreWallet.parseWalletDat(bytes);
+    doc = hodlCoreWallet.parseWalletDat(bytes);
     let secrets = coreMixSecrets(doc, { sha256: (b) => hodlSha256(b), publicKeyForPrivate: hodlWalletDatDeps().publicKeyForPrivate });
-    hodlCoreMix = { name: name || "wallet.dat", count: secrets.count, fingerprint: secrets.fingerprint, secrets: secrets.secrets };
+    hodlCoreMix = { keyId: hodlKeys[hodlActiveKey]?.id ?? null, name: name || "wallet.dat", count: secrets.count, fingerprint: secrets.fingerprint, secrets: secrets.secrets };
     hodlCoreMixShowSummary();
     return true;
   } catch (exception) {
@@ -866,6 +889,7 @@ function hodlCoreMixLoadBytes(bytes, name) {
     hodlCoreMixShowError(exception.message || String(exception));
     return false;
   } finally {
+    hodlCoreMixWipeDoc(doc);
     bytes.fill(0);
   }
 }
@@ -4555,7 +4579,10 @@ function hodlSelectedCardsEntropy(targetWords = hodlTargetWordCount) {
   return hodlCardMethod === "direct" ? hodlDirectCardsEntropy(input.value, targetWords) : hodlCardsEntropy(input.value, targetWords, hodlCardColemanSymbols);
 }
 function hodlCoreMixSelectedEntropy(targetWords = hodlTargetWordCount) {
-  if (!hodlCoreMix) return { ok: false, error: hodlNote("Choose a Bitcoin Core wallet.dat first.") };
+  // The secrets belong to the tab that loaded them: a tab switch, a delete or
+  // a method switch resets the holder, and a holder left over from another tab
+  // is refused here too.
+  if (!hodlCoreMix || hodlCoreMix.keyId !== (hodlKeys[hodlActiveKey]?.id ?? null)) return { ok: false, error: hodlNote("Choose a Bitcoin Core wallet.dat first.") };
   let config = hodlSeedConfig(targetWords), notes = [], warnings = [];
   let source = hodlCoreMixSource === "cards" ? "cards" : "dice";
   let value = document.getElementById("core-mix-transcript")?.value ?? "";
@@ -4579,7 +4606,7 @@ function hodlCoreMixSelectedEntropy(targetWords = hodlTargetWordCount) {
   } catch (error) {
     return { ok: false, error: hodlNote(error.message || String(error)) };
   }
-  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's {count} spend secrets and the {source} transcript; the first {bits} bits become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
+  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's {count} spend secrets and the {source} transcript; the first {bits} bits of that hash become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
   return { ok: true, bytes, hex: hodlHex.encode(bytes), bits: config.bits, sourceBits, method: "core-wallet-mix-v1", notes, warnings };
 }
 function hodlUpdateCards() {
@@ -6753,22 +6780,24 @@ function hodlRenderKeyForm() {
       let chosen = file.files?.[0];
       file.value = "";
       if (!chosen) return;
+      // A read can finish after End Session, Clear, a tab switch or a method
+      // switch: the generation and the tab it was started for decide whether
+      // the bytes may still be loaded.
+      let generation = hodlCoreMixGeneration, keyId = hodlKeys[hodlActiveKey]?.id ?? null;
       (async () => {
+        let bytes = null;
         try {
           if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlT("This wallet file is too large to inspect safely."));
-          let bytes = new Uint8Array(await chosen.arrayBuffer());
-          // The method can change while the file is read: never load
-          // secrets into a mode that no longer shows or wipes them.
-          if (hodlKeyMode !== "corewallet") {
-            bytes.fill(0);
-            return;
-          }
+          bytes = new Uint8Array(await chosen.arrayBuffer());
+          if (hodlKeyMode !== "corewallet" || generation !== hodlCoreMixGeneration || keyId !== (hodlKeys[hodlActiveKey]?.id ?? null)) return;
           hodlCoreMixLoadBytes(bytes, chosen.name);
         } catch (exception) {
           hodlCoreMixReset();
           hodlCoreMixShowError(exception.message || String(exception));
+        } finally {
+          if (bytes) bytes.fill(0);
+          hodlSyncDeriveButton();
         }
-        hodlSyncDeriveButton();
       })();
     };
     sourceSelect.onchange = () => {
@@ -6776,11 +6805,20 @@ function hodlRenderKeyForm() {
       if (state) state.coreMixSource = hodlCoreMixSource;
       let helpEl = document.getElementById("core-mix-transcript-help");
       if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlT("Two characters per card, rank then suit (AS 7H TD …).") : hodlT("Faces 1–6, as many rolls as the dice method recommends.");
+      // A stale result, or a derivation still running on the old source, must
+      // not survive the change.
+      hodlInvalidateDerivation();
+      hodlInvalidateLiveKeyResult();
       hodlSyncDeriveButton();
     };
-    transcript.oninput = () => hodlSyncDeriveButton();
+    transcript.oninput = () => {
+      hodlInvalidateDerivation();
+      hodlInvalidateLiveKeyResult();
+      hodlSyncDeriveButton();
+    };
     hodlBindKeyFields();
     hodlRenderPassphraseKeyboard();
+    hodlSyncDeriveButton();
     return;
   }
   if (hodlKeyMode === "dice") {
@@ -7589,7 +7627,15 @@ var hodlLowEntropyConfirm = null, hodlFingerprintCollisionConfirm = null;
 // "recommended amount" the user can fall short of at derive time. The brain
 // wallet keeps its own explicit acknowledgement instead.
 function hodlLowEntropyWarningFor(mode, method, value, targetWords) {
-  if (mode === "corewallet") return null;
+  // The wallet's secrets add entropy, but if the wallet.dat ever leaks only
+  // the transcript protects the seed: warn exactly as the chosen source does.
+  if (mode === "corewallet") {
+    let transcript = typeof value === "string" ? value : "";
+    if (!transcript && typeof document !== "undefined") transcript = document.getElementById("core-mix-transcript")?.value ?? "";
+    return hodlCoreMixSource === "cards"
+      ? hodlLowEntropyWarningFor("cards", "hashed", transcript, targetWords)
+      : hodlLowEntropyWarningFor("dice", "coldcard", transcript, targetWords);
+  }
   let config = hodlSeedConfig(targetWords);
   if (mode === "dice" && (method === "coldcard" || method === "coleman")) {
     let rolls = hodlSplitDiceString(value).rolls;
@@ -15650,6 +15696,8 @@ function hodlSelectKey(index) {
   // Switching tabs mid-derivation must cancel it: the pending commit would
   // otherwise land on the tab being switched to (the wipe path already does).
   hodlInvalidateDerivation();
+  // The wallet.dat secrets belong to the tab that loaded them.
+  if (typeof hodlCoreMixReset === "function") hodlCoreMixReset();
   hodlCaptureKey();
   hodlActiveKey = index;
   hodlRenderKeyTabs();
@@ -15780,6 +15828,7 @@ function hodlDeleteActiveKey() {
   // Removing the active key mid-derivation cancels it, so its commit cannot
   // land on whatever tab the splice makes active.
   hodlInvalidateDerivation();
+  if (typeof hodlCoreMixReset === "function") hodlCoreMixReset();
   if (hodlJournalUnlocked()) {
     hodlKeyManagerDetachFromStation(state);
     return;
