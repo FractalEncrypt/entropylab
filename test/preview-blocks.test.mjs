@@ -98,3 +98,24 @@ test("near-miss marker spellings throw", () => {
   // Ordinary comments and the word "preview" in text are untouched.
   assert.equal(applyPreviewBlocks("<!-- a note -->\n<p>preview of a PSBT</p>\n", false), "<!-- a note -->\n<p>preview of a PSBT</p>\n");
 });
+
+// Reviews of 82d50c0 (GLM, MiniMax).
+test("any comment mentioning preview must be an exact marker (extra dash, plural)", () => {
+  for (const marker of ["<!--- preview -->", "<!--- /preview --->", "<!-- previews -->", "<!-- show the preview -->"]) {
+    assert.throws(() => applyPreviewBlocks(`<p>a</p>\n${marker}\n`, false), /preview marker/, marker);
+  }
+});
+
+test("build.mjs strips preview blocks from both templates and refuses the constant in classic scripts", () => {
+  const build = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../scripts/build.mjs"), "utf8");
+  assert.match(build, /const template = applyPreviewBlocks\(read\("index\.html"\), preview\)/);
+  assert.match(build, /classic scripts cannot use __ENTROPYLAB_PREVIEW__/);
+});
+
+test("the committed release artifact carries no preview residue", () => {
+  // The artifact CI commits after each merge: no preview marker and no
+  // unreplaced preview constant may reach it (the test-hooks flag has the
+  // same artifact-level pin in validate.test.mjs).
+  const artifact = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../entropylab.html"), "utf8");
+  assert.doesNotMatch(artifact, /<!-- \/?preview -->|__ENTROPYLAB_PREVIEW__/);
+});

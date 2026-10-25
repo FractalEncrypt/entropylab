@@ -69,7 +69,8 @@ if (process.argv.includes("--clean")) {
   process.exit(0);
 }
 
-const template = read("index.html");
+// Both templates that reach the artifact take the same preview-block pass.
+const template = applyPreviewBlocks(read("index.html"), preview);
 // The page body lives once in shell.html: it is injected into index.html for
 // first paint / no-JS and imported by app.js (esbuild text loader) for the
 // boot render, so the two can never drift.
@@ -162,6 +163,12 @@ const jsBrowserCheck = read("js/browser-check.js");
 const jsLifeHash = read("js/lifehash.js");
 const jsEnhanced = read("js/enhanced-inputs.js");
 const jsRepeat = read("js/repeat-inputs.js");
+// The classic scripts are inlined verbatim: esbuild never sees them, so the
+// preview constant would be an undefined name there and break the release
+// page. Refuse it at build time; gate classic-script features from app.js.
+for (const [name, text] of Object.entries({ jsSqliteWriter, jsSqliteReader, jsWalletExport, jsCoreWallet, jsOnline, jsNetwork, jsBrowserCheck, jsLifeHash, jsEnhanced, jsRepeat })) {
+  if (text.includes("__ENTROPYLAB_PREVIEW__")) throw new Error(`${name}: classic scripts cannot use __ENTROPYLAB_PREVIEW__ (only ES modules bundled by esbuild see it)`);
+}
 
 let html = template
   .replace("/*@@SHELL@@*/", () => shell)

@@ -20,7 +20,9 @@ export function applyPreviewBlocks(html, preview) {
     if ((line.includes(OPEN) && marker !== OPEN) || (line.includes(CLOSE) && marker !== CLOSE)) {
       throw new Error("preview markers must each stand alone on their own line");
     }
-    if (/<!--\s*\/?\s*preview\b/i.test(line) && marker !== OPEN && marker !== CLOSE) {
+    // Any comment on the line that mentions "preview" counts: an extra dash
+    // (<!--- preview -->), a plural or a suffix must not slip past as text.
+    if (/<!--[^\n]*?preview/i.test(line) && marker !== OPEN && marker !== CLOSE) {
       throw new Error(`unrecognized preview marker: write exactly "${OPEN}" or "${CLOSE}" on its own line`);
     }
     if (marker === OPEN) {
