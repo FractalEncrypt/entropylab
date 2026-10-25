@@ -54,7 +54,7 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
 import { watchOnlyQrFrames as hodlWatchOnlyQrFrames } from "./psbt-ur.js";
-import { initCoreWallet } from "./core-wallet-ui.js";
+import { CORE_WALLET_MAX_BYTES, initCoreWallet } from "./core-wallet-ui.js";
 import { initDescriptorReuseCheck } from "./descriptor-reuse-ui.js";
 import { coreMixEntropy, coreMixSecrets, wipeCoreMixSecrets } from "./core-mix.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
