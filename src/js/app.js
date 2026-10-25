@@ -858,19 +858,21 @@ function hodlCoreMixShowSummary() {
 // secrets were taken from them: zero every buffer it still holds, whether the
 // mix succeeded or threw.
 function hodlCoreMixWipeDoc(doc) {
-  if (!doc) return;
-  let records = [...(Array.isArray(doc.records) ? doc.records : []), ...(Array.isArray(doc.others) ? doc.others : [])];
-  for (let entry of Array.isArray(doc.descriptors) ? doc.descriptors : []) {
-    for (let keyRecord of Array.isArray(entry?.keys) ? entry.keys : []) records.push(keyRecord);
-  }
-  for (let record of records) {
-    if (!record || typeof record !== "object") continue;
-    for (let field of Object.keys(record)) {
-      let value = record[field];
-      // ArrayBuffer.isView, not instanceof: a typed array from another realm
-      // (or a Buffer) is still a copy of the secret and must be zeroed.
-      if (ArrayBuffer.isView(value) && typeof value.fill === "function") value.fill(0);
+  // Walk the whole parsed document, not a list of known fields: doc.rows holds
+  // every raw database row (the DER key records among them) as [key, value]
+  // buffers, and records nest buffers inside arrays and sub-objects.
+  let seen = new Set(), stack = [doc];
+  while (stack.length) {
+    let value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    // ArrayBuffer.isView, not instanceof: a typed array from another realm
+    // (or a Buffer) is still a copy of the secret and must be zeroed.
+    if (ArrayBuffer.isView(value)) {
+      if (typeof value.fill === "function") value.fill(0);
+      continue;
     }
+    for (let child of Array.isArray(value) ? value : value instanceof Map ? [...value.keys(), ...value.values()] : Object.values(value)) stack.push(child);
   }
 }
 function hodlCoreMixLoadBytes(bytes, name) {
@@ -7592,7 +7594,11 @@ function hodlCanDeriveCurrentKey() {
       return hodlSelectedCardsEntropy(hodlTargetWordCount).ok;
     }
     if (hodlKeyMode === "corewallet") {
-      return Boolean(hodlCoreMix) && hodlCoreMixSelectedEntropy(hodlTargetWordCount).ok;
+      if (!hodlCoreMix) return false;
+      // Only the verdict is needed here: zero the seed entropy it computed.
+      let entropy = hodlCoreMixSelectedEntropy(hodlTargetWordCount);
+      if (entropy.ok && entropy.bytes) entropy.bytes.fill(0);
+      return entropy.ok;
     }
     if (hodlKeyMode === "hex") return hodlSelectedEntropy().ok;
     if (hodlKeyMode === "seed") {

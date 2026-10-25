@@ -194,11 +194,15 @@ test("the parsed document's record buffers are zeroed after a load, success or f
     const key = new Uint8Array([1, 2, 3]), value = new Uint8Array([4, 5, 6]);
     const otherKey = new Uint8Array([7, 8]), otherValue = new Uint8Array([9, 10]);
     const der = new Uint8Array([11, 12]), pubkey = new Uint8Array([13, 14]);
+    // doc.rows is every raw database row as [key, value] (the DER key records
+    // among them), and records can nest buffers inside sub-objects.
+    const rowKey = new Uint8Array([15, 16]), rowValue = new Uint8Array([17, 18]), nested = new Uint8Array([19, 20]);
     return {
-      records: [{ name: "walletdescriptorkey", key, value }],
+      records: [{ name: "walletdescriptorkey", key, value, parsed: { inner: [nested] } }],
       others: [{ name: "tx", key: otherKey, value: otherValue }],
       descriptors: [{ keys: [{ der, pubkey }] }],
-      buffers: [key, value, otherKey, otherValue, der, pubkey],
+      rows: [[rowKey, rowValue]],
+      buffers: [key, value, otherKey, otherValue, der, pubkey, rowKey, rowValue, nested],
     };
   };
   for (const fail of [false, true]) {
@@ -520,4 +524,9 @@ test("the registry lists the core-mix transcript", () => {
 test("app.js imports the mixer and the size cap it calls", () => {
   assert.match(app, /^import \{ coreMixEntropy, coreMixSecrets, wipeCoreMixSecrets \} from "\.\/core-mix\.js";$/m);
   assert.match(app, /^import \{ CORE_WALLET_MAX_BYTES, initCoreWallet \} from "\.\/core-wallet-ui\.js";$/m);
+});
+
+test("the Derive-button check zeroes the seed entropy it computes", () => {
+  const can = app.slice(app.indexOf("function hodlCanDeriveCurrentKey("), app.indexOf("\nfunction ", app.indexOf("function hodlCanDeriveCurrentKey(") + 1));
+  assert.match(can, /let entropy = hodlCoreMixSelectedEntropy\(hodlTargetWordCount\);\s*if \(entropy\.ok && entropy\.bytes\) entropy\.bytes\.fill\(0\);\s*return entropy\.ok;/);
 });
