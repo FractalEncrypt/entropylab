@@ -861,10 +861,11 @@ async function vanityApplyHarness({ method, script, address = applyRecordedAddre
     Uint8Array, ArrayBuffer, TextEncoder, TextDecoder,
     document: { getElementById: id => elements[id] || null },
     hodlKeys: [lab, source], hodlActiveKey: 1, hodlActiveDerivation: null, hodlDerivationGeneration: 0,
+    hodlKeyManagerPending: [], hodlJournalGeneration: 0,
     hodlWalletResult: source.result, hodlCommittedResults: new Set(), hodlWalletDatBirthday: "genesis",
     hodlKeyMode: "seed", hodlTargetWordCount: 12, hodlSeedMethod: "words", hodlNetworkChoice: "mainnet",
     hodlVanityMatches: [match], hodlVanityRun: run, hodlVanityApplying: false,
-    hodlWorkspace: "vanity", hodlSpSource: "", hodlBip85Source: "", hodlOutEl: { innerHTML: "" },
+    hodlWorkspace: "vanity", hodlSpSource: "", hodlBip85Source: "", hodlPsbtSource: "", hodlOutEl: { innerHTML: "" },
     hodlScriptTypes: api.hodlScriptTypes, hodlScriptDefinition: api.hodlScriptDefinition,
     hodlVanityPlan: () => ({ node: null, pathPrefix: [], path: runPath }),
     hodlVanityMatchAddress: api.hodlVanityMatchAddress || (() => { throw new Error("the match verifier is not wired"); }),
@@ -990,4 +991,84 @@ test("Vanity Update Key applies a second honest match from the same run, and sti
       assert.equal(third.savedTo, "", `${method}: the post-edit match was reported saved`);
     }
   }
+});
+
+// Audit L10: the PSBT session is loaded by key id ("key:{id}") but the vanity
+// apply refreshed only the SP and BIP-85 sessions, so an updated key left the
+// PSBT station holding the OLD seed while its session line kept naming the
+// key. The apply must reload the PSBT session too — and if the key's new
+// shape has no session material, fall back to inspect-only instead of
+// aborting the apply.
+test("Vanity Update Key reloads a PSBT session loaded from the updated key (audit L10)", async () => {
+  const { context, elements, source } = await vanityApplyHarness({ method: "passphrase", script: "p2wpkh" });
+  context.hodlPsbtSource = "key:7";
+  const reloaded = [];
+  context.hodlUseActiveKeyForPsbt = (state) => reloaded.push(state);
+  await context.hodlVanityApplyMatch(0);
+  assert.equal(elements["vanity-error"].textContent, "", "the apply failed");
+  assert.deepEqual(reloaded, [source], "the PSBT session was not reloaded from the updated key");
+});
+test("Vanity Update Key leaves the PSBT session inspect-only when the key has no session material (audit L10)", async () => {
+  const { context, elements, match } = await vanityApplyHarness({ method: "passphrase", script: "p2wpkh" });
+  context.hodlPsbtSource = "key:7";
+  context.hodlUseActiveKeyForPsbt = () => { throw new Error("no session material"); };
+  let wiped = 0;
+  context.hodlPsbtWipeMem = () => { wiped += 1; };
+  context.hodlPaintPsbtSession = () => {};
+  context.hodlSyncPsbtControls = () => {};
+  await context.hodlVanityApplyMatch(0);
+  assert.equal(elements["vanity-error"].textContent, "", "the session reload failure must not abort the apply");
+  assert.ok(match.savedTo, "the match was not saved");
+  assert.equal(wiped, 1, "the stale session must be wiped to inspect-only");
+});
+
+// The chunk loop yields with setTimeout, outside onmessage's try/catch. If a
+// later chunk throws (WASM trap, allocation failure), the worker used to die
+// silently with the mnemonic/node still in its persistent buffers. The
+// deferred chunk must wipe those buffers and report the error instead.
+test("a deferred grind chunk that throws wipes the key buffers and reports", async () => {
+  const posted = [];
+  const buffer = new ArrayBuffer(1 << 16);
+  const allocations = [];
+  let next = 16;
+  let calls = 0;
+  const exports = {
+    memory: { buffer },
+    vanity_alloc(size) {
+      const at = next;
+      allocations.push({ at, size });
+      next += size + 8;
+      return at;
+    },
+    vanity_grind(_mode, _keyPtr, _keyLen, _saltPtr, _saltLen, _pathPtr, _pathLen, _slot, _prefixPtr, _prefixLen, _passLen, _cursor, chunk, outPtr) {
+      calls += 1;
+      if (calls === 2) throw new Error("grind failed");
+      const header = new DataView(buffer, outPtr, 12);
+      header.setBigUint64(0, BigInt(chunk), true); // a full chunk: keep looping
+      header.setUint32(8, 0, true); // no records
+      return 0;
+    },
+  };
+  const context = vm.createContext({
+    TextEncoder, TextDecoder, setTimeout, clearTimeout,
+    self: {},
+    postMessage: (message) => posted.push(message),
+    WebAssembly: { instantiate: () => Promise.resolve({ instance: { exports } }) },
+  });
+  vm.runInContext(VANITY_WORKER_SOURCE, context);
+  context.self.onmessage({ data: { type: "init", wasm: new ArrayBuffer(0) } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const message = vm.runInContext(
+    `({ type: "grind", mode: 0, key: new Uint8Array([1, 2, 3]), salt: new Uint8Array([4, 5]), path: [0], count: 64, start: 0, prefix: "bc1q", passLen: 1, script: 0 })`,
+    context,
+  );
+  context.self.onmessage({ data: message });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const error = posted.find((entry) => entry.type === "error");
+  assert.equal(error?.message, "grind failed", "the deferred failure was not reported");
+  assert.equal(calls, 2, "the second chunk did not run");
+  const [, salt, key] = allocations;
+  const bytes = new Uint8Array(buffer);
+  assert.ok(bytes.slice(salt.at, salt.at + salt.size).every((byte) => byte === 0), "the starting passphrase was left in the worker heap");
+  assert.ok(bytes.slice(key.at, key.at + key.size).every((byte) => byte === 0), "the mnemonic/node bytes were left in the worker heap");
 });

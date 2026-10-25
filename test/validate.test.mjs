@@ -207,11 +207,16 @@ test("the release build attests the wallet artifact and ships a checksum manifes
   assert.match(build, wasmSums, "build must hash exactly the three WASM modules into WASM-SHA256SUMS.txt");
   assert.match(build, /name: entropylab-sha256sums\n\s+path: \|\n\s+SHA256SUMS\.txt\n\s+WASM-SHA256SUMS\.txt\n\s+CID\.txt\n/, "build must upload both manifests");
   assert.match(build, /node scripts\/cid\.mjs entropylab\.html > CID\.txt/, "build must generate CID.txt from the same HTML");
-  assert.match(build, /actions\/attest-build-provenance@[0-9a-f]{40}/, "build must attest entropylab.html");
-  assert.match(build, /subject-path: entropylab\.html/, "the attestation subject is the wallet HTML");
-  assert.match(build, /attestations: write/, "attestation requires the attestations permission");
+  // Attestation is a separate push-only job so a pull request never runs
+  // PR-controlled build code with id-token/attestations write permissions.
+  const attest = workflow.match(/^  attest:\n(?:.|\n)*?(?=^  [a-z-]+:)/m)?.[0] ?? "";
+  assert.match(attest, /actions\/attest-build-provenance@[0-9a-f]{40}/, "the attest job must attest entropylab.html");
+  assert.match(attest, /subject-path: candidate\/entropylab\.html/, "the attestation subject is the tested candidate HTML");
+  assert.match(attest, /attestations: write/, "attestation requires the attestations permission");
+  assert.match(attest, /id-token: write/, "attestation requires the OIDC permission");
+  assert.doesNotMatch(build, /id-token: write|attestations: write/, "the PR build must not hold attestation permissions");
   // Only merges to the default branch produce release attestations.
-  assert.match(build, /if: github\.ref == 'refs\/heads\/rock' && github\.event_name == 'push'\n\s*uses: actions\/attest-build-provenance/);
+  assert.match(attest, /if: github\.ref == 'refs\/heads\/rock' && github\.event_name == 'push'/);
   const artifact = workflow.match(/^  artifact:\n(?:.|\n)*?(?=^  [a-z-]+:)/m)?.[0] ?? "";
   assert.match(artifact, /run: sha256sum entropylab\.html > SHA256SUMS\.txt\n/, "artifact must hash only the HTML into SHA256SUMS.txt");
   assert.match(artifact, wasmSums, "artifact must hash exactly the three WASM modules into WASM-SHA256SUMS.txt");
@@ -808,7 +813,9 @@ test("the browser-suite crypto bridge is gated out of the release build", () => 
   // refuse to write a hooks build over the release artifact.
   assert.match(read("src/js/app.js"), /if \(__ENTROPYLAB_TEST_HOOKS__ && globalThis\.__entropyLabTest\) globalThis\.__entropyLabCrypto = /);
   const build = read("scripts/build.mjs");
-  assert.match(build, /define: \{ __ENTROPYLAB_TEST_HOOKS__: testHooks \? "true" : "false" \}/);
+  // The define object may carry other build-time flags (the preview flag);
+  // the test-hooks entry itself must still default off.
+  assert.match(build, /define: \{\s*__ENTROPYLAB_TEST_HOOKS__: testHooks \? "true" : "false"[,\s]/);
   assert.match(build, /--test-hooks requires --out outside the repository root/);
 });
 
