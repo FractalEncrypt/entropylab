@@ -13,10 +13,15 @@ export function applyPreviewBlocks(html, preview) {
   let inside = false;
   for (const line of html.split("\n")) {
     const marker = line.trim();
-    // A marker sharing its line with markup would pass through as text and
-    // leak the block into a release build: refuse it instead.
+    // A marker sharing its line with markup, or any near-miss spelling
+    // (<!--preview-->, <!-- Preview -->, <!-- preview: name -->), would pass
+    // through as text and leak the block into a release build: anything that
+    // looks like a preview marker must be exactly one, alone on its line.
     if ((line.includes(OPEN) && marker !== OPEN) || (line.includes(CLOSE) && marker !== CLOSE)) {
       throw new Error("preview markers must each stand alone on their own line");
+    }
+    if (/<!--\s*\/?\s*preview\b/i.test(line) && marker !== OPEN && marker !== CLOSE) {
+      throw new Error(`unrecognized preview marker: write exactly "${OPEN}" or "${CLOSE}" on its own line`);
     }
     if (marker === OPEN) {
       if (inside) throw new Error("preview blocks are unbalanced");

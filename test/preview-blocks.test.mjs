@@ -88,3 +88,13 @@ test("the esbuild plugin strips preview blocks from a bundled .html module", asy
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Red-team on a1788dc (P1/P2): a near-miss spelling must fail the build, not
+// pass through as content and ship the block.
+test("near-miss marker spellings throw", () => {
+  for (const marker of ["<!--preview-->", "<!-- Preview -->", "<!-- PREVIEW -->", "<!-- preview: lightning -->", "<!--/preview-->", "<!-- / preview -->", "<!-- preview -->x"]) {
+    assert.throws(() => applyPreviewBlocks(`<p>a</p>\n${marker}\n<p>b</p>\n`, false), /preview marker/, marker);
+  }
+  // Ordinary comments and the word "preview" in text are untouched.
+  assert.equal(applyPreviewBlocks("<!-- a note -->\n<p>preview of a PSBT</p>\n", false), "<!-- a note -->\n<p>preview of a PSBT</p>\n");
+});
