@@ -226,7 +226,10 @@ export function checkDescriptorKeyReuse(descriptor, { indexes = 20, network = "m
   if (lengths.size > 1) throw new Error("multipath-length: every multipath step must have the same number of values");
   const branches = lengths.size ? [...lengths][0] : 1;
   if (branches > MAX_MULTIPATH_VALUES) throw new Error(`limit: at most ${MAX_MULTIPATH_VALUES} multipath values`);
-  if (branches * keys.length * indexes > MAX_DERIVATIONS) throw new Error(`limit: at most ${MAX_DERIVATIONS} derivations`);
+  // Every child derivation counts: the fixed steps walked once per (branch,
+  // key) to reach the branch node, plus one per index below it.
+  const derivations = keys.reduce((sum, key) => sum + branches * (key.steps.length + (key.multipath ? 1 : 0) + indexes), 0);
+  if (derivations > MAX_DERIVATIONS) throw new Error(`limit: at most ${MAX_DERIVATIONS} derivations`);
   const roots = keys.map((key) => {
     const rewritten = rewriteExtendedKey(key.extended);
     try {

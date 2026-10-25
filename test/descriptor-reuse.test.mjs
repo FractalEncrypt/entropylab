@@ -188,3 +188,12 @@ test("reported pubkeys match HDKey derivation", () => {
     assert.equal(collision.second.path, `xpub…/0/${collision.second.index}`);
   }
 });
+
+// Red-team on 94a96ec (DR-3): the budget counts the fixed steps walked to
+// each branch node, not only the indexes below it.
+test("the derivation budget includes fixed path steps", () => {
+  const steps = Array.from({ length: 40 }, (_, i) => String(i)).join("/");
+  const keys = Array.from({ length: 20 }, () => `${X}/${steps}/*`).join(",");
+  // 20 keys x (40 steps + 990 indexes) = 20,600 > 20,000, though 20 x 990 = 19,800 alone would pass.
+  assert.throws(() => checkDescriptorKeyReuse(`wsh(multi(1,${keys}))`, { indexes: 990 }), /^Error: limit:/);
+});
