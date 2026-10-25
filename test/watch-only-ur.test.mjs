@@ -11,7 +11,9 @@ import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync } from "@scure/bip39";
 import { buildBip388PolicyText } from "../src/js/bip388-policy.js";
 import { descriptorChecksum } from "../src/js/core-importdescriptors.js";
-import { WATCH_ONLY_QR_STATIC_MAX_CHARS, hodlUrDecodeWatchOnly, watchOnlyQrPlan, hodlCborBstr, hodlUrEncodeMessage } from "../src/js/psbt-ur.js";
+import { base58check } from "@scure/base";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { WATCH_ONLY_QR_STATIC_MAX_CHARS, hodlUrDecodeWatchOnly, watchOnlyQrPlan, watchOnlyQrButtonOptions, hodlCborBstr, hodlUrEncodeMessage } from "../src/js/psbt-ur.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const app = readFileSync(join(root, "src/js/app.js"), "utf8");
@@ -112,3 +114,69 @@ for (const [length, mode] of [[1000, "static"], [1001, "ur"]]) {
     }
   });
 }
+
+// Private material other than extended keys (review 5643207552): WIF keys and
+// raw 32-byte hex keys in key positions. Expected outcome: refused on encode
+// and decode, and no QR button. Published WIFs for private key 1 (Bitcoin
+// wiki, "Wallet import format"); testnet WIFs are encoded here with
+// @scure/base, independently of psbt-ur.js.
+const one = new Uint8Array(32); one[31] = 1;
+const wif = (version, compressed) => base58check(sha256).encode(Uint8Array.from([version, ...one, ...(compressed ? [1] : [])]));
+const privateForms = [
+  ["mainnet uncompressed WIF", "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreAnchuDf"],
+  ["mainnet compressed WIF", "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn"],
+  ["review's compressed WIF", "L4rK1yDtCWekvXuE6oXD9jCYfFNV2cWRpVuPLBcCU2z8TrisoyY1"],
+  ["testnet uncompressed WIF", wif(0xef, false)],
+  ["testnet compressed WIF", wif(0xef, true)],
+  ["raw 64-hex key", "0000000000000000000000000000000000000000000000000000000000000001"],
+];
+test("the testnet WIF fixtures have the published shapes", () => {
+  assert.match(wif(0xef, false), /^9[1-9A-HJ-NP-Za-km-z]{50}$/);
+  assert.match(wif(0xef, true), /^c[1-9A-HJ-NP-Za-km-z]{51}$/);
+});
+for (const [name, key] of privateForms) {
+  test(`a ${name} is refused on encode and decode and gets no QR button`, () => {
+    const texts = [`wpkh(${key})`, `combo(${key})`, `tr(${key})`, `Name: wallet\nPolicy: wpkh(@0/**)\nKey: ${key}`];
+    texts.push(texts[0] + " ".repeat(WATCH_ONLY_QR_STATIC_MAX_CHARS));
+    for (const text of texts) {
+      assert.throws(() => watchOnlyQrPlan(text), (error) => /private key/.test(error.message) && !error.message.includes(key));
+      assert.equal(watchOnlyQrButtonOptions(text), null, `${name} offered a QR button`);
+      for (const maxBytes of [2000, 40]) {
+        const parts = hodlUrEncodeMessage("bytes", hodlCborBstr(new TextEncoder().encode(text)), { maxBytes });
+        assert.throws(() => hodlUrDecodeWatchOnly(parts.join("\n")), /private key/);
+      }
+    }
+  });
+}
+test("an extended private key gets no QR button", () => {
+  const secret = master.derive("m/48'/0'/0'/2'").privateExtendedKey;
+  assert.equal(watchOnlyQrButtonOptions(`wsh(${secret}/0/*)`), null);
+});
+
+// Public forms keep their QR: an xpub (111 base58 characters, which contain
+// WIF-length windows by chance), a compressed public key (66 hex) and BIP-341's
+// NUMS internal key, which Taproot multisig descriptors carry.
+test("public keys, the NUMS internal key and long policies keep their QR", () => {
+  const nums = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+  const xpubKey = rangedKey(0);
+  const publics = [
+    `wpkh(${xpubKey}/0/*)`,
+    "wpkh(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)",
+    `tr(${nums},sortedmulti_a(2,${rangedKey(0)}/0/*,${rangedKey(1)}/0/*))`,
+  ];
+  for (const text of publics) {
+    assert.equal(watchOnlyQrPlan(text).mode, "static");
+    assert.deepEqual(watchOnlyQrButtonOptions(text), {});
+  }
+  const policy = policyText(10);
+  assert.deepEqual(watchOnlyQrButtonOptions(policy), { animate: "watch" });
+});
+
+// One guard: the field builder asks psbt-ur.js whether to offer a QR, and keeps
+// no private-key pattern of its own that could drift from it.
+test("the watch-only QR button takes its decision from psbt-ur.js", () => {
+  const field = app.slice(app.indexOf("function hodlCopyFieldHtml("), app.indexOf("function hodlWatchOnlyDescriptorExport("));
+  assert.match(app, /watchOnlyQrButtonOptions as hodlWatchOnlyQrButtonOptions\b[^;]*from "\.\/psbt-ur\.js"/);
+  assert.match(field, /hodlWatchOnlyQrButtonOptions\(/);
+  assert.doesNotMatch(field, /prv/);
+});

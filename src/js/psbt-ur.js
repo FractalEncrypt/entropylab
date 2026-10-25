@@ -303,12 +303,40 @@ export function hodlUrDecodePsbt(raw) {
 // Watch-only descriptor and BIP-388 policy text. Same UR family as
 // crypto-psbt: ur:bytes is the untagged CBOR byte string in BCR-2020-005,
 // and a payload past one QR uses the same fixed-rate MUR parts. Not a
-// signing protocol. An extended private key is refused.
-const WATCH_ONLY_PRIVATE_KEY = /\b(?:[xyztuv]prv|[YZUV]prv)[1-9A-HJ-NP-Za-km-z]{90,}/;
+// signing protocol. Private key material is refused.
 export const WATCH_ONLY_QR_STATIC_MAX_CHARS = 1000;
 
+// Keys are whole tokens, never slices of longer ones: a 111-character xpub
+// contains WIF-length windows starting with 5/K/L/9/c by chance. Same rules
+// as verification-package.js's assertPublicOnly. A raw 32-byte hex key reads
+// the same whether it is an x-only public key or a private key, so the only
+// one allowed is BIP-341's NUMS point, the Taproot multisig internal key.
+const BASE58_RUN = /[1-9A-HJ-NP-Za-km-z]+/g;
+const EXTENDED_PRIVATE_PREFIX = /^(?:[xyztuv]prv|[YZUV]prv)/;
+const WIF_PREFIXES = "5KL9c";
+const HEX_KEY = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])/g;
+const NUMS_POINT = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+function watchOnlyTextHasPrivateKey(value) {
+  for (const [token] of value.matchAll(BASE58_RUN)) {
+    if (token.length >= 94 && EXTENDED_PRIVATE_PREFIX.test(token)) return true;
+    if ((token.length === 51 || token.length === 52) && WIF_PREFIXES.includes(token[0])) return true;
+  }
+  for (const [hex] of value.matchAll(HEX_KEY)) if (hex.toLowerCase() !== NUMS_POINT) return true;
+  return false;
+}
+
+// The refusal is fixed text and never repeats the material.
 function assertWatchOnlyText(value) {
-  if (WATCH_ONLY_PRIVATE_KEY.test(value)) throw new Error("Watch-only QR refused an extended private key.");
+  if (watchOnlyTextHasPrivateKey(value)) throw new Error("Watch-only QR refused private key material.");
+}
+
+// The one decision the field builder uses: null means no QR button, {} a
+// single text QR, and { animate: "watch" } the shared animated UR overlay.
+export function watchOnlyQrButtonOptions(text) {
+  const value = String(text ?? "");
+  if (watchOnlyTextHasPrivateKey(value)) return null;
+  return value.length > WATCH_ONLY_QR_STATIC_MAX_CHARS ? { animate: "watch" } : {};
 }
 
 export function watchOnlyQrPlan(text) {

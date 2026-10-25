@@ -53,7 +53,7 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
-import { WATCH_ONLY_QR_STATIC_MAX_CHARS as hodlWatchOnlyQrStaticMax, watchOnlyQrPlan as hodlWatchOnlyQrPlan } from "./psbt-ur.js";
+import { watchOnlyQrButtonOptions as hodlWatchOnlyQrButtonOptions, watchOnlyQrPlan as hodlWatchOnlyQrPlan } from "./psbt-ur.js";
 import { initCoreWallet } from "./core-wallet-ui.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
 import { psbtSignerAuditVerification as hodlPsbtSignerAuditVerify } from "./psbt-signer-audit-verify.js";
@@ -1159,11 +1159,11 @@ function hodlCopyFieldHtml(labelText, value, labelClass = "label", options = {})
   let qr = "";
   // Watch-only descriptors and BIP-388 policies: a short value keeps today's
   // single text QR. Past one QR, the shared overlay animates the same UR
-  // family crypto-psbt uses. An extended private key gets no code.
+  // family crypto-psbt uses. Private key material gets no code; psbt-ur.js
+  // makes that decision for the field and the encoder alike.
   if (shown && options.watchOnly) {
-    if (!/\b(?:[xyztuv]prv|[YZUV]prv)[1-9A-HJ-NP-Za-km-z]{90,}/.test(String(value))) {
-      qr = hodlAddressQrButton(value, labelText, String(value).length > hodlWatchOnlyQrStaticMax ? { animate: "watch" } : {});
-    }
+    let qrOptions = hodlWatchOnlyQrButtonOptions(value);
+    if (qrOptions) qr = hodlAddressQrButton(value, labelText, qrOptions);
   } else if (shown && String(value).length <= 1e3) qr = hodlAddressQrButton(value, labelText);
   return hodlPublicFieldMarkup(hodlEscapeHtml(labelText), value, { copyIcon: hodlClipboardIconMarkup, qrHtml: qr, labelClass });
 }
