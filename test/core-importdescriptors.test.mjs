@@ -605,7 +605,8 @@ test("Copy Core deriveaddresses copies the lines and flashes Copied; a refusal c
   ui.hodlWalletResult = { kind: "hd", accounts: [account] };
   ui.hodlCopyCoreDeriveAddresses("calc");
   await Promise.resolve();
-  assert.deepEqual(copied, [ui.hodlCoreDeriveAddressesText("calc")]);
+  // Expected text from the fixture, not from the code under test.
+  assert.deepEqual(copied, [account.addressBranches.map(entry => `deriveaddresses "${entry.publicDescriptor}" "[0,${entry.branch + 2}]"\n`).join("")]);
   assert.equal(button.textContent, "Copied");
   account.addressBranches[0].publicDescriptor = "invalid";
   account.receiveDescriptor = "invalid";
