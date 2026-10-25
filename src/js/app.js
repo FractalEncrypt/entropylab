@@ -19659,7 +19659,7 @@ function hodlInitWorkspace() {
   hodlInitBip85();
   hodlInitVanity();
   hodlInitSp();
-  hodlInitLn({ journalLog: hodlJournalLog, copyIcon: hodlClipboardIconMarkup, qrSvg: hodlQrSvg });
+  hodlInitLn({ journalLog: hodlJournalLog, copyIcon: hodlClipboardIconMarkup, qrSvg: hodlQrSvg, pageNetwork: () => hodlInspectorNetwork() });
 }
 var hodlKeyClearSyncQueued = false, hodlMsigClearSyncQueued = false, hodlDeriveSyncQueued = false;
 function hodlQueueKeyClearButtonSync() {

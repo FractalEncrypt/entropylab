@@ -307,7 +307,23 @@ const lnInvChainName = (hash) => {
   return hash;
 };
 
-const lnInvPageNetwork = () => (document.getElementById("ln-network")?.value === "testnet" ? "testnet" : "mainnet");
+// The page's network, injected by app.js (hodlInspectorNetwork). The LND
+// coin-type select is a derivation setting, not the page network: reading it
+// here made a signet or regtest page look like mainnet, and a signet or
+// regtest invoice look like a mismatch.
+let hodlLnInvPageNetwork = () => "mainnet";
+
+const LN_INV_NETWORKS = ["mainnet", "testnet", "signet", "regtest"];
+
+const lnInvPageNetwork = () => {
+  let value;
+  try {
+    value = hodlLnInvPageNetwork();
+  } catch {
+    return "mainnet";
+  }
+  return LN_INV_NETWORKS.includes(value) ? value : "mainnet";
+};
 
 const lnInvFormatMsat = (msat) => {
   const value = BigInt(msat);
@@ -325,13 +341,23 @@ const lnInvRow = (label, valueHtml) => `<p class="psbt-kv"><span class="label">$
 
 const lnInvCopy = (id, value) => `<button type="button" class="btn" id="${id}" data-copy="${escapeHtml(value)}" aria-label="${escapeHtml(t("Copy"))}">${hodlLnCopyIcon()}</button>`;
 
-function hodlLnInvWipeMem() {
+// Drops the decoded result and its rendering. The pasted text belongs to the
+// caller: a decode keeps it, Clear and the session wipe empty it too.
+function hodlLnInvReset() {
   hodlLnInvLast = null;
   hodlLnInvReveal = false;
   const out = document.getElementById("ln-inv-out");
   if (out) out.innerHTML = "";
   const error = document.getElementById("ln-inv-error");
   if (error) error.textContent = "";
+}
+
+// Clear, End Session and pagehide all land here: the pasted invoice is a
+// payment request and must not outlive the session.
+function hodlLnInvWipeMem() {
+  hodlLnInvReset();
+  const input = document.getElementById("ln-inv-input");
+  if (input) input.value = "";
 }
 
 function hodlLnInvRender() {
@@ -436,7 +462,7 @@ function hodlRunLnInv() {
   const error = document.getElementById("ln-inv-error");
   const input = document.getElementById("ln-inv-input");
   const text = String(input?.value || "").trim();
-  hodlLnInvWipeMem();
+  hodlLnInvReset();
   if (!text) {
     if (error) error.textContent = t("Paste an invoice or offer first.");
     return;
@@ -458,7 +484,7 @@ function hodlRunLnInv() {
     hodlLnInvLast = { ...result, text };
     hodlLnInvRender();
   } catch (exception) {
-    hodlLnInvWipeMem();
+    hodlLnInvReset();
     if (error) {
       error.textContent = exception && typeof exception.key === "string"
         ? t(exception.key, exception.vars)
@@ -470,20 +496,15 @@ function hodlRunLnInv() {
 // Wires the Lightning card. `journalLog` is the app's hodlJournalLog; the
 // module takes it as an option instead of importing app.js (same shape as
 // initPsbtEditor's options object).
-export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "" } = {}) {
+export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", pageNetwork = () => "mainnet" } = {}) {
   if (typeof journalLog === "function") hodlLnJournalLog = journalLog;
   hodlLnCopyIcon = copyIcon;
   hodlLnInvQrSvg = typeof qrSvg === "function" ? qrSvg : () => "";
-  const invCard = document.getElementById("ln-inv-card");
-  if (invCard) invCard.hidden = false;
+  hodlLnInvPageNetwork = typeof pageNetwork === "function" ? pageNetwork : () => "mainnet";
   const decode = document.getElementById("ln-inv-decode");
   if (decode) decode.onclick = hodlRunLnInv;
   const clear = document.getElementById("ln-inv-clear");
-  if (clear) clear.onclick = () => {
-    hodlLnInvWipeMem();
-    const input = document.getElementById("ln-inv-input");
-    if (input) input.value = "";
-  };
+  if (clear) clear.onclick = () => hodlLnInvWipeMem();
   const go = document.getElementById("ln-go");
   if (!go) return;
   go.onclick = hodlRunLn;

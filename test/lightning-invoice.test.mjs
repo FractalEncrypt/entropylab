@@ -64,19 +64,28 @@ const ESCAPE_OFFER = encode("lno", [
   [22, PUBKEY],
 ]);
 
+// BOLT12 offer_chains are the genesis block hash in internal byte order
+// (reversed from the displayed hash), per BOLT12 12-offer-encoding.md.
+// Signet: 00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6
+// Regtest: 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206
+const SIGNET_CHAIN = "f61eee3b63a380a477a063af32b2bbc97c9ff9f01f2c4225e973988108000000";
+const REGTEST_CHAIN = "06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f";
+const OFFER_SIGNET = encode("lno", [[2, SIGNET_CHAIN], [10, hex.encode(new TextEncoder().encode("signet offer"))], [22, PUBKEY]]);
+const OFFER_REGTEST = encode("lno", [[2, REGTEST_CHAIN], [10, hex.encode(new TextEncoder().encode("regtest offer"))], [22, PUBKEY]]);
+
 // The invoice card wired over a mini DOM. `#ln-go` is absent, so the node
 // identity card is not initialized; the invoice card must still wire.
 function invPage(network = "mainnet", qrSvg = () => "") {
   const page = new MiniDocument();
   globalThis.document = page;
-  page.body.innerHTML = '<select id="ln-network"><option value="mainnet">Mainnet</option><option value="testnet">Testnet</option></select>'
-    + '<textarea id="ln-inv-input"></textarea>'
+  page.body.innerHTML = '<textarea id="ln-inv-input"></textarea>'
     + '<button id="ln-inv-decode" type="button"></button>'
     + '<button id="ln-inv-clear" type="button"></button>'
     + '<p id="ln-inv-error" class="err" role="alert"></p>'
     + '<div id="ln-inv-out" aria-live="polite"></div>';
-  page.getElementById("ln-network").value = network;
-  hodlInitLn({ journalLog() {}, copyIcon: () => "", qrSvg });
+  // The page network is the app's (hodlInspectorNetwork), not the LND
+  // coin-type select: inject it the way app.js does.
+  hodlInitLn({ journalLog() {}, copyIcon: () => "", qrSvg, pageNetwork: () => network });
   hodlLnWipeMem();
   return page;
 }
@@ -95,7 +104,10 @@ test("the invoice card ships in the shell after #ln-card, with its controls", ()
     assert.ok(at > last, `${id} is out of order`);
     last = at;
   }
-  assert.match(shell, /<section[^>]*id="ln-inv-card"[^>]*class="card no-print tool-card"[^>]*role="tabpanel"[^>]*hidden/);
+  const cardTag = shell.match(/<section[^>]*id="ln-inv-card"[^>]*>/)?.[0] || "";
+  assert.match(cardTag, /class="card no-print tool-card"/, "the card keeps its classes");
+  assert.ok(!/role="tabpanel"/.test(cardTag), "the card must not be a nested tabpanel");
+  assert.ok(!/\shidden[\s>]/.test(cardTag), "the card must not carry hidden");
   assert.match(shell, /id="ln-inv-error"[^>]*class="err"[^>]*role="alert"/);
   assert.match(shell, /id="ln-inv-out"[^>]*aria-live="polite"/);
 });
@@ -193,6 +205,80 @@ test("a mainnet BOLT11 invoice on a testnet page shows the .warn banner and stil
   }
 });
 
+test("a matching-chain BOLT11 invoice shows no warning", () => {
+  const page = invPage("mainnet");
+  try {
+    decode(page, COFFEE);
+    const out = page.getElementById("ln-inv-out");
+    assert.equal(page.getElementById("ln-inv-error").textContent, "");
+    assert.ok(!out.innerHTML.includes('class="warn"'), "a mainnet invoice on a mainnet page must not warn");
+    assert.ok(out.textContent.includes(COFFEE_PAYMENT_HASH), "still decoded");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("a matching-chain BOLT12 offer shows no warning", () => {
+  const page = invPage("testnet");
+  try {
+    decode(page, OFFER_TESTNET);
+    const out = page.getElementById("ln-inv-out");
+    assert.equal(page.getElementById("ln-inv-error").textContent, "");
+    // The published-key honesty line is also a .warn; the chain warning is
+    // the one that names the page network.
+    assert.ok(!out.textContent.includes("page network"), "a testnet offer on a testnet page must not warn");
+    assert.ok(out.textContent.includes("Offer"), "still decoded");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("signet and regtest are not treated as mainnet", () => {
+  const signet = invPage("signet");
+  try {
+    decode(signet, OFFER_SIGNET);
+    assert.equal(signet.getElementById("ln-inv-error").textContent, "");
+    assert.ok(!signet.getElementById("ln-inv-out").textContent.includes("page network"), "a signet offer on a signet page must not warn");
+  } finally {
+    delete globalThis.document;
+  }
+  const mainnet = invPage("mainnet");
+  try {
+    decode(mainnet, OFFER_SIGNET);
+    const out = mainnet.getElementById("ln-inv-out");
+    assert.ok(out.textContent.includes("page network"), "a signet offer on a mainnet page must warn");
+    assert.ok(out.textContent.includes("signet"), "names the offer's chain");
+    assert.ok(out.textContent.includes("mainnet"), "names the page network");
+  } finally {
+    delete globalThis.document;
+  }
+  const regtest = invPage("regtest");
+  try {
+    decode(regtest, OFFER_REGTEST);
+    assert.equal(regtest.getElementById("ln-inv-error").textContent, "");
+    assert.ok(!regtest.getElementById("ln-inv-out").textContent.includes("page network"), "a regtest offer on a regtest page must not warn");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("without an injected page network the card compares against mainnet", () => {
+  const page = new MiniDocument();
+  globalThis.document = page;
+  page.body.innerHTML = '<textarea id="ln-inv-input"></textarea>'
+    + '<button id="ln-inv-decode" type="button"></button>'
+    + '<button id="ln-inv-clear" type="button"></button>'
+    + '<p id="ln-inv-error" class="err" role="alert"></p>'
+    + '<div id="ln-inv-out" aria-live="polite"></div>';
+  hodlInitLn({ journalLog() {}, copyIcon: () => "" });
+  try {
+    decode(page, COFFEE);
+    assert.ok(!page.getElementById("ln-inv-out").innerHTML.includes('class="warn"'), "a mainnet invoice must not warn on the default network");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
 test("an attacker-controlled description is escaped as text, not markup", () => {
   const page = invPage();
   try {
@@ -239,12 +325,24 @@ test("Clear empties the input, the output, the error, and the reveal state", () 
   }
 });
 
-test("hodlLnWipeMem clears the invoice card", () => {
+test("decoding keeps the pasted invoice in the field", () => {
   const page = invPage();
   try {
     decode(page, COFFEE);
+    assert.equal(page.getElementById("ln-inv-input").value, COFFEE, "the decode must not empty the field");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("hodlLnWipeMem clears the pasted invoice, the output, and the error", () => {
+  const page = invPage();
+  try {
+    decode(page, COFFEE);
+    assert.equal(page.getElementById("ln-inv-input").value, COFFEE, "the pasted invoice is in the field");
     assert.ok(page.getElementById("ln-inv-out").innerHTML.length > 0);
     hodlLnWipeMem();
+    assert.equal(page.getElementById("ln-inv-input").value, "", "the pasted invoice is gone");
     assert.equal(page.getElementById("ln-inv-out").innerHTML, "");
     assert.equal(page.getElementById("ln-inv-error").textContent, "");
   } finally {
@@ -267,6 +365,7 @@ test("the QR block renders the user's own pasted string", () => {
   }
 });
 
-test("app.js injects the QR renderer into hodlInitLn", () => {
+test("app.js injects the QR renderer and the page network into hodlInitLn", () => {
   assert.match(appSource, /hodlInitLn\(\{[^}]*qrSvg: hodlQrSvg/);
+  assert.match(appSource, /hodlInitLn\(\{[^}]*pageNetwork: \(\) => hodlInspectorNetwork\(\)/);
 });
