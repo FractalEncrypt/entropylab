@@ -53,7 +53,7 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
-import { watchOnlyQrButtonOptions as hodlWatchOnlyQrButtonOptions, watchOnlyQrPlan as hodlWatchOnlyQrPlan } from "./psbt-ur.js";
+import { watchOnlyQrFrames as hodlWatchOnlyQrFrames } from "./psbt-ur.js";
 import { initCoreWallet } from "./core-wallet-ui.js";
 import { initDescriptorReuseCheck } from "./descriptor-reuse-ui.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
@@ -80,7 +80,7 @@ import {
   buildBip388PolicyText,
 } from "./bip388-policy.js";
 import { initQrReferences } from "./qr-references.js";
-import { addressQrButtonHtml as hodlAddressQrButton, initAddressQr as hodlInitAddressQr } from "./address-qr.js";
+import { addressQrButtonHtml as hodlAddressQrButton, initAddressQr as hodlInitAddressQr, watchOnlyQrButtonHtml as hodlWatchOnlyQrButton } from "./address-qr.js";
 import { initLowEntropyConfirm } from "./low-entropy-confirm.js";
 import { initFingerprintCollisionConfirm } from "./fingerprint-collision-confirm.js";
 import { initJournalClearConfirm } from "./journal-clear-confirm.js";
@@ -1104,14 +1104,7 @@ function hodlWatchOnlyMultipathDescriptor(receiveDescriptor, branches = [0, 1]) 
 // same UR family (ur:bytes, fixed-rate parts). An address or an xpub has no
 // frames and stays one static code.
 function hodlPsbtQrFrames(value, kind) {
-  if (kind === "watch") {
-    try {
-      let plan = hodlWatchOnlyQrPlan(value);
-      return plan.mode === "ur" ? plan.parts : null;
-    } catch {
-      return null;
-    }
-  }
+  if (kind === "watch") return hodlWatchOnlyQrFrames(value);
   try {
     let plan = hodlPsbtQrPlan(hodlPsbtBytesFromText(value));
     return plan.mode === "ur" ? plan.parts : null;
@@ -1163,10 +1156,7 @@ function hodlCopyFieldHtml(labelText, value, labelClass = "label", options = {})
   // single text QR. Past one QR, the shared overlay animates the same UR
   // family crypto-psbt uses. Private key material gets no code; psbt-ur.js
   // makes that decision for the field and the encoder alike.
-  if (shown && options.watchOnly) {
-    let qrOptions = hodlWatchOnlyQrButtonOptions(value);
-    if (qrOptions) qr = hodlAddressQrButton(value, labelText, qrOptions);
-  } else if (shown && String(value).length <= 1e3) qr = hodlAddressQrButton(value, labelText);
+  if (shown && options.watchOnly) qr = hodlWatchOnlyQrButton(value, labelText); else if (shown && String(value).length <= 1e3) qr = hodlAddressQrButton(value, labelText);
   return hodlPublicFieldMarkup(hodlEscapeHtml(labelText), value, { copyIcon: hodlClipboardIconMarkup, qrHtml: qr, labelClass });
 }
 function hodlWatchOnlyDescriptorExport(receiveDescriptor, changeDescriptor, addressBranches = null, { labelClass = "label", collapsible = true } = {}) {

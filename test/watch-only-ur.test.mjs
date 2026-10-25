@@ -70,9 +70,9 @@ test("an extended private key is refused and not encoded", () => {
 test("the watch-only QR button uses the shared animated overlay, not a new tab", () => {
   assert.match(app, /kind === "watch"/);
   assert.match(app, /watchOnly:\s*true/);
-  // The label must reach the field through the translation call site; the
-  // copy itself is content, not contract (AGENTS.md).
-  assert.match(app, /hodlCopyFieldHtml\(hodlTText\("BIP 388 wallet policy"\)/);
+  // The BIP-388 policy field is built as a watch-only field (wiring, not copy).
+  const policyField = app.slice(app.indexOf("function hodlMsigBip388Field("), app.indexOf("function hodlMsigBip388PolicyText("));
+  assert.match(policyField, /hodlCopyFieldHtml\([^;]*\{ watchOnly: true \}\)/);
   assert.doesNotMatch(app, /workspace.*watch-only-ur|data-tab="ur"/);
 });
 
@@ -174,9 +174,12 @@ test("public keys, the NUMS internal key and long policies keep their QR", () =>
 
 // One guard: the field builder asks psbt-ur.js whether to offer a QR, and keeps
 // no private-key pattern of its own that could drift from it.
-test("the watch-only QR button takes its decision from psbt-ur.js", () => {
+test("the watch-only QR button and frames come from the shared modules", () => {
   const field = app.slice(app.indexOf("function hodlCopyFieldHtml("), app.indexOf("function hodlWatchOnlyDescriptorExport("));
-  assert.match(app, /watchOnlyQrButtonOptions as hodlWatchOnlyQrButtonOptions\b[^;]*from "\.\/psbt-ur\.js"/);
-  assert.match(field, /hodlWatchOnlyQrButtonOptions\(/);
+  const frames = app.slice(app.indexOf("function hodlPsbtQrFrames("), app.indexOf("function hodlCopyFieldHtml("));
+  assert.match(app, /watchOnlyQrButtonHtml as hodlWatchOnlyQrButton\b[^;]*from "\.\/address-qr\.js"/);
+  assert.match(app, /watchOnlyQrFrames as hodlWatchOnlyQrFrames\b[^;]*from "\.\/psbt-ur\.js"/);
+  assert.match(field, /hodlWatchOnlyQrButton\(value, labelText\)/);
+  assert.match(frames, /kind === "watch"\) return hodlWatchOnlyQrFrames\(value\)/);
   assert.doesNotMatch(field, /prv/);
 });

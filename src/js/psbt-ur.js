@@ -349,6 +349,18 @@ export function watchOnlyQrPlan(text) {
   return { mode: "ur", parts };
 }
 
+// The overlay's frames for kind "watch": UR parts when the text needs more
+// than one QR, otherwise null (one static QR). Refused text yields null too,
+// so no code is drawn for it.
+export function watchOnlyQrFrames(text) {
+  try {
+    const plan = watchOnlyQrPlan(text);
+    return plan.mode === "ur" ? plan.parts : null;
+  } catch {
+    return null;
+  }
+}
+
 export function hodlUrDecodeWatchOnly(raw) {
   const assembled = hodlUrReassemble(raw, "Paste a UR bytes payload.", (type) => {
     if (type !== "bytes") throw new Error("This UR is " + type + ", not bytes.");
