@@ -450,7 +450,7 @@ test("a receive-only wallet still exports one external descriptor", () => {
 });
 
 test("deriveaddresses commands cover receive and change with the displayed window", () => {
-  const commands = buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, changeDescriptor: bip84Change });
+  const commands = buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, changeDescriptor: bip84Change, displayedEnd: 19 });
   assert.equal(commands, `deriveaddresses "${bip84Receive}" "[0,19]"\nderiveaddresses "${bip84Change}" "[0,19]"\n`);
   const [jsonReceive, jsonChange] = parse(buildImportDescriptorsJson({ receiveDescriptor: bip84Receive, changeDescriptor: bip84Change }));
   assert.equal(commands.split("\n")[0], `deriveaddresses "${jsonReceive.desc}" "[0,19]"`);
@@ -494,7 +494,7 @@ test("deriveaddresses rewrites SLIP-132 zpub to xpub", () => {
   const zpub = b58checkEncode(raw);
   const body = `wpkh([${fingerprint}/84h/0h/0h]${zpub}/0/*)`;
   const descriptor = `${body}#${harnessChecksum(body)}`;
-  const commands = buildDeriveAddressesCommands({ receiveDescriptor: descriptor, decode: codec.decode, encode: codec.encode });
+  const commands = buildDeriveAddressesCommands({ receiveDescriptor: descriptor, displayedEnd: 19, decode: codec.decode, encode: codec.encode });
   assert.equal(commands, `deriveaddresses "${bip84Receive}" "[0,19]"\n`);
   assert.doesNotMatch(commands, /zpub/);
 });
@@ -515,12 +515,14 @@ test("deriveaddresses refuses mismatched receive/change keys unless branchHarden
   const otherBody = `wpkh([${fingerprint}/84h/0h/1h]${other.publicExtendedKey}/1/*)`;
   const otherChange = `${otherBody}#${harnessChecksum(otherBody)}`;
   assert.throws(() => buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, changeDescriptor: otherChange }), /different keys/);
-  const commands = buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, changeDescriptor: otherChange, branchHardened: true });
+  const commands = buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, changeDescriptor: otherChange, branchHardened: true, displayedEnd: 19 });
   assert.equal(commands, `deriveaddresses "${bip84Receive}" "[0,19]"\nderiveaddresses "${otherChange}" "[0,19]"\n`);
 });
 
 test("deriveaddresses range defaults, overrides and refuses unsafe windows", () => {
-  assert.match(buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive }), /"\[0,19\]"/);
+  // No implied window: the check must cover exactly what the page shows.
+  assert.throws(() => buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive }), /displayedEnd/);
+  assert.throws(() => buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, rangeEnd: 1019 }), /displayedEnd/);
   assert.match(buildDeriveAddressesCommands({ receiveDescriptor: bip84Receive, displayedEnd: 42 }), /"\[0,42\]"/);
   const units = [
     { descriptor: bip84Receive, internal: false, active: true, displayedEnd: 3 },
@@ -551,6 +553,7 @@ test("deriveaddresses refuses descriptors that would break the command line", ()
     `wpkh(${bip84.publicExtendedKey}/0/*)\``,
     `wpkh(${bip84.publicExtendedKey}/0/*)$`,
     `wpkh(${bip84.publicExtendedKey}/0/*)\\`,
+    `wpkh(${bip84.publicExtendedKey}/0/*)!`,
   ]) {
     assert.throws(() => buildDeriveAddressesCommands({ receiveDescriptor: bad }), /double quote or newline|shell metacharacter/);
   }

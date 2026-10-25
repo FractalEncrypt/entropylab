@@ -157,7 +157,9 @@ function resolveRangeEnd(displayedEnd, lookahead = CORE_IMPORT_RANGE_END) {
 // Refuse a range whose inclusive span reaches 1,000,000, as the
 // importdescriptors export does for its lookahead-extended range.
 function resolveDeriveRangeEnd(displayedEnd) {
-  if (displayedEnd === undefined) return 19;
+  // No implied window: a silent default could check fewer addresses than the
+  // page shows, and the user would read a match as "all verified".
+  if (displayedEnd === undefined) throw new Error("deriveaddresses needs the deepest displayed address index (displayedEnd), so the check covers exactly the window the page shows.");
   if (!Number.isSafeInteger(displayedEnd) || displayedEnd < 0 || displayedEnd > CORE_IMPORT_MAX_INDEX) {
     throw new Error("Address range end must be a whole number from 0 to 2,147,483,647.");
   }
@@ -172,7 +174,9 @@ function assertCommandSafe(descriptor, label) {
   if (/["\r\n]/.test(text)) {
     throw new Error(`${label} contains a double quote or newline and cannot be pasted into a Bitcoin Core command.`);
   }
-  if (/[\\$`]/.test(text)) {
+  // Inside double quotes a shell still expands \ $ ` (and ! in interactive
+  // bash history expansion); canonical descriptors never contain them.
+  if (/[\\$`!]/.test(text)) {
     throw new Error(`${label} contains a shell metacharacter and cannot be pasted into a Bitcoin Core command.`);
   }
 }
