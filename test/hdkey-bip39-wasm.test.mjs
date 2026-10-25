@@ -196,6 +196,36 @@ test("BIP39 seed matches the published vector (TREZOR passphrase)", () => {
   );
 });
 
+// BIP39 hashes NFKD("mnemonic" + passphrase) as UTF-8. A lone surrogate has
+// no UTF-8 encoding; TextEncoder substitutes U+FFFD, so accepting it would
+// derive the seed of a different passphrase. The byte path must likewise
+// refuse malformed UTF-8 instead of decoding it with replacement characters.
+test("BIP39 refuses a passphrase that is not well-formed Unicode or valid UTF-8", () => {
+  const phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+  for (const passphrase of ["\uD800", "a\uDC00b", "\uD800\uD800", new String("\uD800")]) {
+    assert.throws(() => mnemonicToSeedSync(phrase, passphrase), /Invalid passphrase/, JSON.stringify(passphrase));
+  }
+  // A well-formed surrogate pair is a valid passphrase and derives what
+  // @scure/bip39 derives for it.
+  assert.deepEqual(mnemonicToSeedSync(phrase, "🔑"), scureBip39.mnemonicToSeedSync(phrase, "🔑"));
+  // null is a caller bug: must throw, not silently derive the empty-passphrase wallet.
+  assert.throws(() => mnemonicToSeedSync(phrase, null), /Invalid passphrase/);
+  // Valid non-ASCII UTF-8 bytes derive what the same text derives in @scure.
+  assert.deepEqual(mnemonicToSeedSync(phrase, new TextEncoder().encode("päss phrase")), scureBip39.mnemonicToSeedSync(phrase, "päss phrase"));
+  // The coercion matches "mnemonic" + passphrase: a Symbol still throws.
+  assert.throws(() => mnemonicToSeedSync(phrase, Symbol("x")), TypeError);
+  // Malformed UTF-8 bytes: an encoded surrogate, a truncated sequence, and a
+  // stray continuation byte. The vault refuses these at intake; the direct
+  // byte path must too.
+  for (const bytes of [
+    Uint8Array.of(0xed, 0xa0, 0x80),
+    Uint8Array.of(0xc3),
+    Uint8Array.of(0x80),
+  ]) {
+    assert.throws(() => mnemonicToSeedSync(phrase, bytes), /Invalid passphrase/, bytes.toString());
+  }
+});
+
 test("BIP39 differential vs @scure/bip39 (mnemonic, entropy, seed, validate)", () => {
   for (let i = 0; i < 16; i++) {
     const entropy = new Uint8Array(16 + (i % 5) * 4).map((_, j) => (i * 77 + j * 31 + 11) & 0xff);
@@ -265,6 +295,7 @@ test("BIP39 separator matrix: acceptance matches @scure/bip39 for every word cou
     "line separator (U+2028)": "\u2028",
     "paragraph separator (U+2029)": "\u2029",
     "zero-width no-break space (U+FEFF)": "\uFEFF",
+    "next line (U+0085, outside JavaScript's \\s)": "\u0085",
     "no-break space (U+00A0, NFKD folds)": "\u00A0",
     "ideographic space (U+3000, NFKD folds)": "\u3000",
   };
@@ -299,7 +330,7 @@ test("BIP39 separator matrix: acceptance matches @scure/bip39 for every word cou
 // guard rejects every one of them before the crate sees the text.
 test("BIP39: no non-canonical separator yields a derivable seed-bearing phrase", () => {
   const words = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(" ");
-  const sneak = ["\t ", " \t", " \n", "\v ", "\f ", "\u2028 ", " \u2029"];
+  const sneak = ["\t ", " \t", " \n", "\v ", "\f ", "\u2028 ", " \u2029", "\u0085 ", " \u0085"];
   for (const sep of sneak) {
     for (let gap = 1; gap < words.length; gap++) {
       const phrase = words.slice(0, gap).join(" ") + sep + words.slice(gap).join(" ");
@@ -313,6 +344,21 @@ test("BIP39: no non-canonical separator yields a derivable seed-bearing phrase",
     assert.equal(validateMnemonic(phrase), scureBip39.validateMnemonic(phrase, scureEnglish), `${count} words`);
     assert.throws(() => mnemonicToEntropy(phrase), undefined, `${count} words`);
   }
+});
+
+// Deep sweep of cb18b09 (GLM 5.3, Kimi K3, DeepSeek V4.1): JavaScript's \S
+// matches U+0085 (NEL) while rust-bip39 splits on it, so twelve tokens with
+// three hidden NELs validated as the fifteen-word phrase, gave its entropy,
+// and hashed to a different seed.
+test("BIP39: a NEL inside a token is not a separator the guard lets through", () => {
+  const words = entropyToMnemonic(new Uint8Array(20).fill(0)).split(" ");
+  const hidden = [words.slice(0, 2), words.slice(2, 4), words.slice(4, 6)].map((pair) => pair.join("\u0085"));
+  const phrase = [...hidden, ...words.slice(6)].join(" ");
+  assert.equal(phrase.split(" ").length, 12);
+  assert.equal(scureBip39.validateMnemonic(phrase, scureEnglish), false, "scure baseline");
+  assert.equal(validateMnemonic(phrase), false);
+  assert.throws(() => mnemonicToEntropy(phrase), /Invalid mnemonic/);
+  assert.throws(() => mnemonicToSeedSync(phrase), /Invalid mnemonic/);
 });
 
 test("wordlist agreement: JS data file == rust-bip39 English list, word for word", () => {
