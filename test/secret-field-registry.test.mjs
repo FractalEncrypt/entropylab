@@ -20,6 +20,7 @@ const shell = read("src/shell.html");
 const expandable = read("src/js/expandable.js");
 const psbtEditor = read("src/js/psbt-editor.js");
 const coreWallet = read("src/js/core-wallet-ui.js");
+const lightning = read("src/js/lightning.js");
 
 // A named top-level function body in app.js, for "this id is cleared in
 // this function" probes.
@@ -158,6 +159,14 @@ const CLEARING_PATHS = [
     ids: ["psbted-file"],
     why: "the PSBT editor's file picker (reset on consume)",
     probe: () => assert.match(around(psbtEditor, `$("psbted-file")`), /file\.value = ""/, "#psbted-file must be reset on consume"),
+  },
+  {
+    ids: ["ln-hsm-file"],
+    why: "the Core Lightning hsm_secret file picker (the bytes are zeroed and the input reset on consume)",
+    probe: (id) => {
+      assert.match(lightning, /bytes\.fill\(0\)/, `#${id}: the file bytes must be zeroed`);
+      assert.match(lightning, /input\.value = ""/, `#${id} must be reset on consume`);
+    },
   },
   {
     ids: ["core-add-text"],
