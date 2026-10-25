@@ -11,6 +11,7 @@ import { base58checkDecode, base58checkEncode } from "./base58.js";
 import { wordlist } from "./bip39-english.js";
 import { buildOutputScript } from "./script-builder.js";
 import { psbtInspectDoc } from "./psbt-wasm.js";
+import { sha256 } from "./hashes.js";
 import { canonicalizeWatchDescriptor, descriptorChecksum } from "./core-importdescriptors.js";
 
 const SCHEMA = "entropylab-verification/1";
@@ -117,6 +118,15 @@ function optionalHex(value, length, label) {
 const PUBLIC_VERSIONS = new Set([0x0488b21e, 0x043587cf, 0x049d7cb2, 0x04b24746, 0x0295b43f, 0x02aa7ed3, 0x044a5262, 0x045f1cf6, 0x024289ef, 0x02575483]);
 const TEST_CHAIN_VERSIONS = new Set([0x043587cf, 0x044a5262, 0x045f1cf6, 0x024289ef, 0x02575483]);
 const NUMS_POINT = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+const KEY_EXPRESSION = String.raw`(?:\[[0-9a-fA-F]{8}(?:/\d+[hH']?)*\])?(?:xpub|tpub)[1-9A-HJ-NP-Za-km-z]{100,112}(?:/\d+)*(?:/<\d+(?:;\d+)+>)?/\*`;
+const KEY_LIST = String.raw`\d+(?:,${KEY_EXPRESSION})+`;
+const DESCRIPTOR_SHAPES = [
+  String.raw`^(?:pkh|wpkh|tr)\(${KEY_EXPRESSION}\)$`,
+  String.raw`^sh\(wpkh\(${KEY_EXPRESSION}\)\)$`,
+  String.raw`^(?:sh|wsh)\((?:sorted)?multi\(${KEY_LIST}\)\)$`,
+  String.raw`^sh\(wsh\((?:sorted)?multi\(${KEY_LIST}\)\)\)$`,
+  String.raw`^tr\(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,(?:sorted)?multi_a\(${KEY_LIST}\)\)$`,
+].map((source) => new RegExp(source));
 const NOT_PUBLIC = "private: the verification package is public-only; a key in it is not a verifiable extended public key.";
 
 // The scanners above recognise known private forms; this proves the
@@ -172,6 +182,12 @@ function normalizeDescriptor(descriptor) {
   // extended public key.
   for (const match of body.matchAll(/[0-9a-fA-F]{64,}/g)) {
     if (match[0].toLowerCase() !== NUMS_POINT) throw new Error(NOT_PUBLIC);
+  }
+  // The whole body must be one of the supported shapes, built only from
+  // xpub/tpub key expressions (and the NUMS point): no free text, words or
+  // fragments can ride inside a descriptor string.
+  if (!DESCRIPTOR_SHAPES.some((shape) => shape.test(body))) {
+    throw new Error("descriptor: not a supported watch-only descriptor shape for a verification package.");
   }
   // The emitted checksum must pin the emitted body, whatever the rewrite did.
   if (emittedHash < 0 || descriptorChecksum(body) !== canonical.slice(emittedHash + 1)) {
@@ -242,12 +258,21 @@ function normalizePsbt(psbtBase64) {
   // A real PSBT, decoded by the reference parser (rust-bitcoin, psbt-wasm.js):
   // pasted text that is not PSBT data can never ride along in this field.
   const bytes = Uint8Array.from(atob(text), (character) => character.charCodeAt(0));
+  let doc;
   try {
-    psbtInspectDoc(bytes);
+    doc = psbtInspectDoc(bytes);
   } catch {
     throw new Error("psbt: not a valid PSBT.");
   } finally {
     bytes.fill(0);
+  }
+  // Proprietary (type 0xfc) and unknown pairs can carry arbitrary bytes,
+  // a secret included; a PSBT for independent checking carries neither.
+  const pairs = [...(doc?.globals ?? []), ...(doc?.inputs ?? []).flat(), ...(doc?.outputs ?? []).flat()];
+  // The parser names them PSBT_*_PROPRIETARY / PSBT_*_UNKNOWN (key type 0xfc
+  // or a type BIP-174 does not define).
+  if (pairs.some((pair) => !pair?.name || /_(?:PROPRIETARY|UNKNOWN)$/.test(pair.name) || String(pair?.key ?? "").slice(0, 2).toLowerCase() === "fc")) {
+    throw new Error("psbt: the PSBT carries proprietary or unknown fields; export one without them.");
   }
   return text;
 }
@@ -257,7 +282,16 @@ export function buildVerificationPackage(input) {
   assertPublicOnly(source);
   const network = mapNetwork(source.network);
   const masterFingerprint = optionalHex(source.masterFingerprint, 8, "masterFingerprint");
-  const walletDatSha256 = optionalHex(source.walletDatSha256, 64, "walletDatSha256");
+  // The hash is computed here from the file's bytes: a caller-supplied 64-hex
+  // string is indistinguishable from a raw private key, so none is accepted.
+  if (source.walletDatSha256 !== undefined && source.walletDatSha256 !== null) {
+    throw new Error("walletDat: pass the wallet.dat bytes (walletDatBytes); the package computes the hash itself.");
+  }
+  let walletDatSha256 = null;
+  if (source.walletDatBytes !== undefined && source.walletDatBytes !== null) {
+    if (!(source.walletDatBytes instanceof Uint8Array) || !source.walletDatBytes.length) throw new Error("walletDat: walletDatBytes must be the file's bytes.");
+    walletDatSha256 = [...sha256(source.walletDatBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
   const descriptors = normalizeDescriptors(source.descriptors);
   const xpubs = normalizeXpubs(source.xpubs);
   const receiveAddresses = normalizeAddresses(source.receiveAddresses, "receiveAddresses", network);
@@ -280,6 +314,10 @@ export function buildVerificationPackage(input) {
 }
 
 export function verificationPackageFilename(label) {
+  const raw = String(label ?? "");
+  if (containsExtendedPrivateKey(raw) || containsWif(raw) || containsMnemonicRun(raw)) {
+    throw new Error("private: the file name must not carry private key material.");
+  }
   const cleaned = String(label ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "");
   return `entropylab-verification-${cleaned || "wallet"}.json`;
 }

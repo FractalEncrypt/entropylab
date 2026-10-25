@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import {
   buildVerificationPackage,
@@ -28,7 +29,8 @@ const CHANGE_ADDRESS = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g";
 
 // A real one-input PSBT (key 0x01*32), the fixture of the signer-audit captures.
 const PSBT_BASE64 = "cHNidP8BAFICAAAAARERERERERERERERERERERERERERERERERERERERERERAAAAAAD/////AZBfAQAAAAAAFgAUebAAiHYmspSpFFAaTNImtYsjWYMAAAAAAAEBH6CGAQAAAAAAFgAUebAAiHYmspSpFFAaTNImtYsjWYMiBgMbhMVWexJkQJldPtWqugVl1x4YNGBIGf+cF/Xp1d0HjxgSNFZ4VAAAgAAAAIAAAACAAAAAAAAAAAAAAA==";
-const WALLET_DAT_SHA256 = "0123456789abcdef".repeat(4);
+const WALLET_DAT_BYTES = new Uint8Array([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 1, 2, 3]);
+const WALLET_DAT_SHA256 = createHash("sha256").update(WALLET_DAT_BYTES).digest("hex");
 
 const FULL_INPUT = {
   network: "mainnet",
@@ -38,7 +40,7 @@ const FULL_INPUT = {
   receiveAddresses: [{ index: 0, address: RECEIVE_ADDRESS }],
   changeAddresses: [{ index: 0, address: CHANGE_ADDRESS }],
   psbtBase64: PSBT_BASE64,
-  walletDatSha256: WALLET_DAT_SHA256,
+  walletDatBytes: WALLET_DAT_BYTES,
 };
 
 test("round-trips a full package with the documented keys in order", () => {
@@ -172,7 +174,7 @@ test("refuses a package with nothing to verify", () => {
 
 test("the same input produces byte-identical output", () => {
   const first = buildVerificationPackage(FULL_INPUT);
-  const second = buildVerificationPackage(JSON.parse(JSON.stringify(FULL_INPUT)));
+  const second = buildVerificationPackage(structuredClone(FULL_INPUT));
   assert.equal(first, second);
 });
 
@@ -235,4 +237,36 @@ test("addresses must be valid addresses of the declared network", () => {
   for (const bad of ["e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35", "abandon abandon abandon abandon abandon abandon", "tb1qcr8te4kr609gcawutmrza0j4xv80jy8zn4ydx6", `${RECEIVE_ADDRESS.slice(0, -1)}q`]) {
     assert.throws(() => buildVerificationPackage({ ...base, receiveAddresses: [{ index: 0, address: bad }] }), /^Error: receiveAddresses: not a valid/);
   }
+});
+
+// Reviews of 989f478 (GLM, Muse, Nemotron) and the red-team's VP-4.
+test("the wallet.dat hash is computed from the bytes; a caller-supplied hex is refused", () => {
+  const base = { network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`] };
+  assert.equal(JSON.parse(buildVerificationPackage({ ...base, walletDatBytes: WALLET_DAT_BYTES })).walletDatSha256, WALLET_DAT_SHA256);
+  const hexKey = "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35";
+  assert.throws(() => buildVerificationPackage({ ...base, walletDatSha256: hexKey }), (error) => error.message.startsWith("walletDat:") && !error.message.includes(hexKey));
+});
+
+test("a descriptor must be exactly a supported shape: no trailing text", () => {
+  for (const extra of [" abandon ability able", "/extra", " #note"]) {
+    assert.throws(() => buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)${extra}`] }), /^Error: (descriptor|checksum|private):/);
+  }
+});
+
+test("a PSBT with a proprietary or unknown field is refused", () => {
+  const bytes = Buffer.from(PSBT_BASE64, "base64");
+  const txLength = bytes[7]; // psbtÿ, then key 01 00, then the value length
+  const separator = 8 + txLength; // the global map's 0x00 separator
+  assert.equal(bytes[separator], 0x00, "fixture: one global pair, then the separator");
+  const insert = (pair) => Buffer.concat([bytes.subarray(0, separator), Buffer.from(pair), bytes.subarray(separator)]).toString("base64");
+  const proprietary = insert([0x05, 0xfc, 0x02, 0x68, 0x69, 0x00, 0x03, 0x61, 0x62, 0x63]);
+  const unknown = insert([0x01, 0x77, 0x01, 0x00]);
+  for (const psbt of [proprietary, unknown]) {
+    assert.throws(() => buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`], psbtBase64: psbt }), /^Error: psbt:/);
+  }
+});
+
+test("the file name refuses private material in its label", () => {
+  assert.throws(() => verificationPackageFilename(`my ${BIP84_ZPUB.replace("zpub", "zprv")}`), /^Error: private:/);
+  assert.equal(verificationPackageFilename("Cold Card"), "entropylab-verification-coldcard.json");
 });
