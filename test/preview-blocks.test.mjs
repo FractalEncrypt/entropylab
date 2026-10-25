@@ -53,3 +53,38 @@ test("build.mjs defines __ENTROPYLAB_PREVIEW__, strips both shell copies and ref
   assert.match(build, /applyPreviewBlocks\(read\("shell\.html"\), preview\)/);
   assert.match(build, /plugins:\s*\[previewHtml\]/);
 });
+
+// Red-team on a15448d (P1): an inline marker would pass through as text and
+// leak its block into a release build, so it must fail the build.
+test("a marker that shares its line with markup throws", () => {
+  for (const html of [
+    "<div><!-- preview --><button>x</button><!-- /preview --></div>",
+    "<!-- preview --><button>x</button>\n<!-- /preview -->",
+    "<!-- preview -->\n<button>x</button><!-- /preview -->",
+  ]) {
+    assert.throws(() => applyPreviewBlocks(html, false), /own line/);
+    assert.throws(() => applyPreviewBlocks(html, true), /own line/);
+  }
+});
+
+// Red-team on a15448d (P2): prove the esbuild plugin itself transforms an
+// HTML module bundled through the text loader, not just that build.mjs
+// mentions it.
+test("the esbuild plugin strips preview blocks from a bundled .html module", async () => {
+  const { build } = await import("esbuild");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { previewHtmlPlugin } = await import("../scripts/preview-blocks.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "preview-plugin-"));
+  try {
+    writeFileSync(join(dir, "page.html"), "<p>shipped</p>\n<!-- preview -->\n<p>unreleased</p>\n<!-- /preview -->\n");
+    writeFileSync(join(dir, "entry.js"), 'import page from "./page.html";\nexport default page;\n');
+    const bundle = async (preview) => (await build({ entryPoints: [join(dir, "entry.js")], bundle: true, write: false, format: "esm", loader: { ".html": "text" }, plugins: [previewHtmlPlugin(preview)] })).outputFiles[0].text;
+    const release = await bundle(false);
+    const previewBuild = await bundle(true);
+    assert.ok(release.includes("shipped") && !release.includes("unreleased") && !release.includes("<!-- preview -->"), "release bundle drops the block");
+    assert.ok(previewBuild.includes("shipped") && previewBuild.includes("unreleased") && !previewBuild.includes("<!-- preview -->"), "preview bundle keeps the contents, not the markers");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

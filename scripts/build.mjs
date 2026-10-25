@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { buildCommit } from "./build-commit.mjs";
-import { applyPreviewBlocks } from "./preview-blocks.mjs";
+import { applyPreviewBlocks, previewHtmlPlugin } from "./preview-blocks.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(root, "src");
@@ -126,19 +126,10 @@ const wasmAezNotice = `/*!
 `;
 // shell.html reaches the artifact twice: injected into index.html below and
 // inlined into the app bundle by esbuild's text loader for the boot render.
-// The plugin applies the same preview-block transform to every .html module
-// esbuild loads, so a release build hides the markup in both copies. It reads
-// the file the way esbuild does (UTF-8 BOM stripped), so a shell with no
-// preview blocks bundles byte-for-byte as before. Plugins need the async API.
-const previewHtml = {
-  name: "preview-blocks",
-  setup(esbuild) {
-    esbuild.onLoad({ filter: /\.html$/ }, (args) => ({
-      contents: applyPreviewBlocks(readFileSync(args.path, "utf8").replace(/^\uFEFF/, ""), preview),
-      loader: "text",
-    }));
-  },
-};
+// previewHtmlPlugin applies the same preview-block transform to every .html
+// module esbuild loads, so a release build hides the markup in both copies.
+// Plugins need the async API.
+const previewHtml = previewHtmlPlugin(preview);
 const jsMain = (await build({
   entryPoints: [join(SRC, "js/app.js")],
   bundle: true,
