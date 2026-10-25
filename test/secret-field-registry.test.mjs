@@ -196,6 +196,7 @@ const PUBLIC_FIELDS = {
   "core-reveal": "privacy reveal toggle — session state, not key material",
   "derivation-path": "public derivation path text",
   "journal-method": "saved-record input-method enum; contains no recovery text",
+  "ln-inv-input": "a pasted Lightning invoice or offer — a payment request meant to be shared; the card's Clear and hodlLnWipeMem empty it",
   "msig-account": "derivation setting",
   "msig-account-harden": "derivation setting",
   "msig-address-range": "derivation setting",
