@@ -70,6 +70,9 @@ function containsMnemonicRun(text) {
 }
 
 function collectStrings(value, out) {
+  // Binary input (walletDatBytes) is only ever hashed, never emitted; walking
+  // it byte by byte would stall the page on a multi-megabyte wallet.dat.
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return;
   if (typeof value === "string") {
     out.push(value);
   } else if (Array.isArray(value)) {
@@ -313,11 +316,11 @@ export function buildVerificationPackage(input) {
   }, null, 2)}\n`;
 }
 
-export function verificationPackageFilename(label) {
-  const raw = String(label ?? "");
-  if (containsExtendedPrivateKey(raw) || containsWif(raw) || containsMnemonicRun(raw)) {
-    throw new Error("private: the file name must not carry private key material.");
-  }
-  const cleaned = String(label ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "");
-  return `entropylab-verification-${cleaned || "wallet"}.json`;
+// The file name carries no free text at all, so nothing typed into a label
+// (a key, hex, words) can leak through it: only the network and the master
+// fingerprint, both public and both validated.
+export function verificationPackageFilename({ network, masterFingerprint } = {}) {
+  const chain = mapNetwork(network);
+  const fingerprint = optionalHex(masterFingerprint, 8, "masterFingerprint");
+  return `entropylab-verification-${chain}${fingerprint ? `-${fingerprint}` : ""}.json`;
 }

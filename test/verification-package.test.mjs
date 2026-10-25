@@ -178,12 +178,11 @@ test("the same input produces byte-identical output", () => {
   assert.equal(first, second);
 });
 
-test("sanitises the filename label", () => {
-  assert.equal(verificationPackageFilename("Cold Card"), "entropylab-verification-coldcard.json");
-  assert.equal(verificationPackageFilename("../../etc/passwd"), "entropylab-verification-etcpasswd.json");
-  assert.equal(verificationPackageFilename("my-wallet-2"), "entropylab-verification-my-wallet-2.json");
-  assert.equal(verificationPackageFilename(""), "entropylab-verification-wallet.json");
-  assert.equal(verificationPackageFilename(undefined), "entropylab-verification-wallet.json");
+test("the file name is built from the network and fingerprint only", () => {
+  assert.equal(verificationPackageFilename({ network: "mainnet", masterFingerprint: "73c5da0a" }), "entropylab-verification-main-73c5da0a.json");
+  assert.equal(verificationPackageFilename({ network: "testnet4" }), "entropylab-verification-testnet4.json");
+  assert.throws(() => verificationPackageFilename({ network: "liquid" }), /^Error: network:/);
+  assert.throws(() => verificationPackageFilename({ network: "mainnet", masterFingerprint: "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35" }), /^Error: masterFingerprint:/);
 });
 
 // Red-team on bea059f (VP-1/VP-3): the scanners recognise known private
@@ -266,7 +265,10 @@ test("a PSBT with a proprietary or unknown field is refused", () => {
   }
 });
 
-test("the file name refuses private material in its label", () => {
-  assert.throws(() => verificationPackageFilename(`my ${BIP84_ZPUB.replace("zpub", "zprv")}`), /^Error: private:/);
-  assert.equal(verificationPackageFilename("Cold Card"), "entropylab-verification-coldcard.json");
+test("a large wallet.dat is hashed, not scanned byte by byte (Kimi)", () => {
+  const big = new Uint8Array(8 * 1024 * 1024).fill(0x41);
+  const started = Date.now();
+  const parsed = JSON.parse(buildVerificationPackage({ network: "mainnet", descriptors: [`wpkh(${BIP84_XPUB}/0/*)`], walletDatBytes: big }));
+  assert.ok(Date.now() - started < 5000, "an 8 MiB wallet.dat must not stall the build");
+  assert.equal(parsed.walletDatSha256, createHash("sha256").update(big).digest("hex"));
 });
