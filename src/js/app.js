@@ -53,8 +53,9 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
-import { initCoreWallet } from "./core-wallet-ui.js";
+import { CORE_WALLET_MAX_BYTES, initCoreWallet } from "./core-wallet-ui.js";
 import { initDescriptorReuseCheck } from "./descriptor-reuse-ui.js";
+import { coreMixEntropy, coreMixSecrets, wipeCoreMixSecrets } from "./core-mix.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
 import { psbtSignerAuditVerification as hodlPsbtSignerAuditVerify } from "./psbt-signer-audit-verify.js";
 import { psbtSignerAuditErrorHtml as hodlPsbtSignerAuditErrorHtml, psbtSignerAuditHtml as hodlPsbtSignerAuditHtml } from "./psbt-signer-audit-view.js";
@@ -802,7 +803,7 @@ function hodlCreateKeyMethodIcon(mode) {
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("focusable", "false");
   svg.setAttribute("aria-hidden", "true");
-  if (mode === "dice") {
+  if (mode === "dice" || mode === "corewallet") {
     add("rect", { x: "3.5", y: "3.5", width: "17", height: "17", rx: "3.2" });
     [[8, 8], [16, 8], [12, 12], [8, 16], [16, 16]].forEach(([cx, cy]) => add("circle", { cx: String(cx), cy: String(cy), r: "1.15", fill: "currentColor", stroke: "none" }));
   } else if (mode === "cards") {
@@ -823,6 +824,50 @@ function hodlCreateKeyMethodIcon(mode) {
   }
   span.appendChild(svg);
   return span;
+}
+// Core wallet.dat + dice/cards (issue #552): the wallet's spend secrets are
+// mixed with a dice or card transcript. The wallet alone never makes a phrase,
+// and the secrets live only in this holder, wiped on every exit path.
+if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) hodlKeyModes.push("corewallet");
+var hodlCoreMix = null, hodlCoreMixSource = "dice";
+function hodlCoreMixReset() {
+  if (hodlCoreMix) wipeCoreMixSecrets(hodlCoreMix.secrets);
+  hodlCoreMix = null;
+}
+function hodlCoreMixShowError(message) {
+  let error = document.getElementById("core-mix-error");
+  if (error) error.textContent = message || "";
+  let summary = document.getElementById("core-mix-summary");
+  if (summary) {
+    summary.hidden = true;
+    summary.textContent = "";
+  }
+}
+function hodlCoreMixShowSummary() {
+  let summary = document.getElementById("core-mix-summary");
+  if (!summary || !hodlCoreMix) return;
+  summary.textContent = hodlCoreMix.count === 1
+    ? hodlTText("{name} · 1 key · fingerprint {fingerprint}", { name: hodlCoreMix.name, fingerprint: hodlCoreMix.fingerprint })
+    : hodlTText("{name} · {count} keys · fingerprint {fingerprint}", { name: hodlCoreMix.name, count: hodlCoreMix.count, fingerprint: hodlCoreMix.fingerprint });
+  summary.hidden = false;
+}
+function hodlCoreMixLoadBytes(bytes, name) {
+  hodlCoreMixReset();
+  let error = document.getElementById("core-mix-error");
+  if (error) error.textContent = "";
+  try {
+    let doc = hodlCoreWallet.parseWalletDat(bytes);
+    let secrets = coreMixSecrets(doc, { sha256: (b) => hodlSha256(b), publicKeyForPrivate: hodlWalletDatDeps().publicKeyForPrivate });
+    hodlCoreMix = { name: name || "wallet.dat", count: secrets.count, fingerprint: secrets.fingerprint, secrets: secrets.secrets };
+    hodlCoreMixShowSummary();
+    return true;
+  } catch (exception) {
+    hodlCoreMixReset();
+    hodlCoreMixShowError(exception.message || String(exception));
+    return false;
+  } finally {
+    bytes.fill(0);
+  }
 }
 // The method picker is a dropdown at every width, wearing the Script type
 // control's chrome: enhanced-inputs.js upgrades it and asks
@@ -4509,6 +4554,34 @@ function hodlSelectedCardsEntropy(targetWords = hodlTargetWordCount) {
   if (!input) return { ok: false, error: hodlNote("Card input is unavailable.") };
   return hodlCardMethod === "direct" ? hodlDirectCardsEntropy(input.value, targetWords) : hodlCardsEntropy(input.value, targetWords, hodlCardColemanSymbols);
 }
+function hodlCoreMixSelectedEntropy(targetWords = hodlTargetWordCount) {
+  if (!hodlCoreMix) return { ok: false, error: hodlNote("Choose a Bitcoin Core wallet.dat first.") };
+  let config = hodlSeedConfig(targetWords), notes = [], warnings = [];
+  let source = hodlCoreMixSource === "cards" ? "cards" : "dice";
+  let value = document.getElementById("core-mix-transcript")?.value ?? "";
+  let transcript, sourceBits;
+  if (source === "cards") {
+    let cards = hodlCardsEntropy(value, targetWords);
+    if (!cards.ok) return cards;
+    transcript = cards.hashInput;
+    sourceBits = cards.sourceBits;
+    warnings = cards.warnings || [];
+  } else {
+    let dice = hodlDiceEntropy(value, "coldcard", targetWords);
+    if (!dice.ok) return dice;
+    transcript = hodlSplitDiceString(value).rolls.join("");
+    sourceBits = dice.sourceBits;
+    warnings = dice.warnings || [];
+  }
+  let bytes;
+  try {
+    bytes = coreMixEntropy(hodlCoreMix.secrets, transcript, config.bytes, { sha256: (b) => hodlSha256(b) });
+  } catch (error) {
+    return { ok: false, error: hodlNote(error.message || String(error)) };
+  }
+  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's {count} spend secrets and the {source} transcript; the first {bits} bits become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
+  return { ok: true, bytes, hex: hodlHex.encode(bytes), bits: config.bits, sourceBits, method: "core-wallet-mix-v1", notes, warnings };
+}
 function hodlUpdateCards() {
   let input = document.getElementById("cards");
   if (!input) return;
@@ -6010,6 +6083,7 @@ function hodlGlobalSyncIsHashedMode() {
 function hodlGlobalSyncSourceId() {
   if (hodlKeyMode === "dice") return `dice:${hodlDiceMethod}`;
   if (hodlKeyMode === "cards") return `cards:${hodlCardMethod}`;
+  if (hodlKeyMode === "corewallet") return `corewallet:${hodlCoreMixSource}`;
   if (hodlKeyMode === "hex") return `number:${hodlEntropyFormat}`;
   if (hodlKeyMode === "seed") return `seed:${hodlSeedMethod}`;
   let kind = hodlNormalizePrivateKeyKind(document.querySelector('input[name="kk"]:checked')?.value || hodlKeys[hodlActiveKey]?.fields?.keyKind, "");
@@ -6019,6 +6093,7 @@ function hodlGlobalSyncCurrentValue() {
   let state = hodlKeys[hodlActiveKey], fields = state?.fields || {};
   if (hodlKeyMode === "dice") return document.getElementById("dice")?.value ?? hodlStoredDiceValue(fields) ?? "";
   if (hodlKeyMode === "cards") return document.getElementById(hodlCardMethod === "direct" ? "direct-cards" : "cards")?.value ?? fields[hodlCardMethod === "direct" ? "directCards" : "cards"] ?? "";
+  if (hodlKeyMode === "corewallet") return document.getElementById("core-mix-transcript")?.value ?? fields.coreMixTranscript ?? "";
   if (hodlKeyMode === "hex") return document.getElementById(hodlEntropyFormat)?.value ?? fields[hodlEntropyFormat] ?? "";
   if (hodlKeyMode === "seed") return document.getElementById(hodlSeedMethod === "numbers" ? "seed-numbers" : "seed")?.value ?? fields[hodlSeedMethod === "numbers" ? "seedNumbers" : "seed"] ?? "";
   let values = hodlPrivateKeyValues(fields), kind = hodlNormalizePrivateKeyKind(document.querySelector('input[name="kk"]:checked')?.value || fields.keyKind, "");
@@ -6656,6 +6731,58 @@ function hodlRenderKeyForm() {
   }
   hodlUpdateSeedLengthControl();
   hodlRenderGlobalSyncControl();
+  if (hodlKeyMode === "corewallet") {
+    let state = hodlKeys[hodlActiveKey];
+    hodlCoreMixSource = state?.coreMixSource === "cards" ? "cards" : "dice";
+    let source = hodlCoreMixSource;
+    let help = source === "cards" ? hodlT("Two characters per card, rank then suit (AS 7H TD …).") : hodlT("Faces 1–6, as many rolls as the dice method recommends.");
+    hodlFormEl.innerHTML = `
+      <p class="label" id="core-mix-file-label">${hodlT("Bitcoin Core wallet.dat")}</p>
+      <div class="row tool-actions"><button class="btn secondary" id="core-mix-upload" type="button" aria-describedby="core-mix-summary">${hodlT("Choose wallet.dat")}</button><input type="file" id="core-mix-file" accept=".dat" hidden></div>
+      <p class="edge-note is-public" id="core-mix-summary" hidden></p>
+      <p class="err" id="core-mix-error" role="alert"></p>
+      <label class="field">${hodlT("Entropy source")}<select id="core-mix-source"><option value="dice">${hodlT("Dice rolls (D6)")}</option><option value="cards">${hodlT("Cards")}</option></select></label>
+      <label class="field">${hodlT("Rolls or cards")}<textarea id="core-mix-transcript" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="core-mix-transcript-help"></textarea><span class="field-note" id="core-mix-transcript-help">${help}</span></label>`;
+    let upload = document.getElementById("core-mix-upload"), file = document.getElementById("core-mix-file");
+    let sourceSelect = document.getElementById("core-mix-source"), transcript = document.getElementById("core-mix-transcript");
+    sourceSelect.value = source;
+    if (state) transcript.value = state.fields?.coreMixTranscript || "";
+    if (hodlCoreMix) hodlCoreMixShowSummary();
+    upload.onclick = () => file.click();
+    file.onchange = () => {
+      let chosen = file.files?.[0];
+      file.value = "";
+      if (!chosen) return;
+      (async () => {
+        try {
+          if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlT("This wallet file is too large to inspect safely."));
+          let bytes = new Uint8Array(await chosen.arrayBuffer());
+          // The method can change while the file is read: never load
+          // secrets into a mode that no longer shows or wipes them.
+          if (hodlKeyMode !== "corewallet") {
+            bytes.fill(0);
+            return;
+          }
+          hodlCoreMixLoadBytes(bytes, chosen.name);
+        } catch (exception) {
+          hodlCoreMixReset();
+          hodlCoreMixShowError(exception.message || String(exception));
+        }
+        hodlSyncDeriveButton();
+      })();
+    };
+    sourceSelect.onchange = () => {
+      hodlCoreMixSource = sourceSelect.value === "cards" ? "cards" : "dice";
+      if (state) state.coreMixSource = hodlCoreMixSource;
+      let helpEl = document.getElementById("core-mix-transcript-help");
+      if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlT("Two characters per card, rank then suit (AS 7H TD …).") : hodlT("Faces 1–6, as many rolls as the dice method recommends.");
+      hodlSyncDeriveButton();
+    };
+    transcript.oninput = () => hodlSyncDeriveButton();
+    hodlBindKeyFields();
+    hodlRenderPassphraseKeyboard();
+    return;
+  }
   if (hodlKeyMode === "dice") {
     let dplusFaces = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"],
       dplusPad = dplusFaces.map(face => `<button type="button" data-d="${face}" aria-label="${hodlTAttr("Hexadecimal D16 result {face}", { face })}">${face}</button>`).join("");
@@ -7426,6 +7553,9 @@ function hodlCanDeriveCurrentKey() {
     if (hodlKeyMode === "cards") {
       return hodlSelectedCardsEntropy(hodlTargetWordCount).ok;
     }
+    if (hodlKeyMode === "corewallet") {
+      return Boolean(hodlCoreMix) && hodlCoreMixSelectedEntropy(hodlTargetWordCount).ok;
+    }
     if (hodlKeyMode === "hex") return hodlSelectedEntropy().ok;
     if (hodlKeyMode === "seed") {
       let selected = hodlSelectedSeedInput(hodlTargetWordCount), value = selected.value;
@@ -7459,6 +7589,7 @@ var hodlLowEntropyConfirm = null, hodlFingerprintCollisionConfirm = null;
 // "recommended amount" the user can fall short of at derive time. The brain
 // wallet keeps its own explicit acknowledgement instead.
 function hodlLowEntropyWarningFor(mode, method, value, targetWords) {
+  if (mode === "corewallet") return null;
   let config = hodlSeedConfig(targetWords);
   if (mode === "dice" && (method === "coldcard" || method === "coleman")) {
     let rolls = hodlSplitDiceString(value).rolls;
@@ -7799,6 +7930,10 @@ async function hodlCalculateKey(progress, action = "derive", options = {}) {
       }
     } else if (hodlKeyMode === "cards") {
       let entropy = hodlSelectedCardsEntropy(hodlTargetWordCount);
+      hodlThrowIfFailed(entropy);
+      result = await hodlEntropyWalletWithProgress(entropy, passphrase, chain, count, account, addressStart, progress, purpose, coinType, hardening, branchStart, branchRange, derivationPlan);
+    } else if (hodlKeyMode === "corewallet") {
+      let entropy = hodlCoreMixSelectedEntropy(hodlTargetWordCount);
       hodlThrowIfFailed(entropy);
       result = await hodlEntropyWalletWithProgress(entropy, passphrase, chain, count, account, addressStart, progress, purpose, coinType, hardening, branchStart, branchRange, derivationPlan);
     } else if (hodlKeyMode === "hex") {
@@ -14851,6 +14986,7 @@ function hodlKeySummaryMethodParts(state) {
     : state.mode === "cards" ? state.cardMethod === "direct" ? "direct" : "hashed"
     : state.mode === "hex" ? state.entropyFormat || "bin"
     : state.mode === "seed" ? state.seedMethod === "numbers" ? "numbers" : "words"
+    : state.mode === "corewallet" ? state.coreMixSource === "cards" ? "cards" : "dice"
     : state.mode === "key" ? state.fields?.keyKind || "wif" : "";
   return [hodlKeyModeLabels[state.mode] || "", hodlKeySummarySubmethodLabels[state.mode]?.[variant] || ""];
 }
@@ -14965,6 +15101,8 @@ function hodlRestoreFormFields(state) {
 }
 function hodlSetMode(mode) {
   hodlCaptureKey();
+  // typeof keeps the standalone Node extraction working (narrow test slices).
+  if (mode !== "corewallet" && typeof hodlCoreMixReset === "function") hodlCoreMixReset();
   let state = hodlKeys[hodlActiveKey];
   if (state) state.mode = mode;
   hodlKeyMode = mode;
@@ -14992,6 +15130,7 @@ function hodlSyncKeyClearButton(capture = false) {
 }
 function hodlWipeActiveKey() {
   hodlInvalidateDerivation();
+  if (typeof hodlCoreMixReset === "function") hodlCoreMixReset();
   // Cache keys are partial mnemonics (23 of 24 words, 11 of 12): wiping a key
   // must not leave its seed, minus the last word, referenced until pagehide.
   hodlLastWordCache.clear();
@@ -15021,6 +15160,8 @@ function hodlCaptureKey() {
   state.diceMethod = hodlDiceMethod;
   state.cardMethod = hodlCardMethod;
   state.seedMethod = hodlSeedMethod;
+  state.coreMixSource = hodlCoreMixSource;
+  if (hodlKeyMode === "corewallet" && state.fields) state.fields.coreMixTranscript = document.getElementById("core-mix-transcript")?.value ?? state.fields.coreMixTranscript ?? "";
   state.seedZeroIndexed = Boolean(hodlSeedZeroIndexed);
   state.cardColemanSymbols = Boolean(hodlCardColemanSymbols);
   state.entropyFormat = hodlEntropyFormat;
@@ -20063,6 +20204,9 @@ function hodlInitSecretFieldAutoClear() {
       }
     }
     hodlClearPassphraseField();
+    if (typeof hodlCoreMixReset === "function") hodlCoreMixReset();
+    let coreMixTranscript = document.getElementById("core-mix-transcript");
+    if (coreMixTranscript) coreMixTranscript.value = "";
     let psbtKey = document.getElementById("psbt-key"), psbtPass = document.getElementById("psbt-pass");
     if (psbtKey) psbtKey.value = "";
     if (psbtPass) psbtPass.value = "";
