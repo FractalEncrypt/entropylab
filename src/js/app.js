@@ -869,7 +869,14 @@ function hodlCoreMixWipeDoc(doc) {
     // ArrayBuffer.isView, not instanceof: a typed array from another realm
     // (or a Buffer) is still a copy of the secret and must be zeroed.
     if (ArrayBuffer.isView(value)) {
+      // A DataView has no fill(): zero the bytes it covers through a byte view.
       if (typeof value.fill === "function") value.fill(0);
+      else new Uint8Array(value.buffer, value.byteOffset, value.byteLength).fill(0);
+      continue;
+    }
+    // The tag, not instanceof, so an ArrayBuffer from another realm counts.
+    if (Object.prototype.toString.call(value) === "[object ArrayBuffer]") {
+      new Uint8Array(value).fill(0);
       continue;
     }
     for (let child of Array.isArray(value) ? value : value instanceof Map ? [...value.keys(), ...value.values()] : Object.values(value)) stack.push(child);
@@ -6785,7 +6792,12 @@ function hodlRenderKeyForm() {
       // A read can finish after End Session, Clear, a tab switch or a method
       // switch: the generation and the tab it was started for decide whether
       // the bytes may still be loaded.
-      let generation = hodlCoreMixGeneration, keyId = hodlKeys[hodlActiveKey]?.id ?? null;
+      // Each pick makes any earlier read still in flight stale, so the last
+      // file chosen is the one that loads. A new wallet also retires the
+      // derived result, as a transcript edit does.
+      let generation = ++hodlCoreMixGeneration, keyId = hodlKeys[hodlActiveKey]?.id ?? null;
+      // typeof keeps the standalone Node extraction working (narrow test slices).
+      if (typeof hodlInvalidateDerivation === "function") hodlInvalidateDerivation();
       (async () => {
         let bytes = null;
         try {

@@ -207,6 +207,13 @@ test("the parsed document's record buffers are zeroed after a load, success or f
   };
   for (const fail of [false, true]) {
     const doc = makeDoc();
+    // A raw ArrayBuffer and a DataView in the document must be zeroed too;
+    // they are checked through views kept outside the document.
+    const raw = new ArrayBuffer(4), viewed = new ArrayBuffer(4);
+    new Uint8Array(raw).fill(21);
+    new Uint8Array(viewed).fill(22);
+    doc.records[0].raw = raw;
+    doc.records[0].dv = new DataView(viewed);
     const { context } = loadContext({
       parse: () => doc,
       secrets: fail ? () => { throw new Error("key-mismatch: nope"); } : () => ({ secrets: [new Uint8Array(32).fill(1)], count: 1, fingerprint: "aabbccdd" }),
@@ -214,8 +221,15 @@ test("the parsed document's record buffers are zeroed after a load, success or f
     const bytes = new Uint8Array([1, 2, 3]);
     context.hodlCoreMixLoadBytes(bytes, "wallet.dat");
     for (const buffer of doc.buffers) assert.ok(buffer.every((byte) => byte === 0), "the document's copy is zeroed");
+    assert.ok(new Uint8Array(raw).every((byte) => byte === 0), "a raw ArrayBuffer is zeroed");
+    assert.ok(new Uint8Array(viewed).every((byte) => byte === 0), "a DataView's bytes are zeroed");
     assert.ok(bytes.every((byte) => byte === 0), "the file bytes are zeroed");
   }
+});
+
+test("each wallet.dat pick makes an earlier read stale and retires the derived result", () => {
+  const change = app.slice(app.indexOf("file.onchange = () => {"), app.indexOf("sourceSelect.onchange"));
+  assert.match(change, /let generation = \+\+hodlCoreMixGeneration, keyId = hodlKeys\[hodlActiveKey\]\?\.id \?\? null;\s*(?:\/\/[^\n]*\n\s*)*if \(typeof hodlInvalidateDerivation === "function"\) hodlInvalidateDerivation\(\);/);
 });
 
 test("loading a new file wipes the previous wallet's secrets", () => {
