@@ -502,6 +502,9 @@ async function hodlLnReadHsmFile() {
   hodlLnHsmRun += 1;
   hodlLnHsmPending = true;
   hodlLnHsmReading = true;
+  // A Derive queued for an earlier file is not a request for this one: it
+  // goes, as it does when words are typed.
+  hodlLnHsmDeriveQueued = false;
   const run = hodlLnHsmRun;
   const seed = document.getElementById("ln-seed");
   if (seed) seed.value = "";

@@ -513,6 +513,28 @@ test("the page resets the file input after the transfer detaches the hsm_secret 
   }
 });
 
+test("picking a new hsm_secret file drops a Derive queued for the earlier one", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-format").value = "cln-hsm";
+    const fileInput = page.getElementById("ln-hsm-file");
+    const idle = page.getElementById("ln-session").textContent;
+    let finishA;
+    fileInput.files = [{ arrayBuffer: () => new Promise((resolve) => { finishA = () => resolve(clnType2File(CLN_WORDS).buffer); }) }];
+    const readingA = fileInput.onchange();
+    page.getElementById("ln-go").onclick(); // queued behind file A's read
+    fileInput.files = [{ arrayBuffer: async () => clnType2File(CLN_WORDS).buffer }];
+    await fileInput.onchange();
+    await until(() => page.getElementById("ln-session").textContent !== idle, "file B's loaded status");
+    finishA();
+    await readingA;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(page.getElementById("ln-out").innerHTML, "", "a Derive queued for file A ran against file B without a click");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("a worker crash during an hsm_secret read does not leave Derive waiting for that read", async () => {
   const page = lnPage();
   try {
