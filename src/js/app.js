@@ -12388,9 +12388,6 @@ async function hodlPsbtLoadAuditUpload(chosen) {
 // stale verdict is never left on screen. The next Inspect re-runs it.
 function hodlPsbtClearSignerAudit() {
   const section = document.getElementById("psbt-out")?.querySelector("[data-audit-section]");
-  // The RBF verdict is retired for the same reasons, and before the early
-  // return below: it must go even when no audit section is on screen.
-  hodlPsbtClearRbfVerdict();
   // The cached report counts as a shown verdict even when a repaint left it
   // out of the DOM: both are retired together (Wicked's review of #1118).
   if (!section && !hodlPsbtLast?.audit) return;
