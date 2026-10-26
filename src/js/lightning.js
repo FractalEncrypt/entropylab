@@ -532,6 +532,9 @@ async function hodlLnReadHsmFile() {
     hodlLnClearResult();
     hodlLnHsmLoaded = false;
     hodlLnRender();
+    // The held file is gone too: its "hsm_secret read…" status goes with it.
+    const session = document.getElementById("ln-session");
+    if (session) session.textContent = t("No node key derived. Enter a seed phrase and derive.");
     const error = document.getElementById("ln-error");
     if (error) hodlLnShowError(error, exception);
     hodlLnJournalLog("hsm-file-error", exception && typeof exception.code === "string" ? exception.code : "unknown", "ln");

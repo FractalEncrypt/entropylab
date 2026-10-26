@@ -560,6 +560,25 @@ test("a refused hsm_secret file does not leave the earlier file's read status", 
   }
 });
 
+test("a file that cannot be read does not leave the earlier file's read status", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-format").value = "cln-hsm";
+    const fileInput = page.getElementById("ln-hsm-file");
+    const idle = page.getElementById("ln-session").textContent;
+    fileInput.files = [{ arrayBuffer: async () => clnType2File(CLN_WORDS).buffer }];
+    await fileInput.onchange();
+    await until(() => page.getElementById("ln-session").textContent !== idle, "the hsm-loaded status");
+    const readStatus = page.getElementById("ln-session").textContent;
+    fileInput.files = [{ arrayBuffer: async () => { throw new Error("NotReadableError"); } }];
+    await fileInput.onchange();
+    assert.ok(page.getElementById("ln-error").textContent.length > 0, "the read failure was not reported");
+    assert.notEqual(page.getElementById("ln-session").textContent, readStatus, "the dropped file's read status is still shown");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("scripts/build.mjs injects the bundled worker source as __LN_WORKER_SOURCE__", () => {
   const build = readFileSync(new URL("../scripts/build.mjs", import.meta.url), "utf8");
   assert.match(build, /__LN_WORKER_SOURCE__: JSON\.stringify\(/, "the page bundle must carry the key worker source");
