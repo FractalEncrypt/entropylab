@@ -53,6 +53,7 @@ import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
 import { initPsbtEditor, psbtBytesFromText as hodlPsbtBytesFromText, psbtBytesFromUpload, psbtQrPlan as hodlPsbtQrPlan } from "./psbt-editor.js";
+import { watchOnlyQrFrames as hodlWatchOnlyQrFrames } from "./psbt-ur.js";
 import { initCoreWallet } from "./core-wallet-ui.js";
 import { initDescriptorReuseCheck } from "./descriptor-reuse-ui.js";
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
@@ -69,6 +70,10 @@ import {
   coreImportDescriptorsFilename,
 } from "./core-importdescriptors.js";
 import {
+  buildVerificationPackage,
+  verificationPackageFilename,
+} from "./verification-package.js";
+import {
   canPrintPolicySheet,
   policySheetFilename,
   policySheetHtml,
@@ -79,7 +84,7 @@ import {
   buildBip388PolicyText,
 } from "./bip388-policy.js";
 import { initQrReferences } from "./qr-references.js";
-import { addressQrButtonHtml as hodlAddressQrButton, initAddressQr as hodlInitAddressQr } from "./address-qr.js";
+import { addressQrButtonHtml as hodlAddressQrButton, initAddressQr as hodlInitAddressQr, watchOnlyQrButtonHtml as hodlWatchOnlyQrButton } from "./address-qr.js";
 import { initLowEntropyConfirm } from "./low-entropy-confirm.js";
 import { initFingerprintCollisionConfirm } from "./fingerprint-collision-confirm.js";
 import { initJournalClearConfirm } from "./journal-clear-confirm.js";
@@ -1099,9 +1104,11 @@ function hodlWatchOnlyMultipathDescriptor(receiveDescriptor, branches = [0, 1]) 
 }
 // A PSBT past a single code's capacity is scanned as a ur:crypto-psbt
 // sequence — the same plan the editor used inline before the overlay took
-// the job. Anything else (an address, an xpub, a descriptor) has no frames
-// and stays one static code.
-function hodlPsbtQrFrames(value) {
+// the job. A watch-only descriptor or BIP-388 policy past one QR uses that
+// same UR family (ur:bytes, fixed-rate parts). An address or an xpub has no
+// frames and stays one static code.
+function hodlPsbtQrFrames(value, kind) {
+  if (kind === "watch") return hodlWatchOnlyQrFrames(value);
   try {
     let plan = hodlPsbtQrPlan(hodlPsbtBytesFromText(value));
     return plan.mode === "ur" ? plan.parts : null;
@@ -1146,8 +1153,14 @@ function hodlInitDescriptorCopy({ onCopyStart = () => {} } = {}) {
 // A long value the user is meant to move somewhere else — a descriptor, an
 // extended key — reads as one row: the label carries its QR button and the
 // copy confirmation, and the value itself is the copy target.
-function hodlCopyFieldHtml(labelText, value, labelClass = "label", showQr = true) {
-  let qr = showQr && value && value !== "\u2014" && value.length <= 1e3 ? hodlAddressQrButton(value, labelText) : "";
+function hodlCopyFieldHtml(labelText, value, labelClass = "label", options = {}) {
+  let shown = options !== false && value && value !== "\u2014";
+  let qr = "";
+  // Watch-only descriptors and BIP-388 policies: a short value keeps today's
+  // single text QR. Past one QR, the shared overlay animates the same UR
+  // family crypto-psbt uses. Private key material gets no code; psbt-ur.js
+  // makes that decision for the field and the encoder alike.
+  if (shown && options.watchOnly) qr = hodlWatchOnlyQrButton(value, labelText); else if (shown && String(value).length <= 1e3) qr = hodlAddressQrButton(value, labelText);
   return hodlPublicFieldMarkup(hodlEscapeHtml(labelText), value, { copyIcon: hodlClipboardIconMarkup, qrHtml: qr, labelClass });
 }
 function hodlWatchOnlyDescriptorExport(receiveDescriptor, changeDescriptor, addressBranches = null, { labelClass = "label", collapsible = true } = {}) {
@@ -1157,8 +1170,8 @@ function hodlWatchOnlyDescriptorExport(receiveDescriptor, changeDescriptor, addr
   ]).filter((entry) => entry.publicDescriptor), first = branches[0], multipath = first ? branches.length === 1 ? first.publicDescriptor : hodlWatchOnlyMultipathDescriptor(first.publicDescriptor, branches.map((entry) => entry.branch)) : "";
   // Each descriptor is titled with a QR button beside it, the same control an
   // address row carries: the code opens in the shared overlay instead of one
-  // being drawn inline. A payload too long to encode simply offers no button.
-  let field = (labelText, value) => hodlCopyFieldHtml(labelText, value, labelClass);
+  // being drawn inline. A payload past one QR animates as UR; an xprv does not.
+  let field = (labelText, value) => hodlCopyFieldHtml(labelText, value, labelClass, { watchOnly: true });
   let details = branches.map((entry) => field(hodlTText(entry.branch === 0 ? "Watch-only receive descriptor" : entry.branch === 1 ? "Watch-only change descriptor" : "Watch-only custom branch {n} descriptor", { n: entry.branch }), entry.publicDescriptor)).join("");
   let wallet = field(hodlTText("Watch-only wallet descriptor"), multipath || "\u2014");
   return `${wallet}${collapsible ? `<details class="wallet-advanced"><summary>${hodlT("Address branch descriptors")}</summary>${details}</details>` : details}`;
@@ -2331,13 +2344,20 @@ function hodlCoreDeriveAddressesText(scope = "msig") {
 // The deriveaddresses copy is unreleased: only a preview build shows it
 // (docs/PREVIEW.md). typeof keeps the standalone Node extraction working.
 function hodlCoreImportDescriptorsButtons(prefix) {
-  return `<button class="btn secondary green" id="${prefix}-save-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Save Core Watch-only JSON")}</button>
+  return `<button class="btn secondary green" id="${prefix}-save-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Save Core Watch-only JSON")}</button>${typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__ ? `
+    <button class="btn secondary green" id="${prefix}-save-verification-package" type="button" aria-describedby="${prefix}-verification-package-help">${hodlT("Download verification package")}</button>` : ""}
     <button class="btn secondary" id="${prefix}-copy-importdescriptors" type="button" aria-describedby="${prefix}-core-importdescriptors-help">${hodlT("Copy Core importdescriptors")}</button>${typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__ ? `
     <button class="btn secondary" id="${prefix}-copy-deriveaddresses" type="button" aria-describedby="${prefix}-core-deriveaddresses-help">${hodlT("Copy Core deriveaddresses")}</button>` : ""}`;
 }
 function hodlCoreDeriveAddressesNote(prefix) {
   if (typeof __ENTROPYLAB_PREVIEW__ === "undefined" || !__ENTROPYLAB_PREVIEW__) return "";
   return `<p class="edge-note is-public" id="${prefix}-core-deriveaddresses-help">${hodlT("Paste into Bitcoin Core's console (Window → Console), or after bitcoin-cli. Core prints the addresses; they must match the ones shown here. Use a node on the same network.")}</p>`;
+}
+// The verification package download is unreleased: only a preview build shows
+// it (docs/PREVIEW.md). typeof keeps the standalone Node extraction working.
+function hodlVerificationPackageNote(prefix) {
+  if (typeof __ENTROPYLAB_PREVIEW__ === "undefined" || !__ENTROPYLAB_PREVIEW__) return "";
+  return `<p class="edge-note is-public" id="${prefix}-verification-package-help">${hodlT("Public data only (descriptors, xpubs, addresses) for checking this wallet with an independent Bitcoin Core tool.")}</p>`;
 }
 function hodlCoreImportDescriptorsNote(wallet) {
   if (wallet.branchStart > 0) return hodlT("Imports the displayed public branches. Bitcoin Core uses branch {branch} for new receiving addresses, starting at address index 0. Verify that address on another trusted wallet or signer before funding.", { branch: wallet.branchStart });
@@ -2358,6 +2378,7 @@ function hodlKeyCoreImportDescriptorsMarkup(account) {
     <p class="edge-note is-public" id="key-core-importdescriptors-help">${hodlCoreImportDescriptorsNote(account)} ${hodlT("Exports the selected script type's displayed branches, using the wallet birthday under Downloads below.")}</p>
     ${hodlCoreImportDescriptorsButtons("key")}
     ${hodlCoreDeriveAddressesNote("key")}
+    ${typeof hodlVerificationPackageNote !== "undefined" ? hodlVerificationPackageNote("key") : ""}
     <p class="edge-note is-private" id="key-core-importdescriptors-error" role="alert"></p>
   </div>`;
 }
@@ -2380,6 +2401,7 @@ function hodlMsigCoreImportDescriptorsMarkup() {
     ${hodlCoreImportDescriptorsButtons("msig")}
     ${walletDat ? `<button class="btn secondary green save-wallet-dat" id="msig-download-wallet-dat" type="button" aria-describedby="msig-core-importdescriptors-help msig-birthday-help">${hodlWalletExport.walletDatButtonLabel(false)}</button>` : ""}
     ${hodlCoreDeriveAddressesNote("msig")}
+    ${typeof hodlVerificationPackageNote !== "undefined" ? hodlVerificationPackageNote("msig") : ""}
   </div>`;
 }
 // The BIP 388 wallet policy export (template + co-signer xpubs), one block
@@ -2450,6 +2472,58 @@ function hodlDownloadCoreImportDescriptors(scope = "msig") {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1e3);
 }
+// The public-only package an independent Bitcoin Core tool checks: the same
+// watch-only units the Core JSON exports, plus the displayed addresses. Rows
+// are read as { index, address } only; their private getters stay untouched.
+function hodlVerificationPackageJson(scope = "msig") {
+  const core = hodlCoreDescriptorUnits(scope);
+  if (!core) return "";
+  const network = scope === "calc" ? core.wallet.network ?? hodlWalletResult.network : hodlWalletResult.network;
+  const masterFingerprint = scope === "calc" ? core.wallet.masterFingerprint ?? hodlWalletResult.masterFingerprint ?? null : null;
+  const rows = (branch) => core.wallet.addressBranches?.find((entry) => entry.branch === branch)?.rows ?? (branch === 0 ? core.wallet.receive : core.wallet.change) ?? [];
+  const addresses = (branch) => rows(branch).map((row) => ({ index: row.index, address: row.address })).sort((a, b) => a.index - b.index);
+  return buildVerificationPackage({
+    network,
+    masterFingerprint,
+    descriptors: core.units.map((unit) => unit.descriptor),
+    xpubs: scope === "calc" ? [core.wallet.xpub].filter((xpub) => typeof xpub === "string" && xpub) : hodlWalletResult.xpubs,
+    receiveAddresses: addresses(0),
+    changeAddresses: addresses(1),
+  });
+}
+function hodlDownloadVerificationPackage(scope = "msig") {
+  hodlCoreImportDescriptorsError(scope, null);
+  let json = "";
+  let filename = "";
+  try {
+    json = hodlVerificationPackageJson(scope);
+    if (!json) return;
+    const core = hodlCoreDescriptorUnits(scope);
+    if (!core) return;
+    const network = scope === "calc" ? core.wallet.network ?? hodlWalletResult.network : hodlWalletResult.network;
+    const masterFingerprint = scope === "calc" ? core.wallet.masterFingerprint ?? hodlWalletResult.masterFingerprint ?? null : null;
+    filename = verificationPackageFilename({ network, masterFingerprint });
+  } catch (error) {
+    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
+    return;
+  }
+  let blob = new Blob([json], { type: "application/json" }), url = URL.createObjectURL(blob), link = document.createElement("a");
+  json = "";
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1e3);
+}
+function hodlMsigBip388Field() {
+  let text = "";
+  try {
+    text = hodlMsigBip388PolicyText();
+  } catch {
+    return "";
+  }
+  if (!text) return "";
+  return hodlCopyFieldHtml(hodlTText("BIP 388 wallet policy"), text, "label", { watchOnly: true });
+}
 function hodlMsigBip388PolicyText() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
   if (!hodlWalletResult.receiveDescriptor) return "";
@@ -2490,7 +2564,7 @@ function hodlDownloadMsigBip388Policy() {
 }
 function hodlBindCoreImportDescriptors(scope) {
   const prefix = scope === "calc" ? "key" : "msig";
-  for (const [action, handler] of [["copy-importdescriptors", hodlCopyCoreImportDescriptors], ["save-importdescriptors", hodlDownloadCoreImportDescriptors], ["copy-deriveaddresses", hodlCopyCoreDeriveAddresses]]) {
+  for (const [action, handler] of [["copy-importdescriptors", hodlCopyCoreImportDescriptors], ["save-importdescriptors", hodlDownloadCoreImportDescriptors], ["save-verification-package", hodlDownloadVerificationPackage], ["copy-deriveaddresses", hodlCopyCoreDeriveAddresses]]) {
     const button = document.getElementById(`${prefix}-${action}`);
     if (!button) continue;
     const clean = button.cloneNode(true);
@@ -10217,6 +10291,7 @@ function hodlShowMsig() {
       ${hodlMsigGroupMarkup("watch", hodlT("Watch-only wallet data"), `
         <p class="edge-note is-public">${hodlT("These descriptors reveal every address in the selected branches for this multisig, but cannot authorize spending. Descriptors can be imported into Sparrow or another wallet.")}</p>
         ${hodlWatchOnlyDescriptorExport(hodlWalletResult.receiveDescriptor, hodlWalletResult.changeDescriptor, branches, { collapsible: false })}
+        ${hodlMsigBip388Field()}
       `, "account-watch-section")}
       ${hodlMsigGroupMarkup("addresses", hodlT("Addresses"), `
         <p class="edge-note is-public">${hodlT("Verify the first selected address on every signing device before accepting bitcoin.")}</p>
