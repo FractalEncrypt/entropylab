@@ -26,8 +26,6 @@ import { hex } from "./coders.js";
 import { t, tHtml as hodlT } from "./i18n.js";
 import { privateCopyButtonHtml } from "./private-data.js";
 import { publicFieldHtml, publicValueHtml } from "./public-data.js";
-import { detectHsmSecretType, readClnMnemonic, deriveClnNode, HSM_SECRET_PLAIN, HSM_SECRET_ENCRYPTED, HSM_SECRET_MNEMONIC_WITH_PASS, HSM_SECRET_INVALID } from "./hsm-secret.js";
-import * as hodlHashes from "./hashes.js";
 
 // ── Derivations (DOM-free, unit-tested directly) ────────────────────────────
 
@@ -213,7 +211,7 @@ let hodlLnCopyIcon = () => "";
 // normalizing or deriving.
 const LN_SEED_MAX_LENGTH = 4096;
 
-const hodlLnClearResult = () => {
+export function hodlLnWipeMem() {
   if (hodlLnLast) {
     if (hodlLnLast.entropy) hodlLnLast.entropy.fill(0);
     if (hodlLnLast.salt) hodlLnLast.salt.fill(0);
@@ -230,12 +228,7 @@ export function hodlLnWipeMem() {
   hodlLnHsmMnemonic = null;
 }
 
-const hodlLnFormat = () => {
-  const value = document.getElementById("ln-format")?.value;
-  if (value === "bip39") return "bip39";
-  if (value === "cln-hsm") return "cln-hsm";
-  return "aezeed";
-};
+const hodlLnFormat = () => (document.getElementById("ln-format")?.value === "bip39" ? "bip39" : "aezeed");
 const hodlLnCoinType = () => (document.getElementById("ln-network")?.value === "testnet" ? 1 : 0);
 const hodlLnNetworkName = () => (document.getElementById("ln-network")?.value === "testnet" ? "testnet" : "bitcoin");
 
@@ -340,8 +333,7 @@ function hodlRunLn() {
   const error = document.getElementById("ln-error");
   const session = document.getElementById("ln-session");
   error.textContent = "";
-  error.dataset.code = "";
-  hodlLnClearResult();
+  hodlLnWipeMem();
   const format = hodlLnFormat();
   try {
     const text = String(document.getElementById("ln-seed").value || "");
@@ -399,7 +391,7 @@ function hodlRunLn() {
     session.textContent = t("Node key derived. Decoded key material stays in page memory until you clear it.");
     hodlLnJournalLog("derive", `${format} ${hodlLnLast.nodePubKey.slice(0, 8)}`, "ln");
   } catch (exception) {
-    hodlLnClearResult();
+    hodlLnWipeMem();
     hodlLnRender();
     // Keyed errors (aezeed.js taxonomy, the validations above) format and
     // translate through t(); anything else shows its raw message.
@@ -500,30 +492,6 @@ export function hodlInitLn({ journalLog, copyIcon = () => "" } = {}) {
   if (!go) return;
   if (typeof journalLog === "function") hodlLnJournalLog = journalLog;
   hodlLnCopyIcon = copyIcon;
-  // The shell owns the CLN controls (#ln-hsm-upload / #ln-hsm-file); the
-  // tool only wires them. A page without them (the LND/LDK fixtures, and any
-  // shell that predates C2) must behave exactly as before: no CLN-only code
-  // runs, and no format option is invented.
-  const upload = document.getElementById("ln-hsm-upload");
-  const hsmFile = document.getElementById("ln-hsm-file");
-  if (upload && hsmFile) {
-    upload.onclick = () => hsmFile.click();
-    hsmFile.onchange = hodlLnReadHsmFile;
-  }
-  // Typing is the most recent entry too: drop the held file mnemonic and its
-  // status line so Derive cannot silently use the file instead of the words.
-  // Only when a file mnemonic is held, so the LND/LDK formats are untouched.
-  const seedField = document.getElementById("ln-seed");
-  if (seedField) {
-    seedField.addEventListener("input", () => {
-      if (!hodlLnHsmMnemonic) return;
-      hodlLnHsmMnemonic = null;
-      const file = document.getElementById("ln-hsm-file");
-      if (file) file.value = "";
-      const session = document.getElementById("ln-session");
-      if (session) session.textContent = "";
-    });
-  }
   go.onclick = hodlRunLn;
   document.getElementById("ln-wipe").onclick = () => {
     hodlLnWipeMem();
@@ -542,8 +510,6 @@ export function hodlInitLn({ journalLog, copyIcon = () => "" } = {}) {
       // wrong (a mainnet pubkey beside "Testnet"): wipe and re-render on any
       // format or network change.
       hodlLnWipeMem();
-      const file = document.getElementById("ln-hsm-file");
-      if (file) file.value = "";
       hodlLnRender();
       hodlLnSyncFormat();
     });
