@@ -849,6 +849,9 @@ function hodlCoreMixReset() {
     summary.hidden = true;
     summary.textContent = "";
   }
+  // Its error line goes too: a refusal for the dropped file must not linger.
+  let error = typeof document !== "undefined" ? document.getElementById("core-mix-error") : null;
+  if (error) error.textContent = "";
 }
 function hodlCoreMixShowError(message) {
   let error = document.getElementById("core-mix-error");
@@ -4697,7 +4700,7 @@ function hodlCoreMixSelectedEntropy(targetWords = hodlTargetWordCount) {
   } catch (error) {
     return { ok: false, error: hodlNote(error.message || String(error)) };
   }
-  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's {count} spend secrets and the {source} transcript; the first {bits} bits of that hash become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
+  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's spend secrets ({count}) and the {source} transcript; the first {bits} bits of that hash become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
   return { ok: true, bytes, hex: hodlHex.encode(bytes), bits: config.bits, sourceBits, method: "core-wallet-mix-v1", notes, warnings };
 }
 function hodlUpdateCards() {
@@ -6888,7 +6891,7 @@ function hodlRenderKeyForm() {
       (async () => {
         let bytes = null;
         try {
-          if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlT("This wallet file is too large to inspect safely."));
+          if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlTText("This wallet file is too large to inspect safely."));
           bytes = new Uint8Array(await chosen.arrayBuffer());
           if (stale()) return;
           hodlCoreMixLoadBytes(bytes, chosen.name);
@@ -6907,7 +6910,7 @@ function hodlRenderKeyForm() {
       hodlCoreMixSource = sourceSelect.value === "cards" ? "cards" : "dice";
       if (state) state.coreMixSource = hodlCoreMixSource;
       let helpEl = document.getElementById("core-mix-transcript-help");
-      if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlT("Two characters per card, rank then suit (AS 7H TD …).") : hodlT("Faces 1–6, as many rolls as the dice method recommends.");
+      if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlTText("Two characters per card, rank then suit (AS 7H TD …).") : hodlTText("Faces 1–6, as many rolls as the dice method recommends.");
       // A stale result, or a derivation still running on the old source, must
       // not survive the change.
       hodlInvalidateDerivation();
