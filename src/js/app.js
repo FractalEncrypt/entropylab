@@ -2462,48 +2462,6 @@ function hodlDownloadCoreImportDescriptors(scope = "msig") {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1e3);
 }
-// The public-only package an independent Bitcoin Core tool checks: the same
-// watch-only units the Core JSON exports, plus the displayed addresses. Rows
-// are read as { index, address } only; their private getters stay untouched.
-function hodlVerificationPackageJson(scope = "msig") {
-  const core = hodlCoreDescriptorUnits(scope);
-  if (!core) return "";
-  const network = scope === "calc" ? core.wallet.network ?? hodlWalletResult.network : hodlWalletResult.network;
-  const masterFingerprint = scope === "calc" ? core.wallet.masterFingerprint ?? hodlWalletResult.masterFingerprint ?? null : null;
-  const rows = (branch) => core.wallet.addressBranches?.find((entry) => entry.branch === branch)?.rows ?? (branch === 0 ? core.wallet.receive : core.wallet.change) ?? [];
-  const addresses = (branch) => rows(branch).map((row) => ({ index: row.index, address: row.address })).sort((a, b) => a.index - b.index);
-  return buildVerificationPackage({
-    network,
-    masterFingerprint,
-    descriptors: core.units.map((unit) => unit.descriptor),
-    xpubs: scope === "calc" ? [core.wallet.xpub].filter((xpub) => typeof xpub === "string" && xpub) : hodlWalletResult.xpubs,
-    receiveAddresses: addresses(0),
-    changeAddresses: addresses(1),
-  });
-}
-function hodlDownloadVerificationPackage(scope = "msig") {
-  hodlCoreImportDescriptorsError(scope, null);
-  let json = "";
-  let filename = "";
-  try {
-    json = hodlVerificationPackageJson(scope);
-    if (!json) return;
-    const core = hodlCoreDescriptorUnits(scope);
-    if (!core) return;
-    const network = scope === "calc" ? core.wallet.network ?? hodlWalletResult.network : hodlWalletResult.network;
-    const masterFingerprint = scope === "calc" ? core.wallet.masterFingerprint ?? hodlWalletResult.masterFingerprint ?? null : null;
-    filename = verificationPackageFilename({ network, masterFingerprint });
-  } catch (error) {
-    hodlCoreImportDescriptorsError(scope, hodlErrorSpecFrom(error));
-    return;
-  }
-  let blob = new Blob([json], { type: "application/json" }), url = URL.createObjectURL(blob), link = document.createElement("a");
-  json = "";
-  link.href = url;
-  link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1e3);
-}
 function hodlMsigBip388PolicyText() {
   if (!hodlWalletResult || hodlWalletResult.kind !== "msig") return "";
   if (!hodlWalletResult.receiveDescriptor) return "";
