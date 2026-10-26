@@ -97,7 +97,7 @@ function vaultEntry(entry, exporting = false) {
     "globalSyncSource", "globalSyncBitCount", "seedAutocomplete",
     "passphraseBip39Words", "brainWalletOutput", "passphraseAutocomplete",
     "brainWalletTrim", "showCards", "showDiceFairness", "showNumberBaseCalculations",
-    "targetWords", "diceCoinPositions", "lastWord", "dplusLastWord", "accountId", "coreMixSource", "fields",
+    "targetWords", "diceCoinPositions", "lastWord", "dplusLastWord", "accountId", "fields",
   ]) {
     if (Object.prototype.hasOwnProperty.call(entry, field) && entry[field] !== undefined) copy[field] = JSON.parse(JSON.stringify(entry[field]));
   }
@@ -113,9 +113,7 @@ function vaultEntry(entry, exporting = false) {
     copy.fields.network = entry.result.network;
   }
   if (!exporting && vaultModes && !vaultModes.includes(copy.mode ?? "dice")) throw new Error("The key file contains an invalid key.");
-  // The core-wallet source picks how the transcript is parsed: only the two
-  // sources the method knows may cross the boundary.
-  if (!exporting && Object.hasOwn(copy, "coreMixSource") && copy.coreMixSource !== "dice" && copy.coreMixSource !== "cards") throw new Error("The key file contains an invalid key.");
+
   copy.name = String(copy.name || "Imported key").trim().replace(/\s+/g, " ").slice(0, 120) || "Imported key";
   copy.reveal = false;
   copy.result = null;
