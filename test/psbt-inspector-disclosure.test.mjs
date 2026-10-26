@@ -559,7 +559,10 @@ test("a single-signature PSBT whose only nonce gap is the count is not amber", (
 });
 
 test("a single-signature PSBT with an unsupported signature still counts", () => {
-  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope({ hodlPrivForPub: () => null, hodlPrivFromPath: () => null }));
+  // The input script is one this inspection cannot rebuild a digest for, so
+  // the signature really is unchecked: a coverage gap, not "nothing to
+  // compare". The missing session key alone must not hide it either.
+  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope({ hodlPrivForPub: () => null, hodlPrivFromPath: () => null, hodlInputScriptCode: () => null }));
   const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
   assert.equal(state, "incomplete", "a signature that could not be checked is a real coverage gap");
   assert.ok(!html.includes("data-incomplete-reason='nothing-to-compare'"));
@@ -569,6 +572,21 @@ test("the audit fixture shows no amber overall line above a green audit verdict"
   const html = renderPsbt(psbtFixture(), {}, oneSignatureScope());
   const analysis = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
   assert.equal(overallState({ tier: "pass", analysis }), "ok");
+});
+
+// The signer-audit fixture (returnedClean): one P2WPKH input signed by one
+// key with SIGHASH_ALL, a witness_utxo, and no session key loaded. Its only
+// nonce gap is that one signature has nothing to compare with; the missing
+// session key blocks RFC 6979 but is not a gap in the file.
+test("the audit fixture's single signature with no key is nothing to compare", () => {
+  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope({ hodlPrivForPub: () => null, hodlPrivFromPath: () => null }));
+  const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.notEqual(state, "incomplete", "one signature with no key is nothing to compare, not a coverage gap");
+  assert.ok(!html.includes("ANALYSIS INCOMPLETE"));
+  const nonceRow = html.split("<li ").find((row) => row.includes("Nonce analysis"));
+  assert.ok(nonceRow, "the Nonce row is rendered");
+  assert.ok(nonceRow.startsWith("data-psbt-check-state='incomplete'"), "the row still reads Incomplete");
+  assert.ok(nonceRow.includes("data-incomplete-reason='nothing-to-compare'"), "the row carries the reason");
 });
 
 test("the glance line counts an output the ownership warning treats as ours", () => {

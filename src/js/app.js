@@ -13355,6 +13355,12 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     policyProblems = 0,
     policyIncomplete = 0,
     unsupportedNonceChecks = 0,
+    // Signatures whose digest was reconstructed and whose r value was
+    // compared, but whose RFC 6979 nonce could not be recomputed because no
+    // session key matches. That is the no-key case, not an unsupported
+    // script: it keeps the row Incomplete without blocking the "nothing to
+    // compare" exclusion (owner, 2026-10-26).
+    nonceKeyMissing = 0,
     rfcTotal = 0,
     rfcChecked = 0,
     rfcMismatched = 0,
@@ -13762,8 +13768,17 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             message = hodlT("Matching key found, but this input script is not yet supported for RFC 6979 comparison.");
             className = "psbt-warn";
             unsupportedNonceChecks += 1;
-          } else if (!privateKey || !sighash) {
+          } else if (!sighash) {
+            // No digest could be reconstructed (unsupported script, a policy
+            // other than SIGHASH_ALL, or the per-file budget): a real gap.
             unsupportedNonceChecks += 1;
+          } else if (!privateKey) {
+            // The digest was reconstructed from the witness UTXO and the r
+            // value was compared; only the session key is missing, so RFC
+            // 6979 cannot be recomputed. Counting that as an unsupported
+            // nonce check made a one-signature, no-key PSBT (the signer-audit
+            // fixture) amber although its only gap is "nothing to compare".
+            nonceKeyMissing += 1;
           }
         }
       } finally {
@@ -13936,11 +13951,15 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // so each family needs two comparable signatures of its own: one of each
   // is not a clean result (DeepSeek's red-team of #1051, F1).
   let schnorrCompared = schnorrRecords.length - schnorrIncomplete;
-  let nonceIncomplete = uninspected || schnorrIncomplete || tapUninspected || unsupportedNonceChecks || crossKey.length || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
+  let nonceIncomplete = uninspected || schnorrIncomplete || tapUninspected || unsupportedNonceChecks || nonceKeyMissing || crossKey.length || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
   // A nonce check that is incomplete only because there is nothing to
   // compare (one comparable signature, or none) is the no-key case's
   // sibling: the row still reads Incomplete, but the overall line does not
   // count it (owner, 2026-10-26). Any other cause keeps the check counting.
+  // A signature whose only missing piece is the session key (nonceKeyMissing)
+  // is not such a cause: its r was compared, and the missing key is the
+  // no-key case the overall line already ignores. It still makes the row
+  // Incomplete, so a PSBT with two or more signatures and no key stays amber.
   let nonceNothingToCompare = !possible.length && !uninspected && !schnorrIncomplete && !tapUninspected && !unsupportedNonceChecks && !crossKey.length && (rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0);
   let nonceVerdict = reused.length || schnorrReused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
   if (view !== "inspect" && options?.record !== false) hodlPsbtRecordNonceInspection("psbt", rValues, nonceSourceTag, nonceVerdict, nonceCheckedAt);
