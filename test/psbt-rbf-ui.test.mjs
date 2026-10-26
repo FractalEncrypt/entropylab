@@ -1,4 +1,4 @@
-// Tests for the preview RBF fee-bump check in the PSBT Inspector: the
+// Tests for the RBF fee-bump check in the PSBT Inspector: the
 // hodlPsbtPrependRbfCheck wiring in src/js/app.js over the real
 // checkRbfReplacement from src/js/psbt-rbf-check.js. The screen defends
 // against Electrum GHSA-6jp4-8v48-cc5v — a malicious server handing the

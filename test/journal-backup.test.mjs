@@ -1312,6 +1312,9 @@ test("a key file or journal backup naming a method this build does not offer is 
     assert.equal(parseKeyVault(serializeKeyVault([managedKey({ mode: "corewallet", coreMixSource: "cards" })])).keys[0].mode, "corewallet");
     assert.equal(parseKeyVault(serializeKeyVault([managedKey({ mode: "dice" })])).keys[0].mode, "dice");
     assert.equal(parseKeyVault(serializeKeyVault([managedKey()])).keys.length, 1, "a key with no mode stays the default dice method");
+    // A real method the build leaves out is refused the same way.
+    setKeyVaultModes(RELEASE_MODES.filter((mode) => mode !== "corewallet"));
+    assert.throws(() => parseKeyVault(serializeKeyVault([managedKey({ mode: "corewallet", coreMixSource: "cards" })])), /invalid key/);
   } finally {
     setKeyVaultModes(null);
   }
