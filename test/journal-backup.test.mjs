@@ -1333,3 +1333,31 @@ test("app.js hands the import boundary the methods this build offers, after the 
   const set = app.indexOf("setKeyVaultModes(hodlKeyModes)");
   assert.ok(gate > 0 && set > gate, "setKeyVaultModes runs after the preview-only method is (or is not) added");
 });
+
+test("the release build's own method list refuses core-wallet keys, the preview list accepts them", () => {
+  // Read the shipped list from app.js (not a hand-written copy), then apply
+  // the preview gate both ways, exactly as app.js does before calling
+  // setKeyVaultModes.
+  const app = read("src/js/app.js");
+  const literal = app.match(/^var hodlKeyModes = (\[[^\]]*\])/m);
+  assert.ok(literal, "app.js declares hodlKeyModes as an array literal");
+  const release = JSON.parse(literal[1]);
+  assert.ok(!release.includes("corewallet"), "the release list does not offer the preview-only method");
+  const exported = serializeKeyVault([managedKey({ mode: "corewallet", coreMixSource: "dice" })]);
+  try {
+    setKeyVaultModes(release);
+    assert.throws(() => parseKeyVault(exported), /invalid key/);
+    setKeyVaultModes([...release, "corewallet"]);
+    assert.equal(parseKeyVault(exported).keys[0].mode, "corewallet");
+  } finally {
+    setKeyVaultModes(null);
+  }
+});
+
+test("a core-wallet source other than dice or cards is refused at import", () => {
+  for (const source of ["hex", "", 1, null, { toString: () => "dice" }]) {
+    const exported = serializeKeyVault([managedKey({ mode: "corewallet", coreMixSource: source })]);
+    assert.throws(() => parseKeyVault(exported), /invalid key/, `coreMixSource ${JSON.stringify(source)} must be refused`);
+  }
+  assert.equal(parseKeyVault(serializeKeyVault([managedKey({ mode: "corewallet", coreMixSource: "cards" })])).keys[0].coreMixSource, "cards");
+});
