@@ -1317,6 +1317,22 @@ test("a key file or journal backup naming a method this build does not offer is 
   }
 });
 
+test("a key that kept the retired Core mix transcript imports without it", () => {
+  // A key switched from the removed method to dice still carried its
+  // transcript; nothing would show, use or clear it after import.
+  const fields = { derivationPath: "m/84'/0'/0'/0/0", dice: "123456", coreMixTranscript: "415263415263" };
+  setKeyVaultModes(RELEASE_MODES);
+  try {
+    const [restored] = parseKeyVault(serializeKeyVault([managedKey({ mode: "dice", fields })])).keys;
+    assert.equal(restored.mode, "dice");
+    assert.equal(restored.fields.dice, "123456");
+    assert.equal(Object.hasOwn(restored.fields, "coreMixTranscript"), false);
+    assert.equal(serializeKeyVault([managedKey({ mode: "dice", fields })]).includes("415263415263"), false, "an export carried the retired transcript");
+  } finally {
+    setKeyVaultModes(null);
+  }
+});
+
 test("the Core wallet.dat mix method is gone from the source", () => {
   const app = read("src/js/app.js");
   for (const token of ["corewallet", "coreMix", "CoreMix", "core-mix"]) {

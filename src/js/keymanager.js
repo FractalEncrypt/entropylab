@@ -113,6 +113,10 @@ function vaultEntry(entry, exporting = false) {
     copy.fields.network = entry.result.network;
   }
   if (!exporting && vaultModes && !vaultModes.includes(copy.mode ?? "dice")) throw new Error("The key file contains an invalid key.");
+  // The retired Core wallet.dat mix kept its dice/card transcript here. A key
+  // switched to another method still carried it; nothing shows, uses or
+  // clears it any more, so it never crosses the boundary in either direction.
+  if (copy.fields) delete copy.fields.coreMixTranscript;
 
   copy.name = String(copy.name || "Imported key").trim().replace(/\s+/g, " ").slice(0, 120) || "Imported key";
   copy.reveal = false;
