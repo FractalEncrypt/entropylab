@@ -26,6 +26,8 @@ import { hex } from "./coders.js";
 import { t, tHtml as hodlT } from "./i18n.js";
 import { privateCopyButtonHtml } from "./private-data.js";
 import { publicFieldHtml, publicValueHtml } from "./public-data.js";
+import { detectHsmSecretType, readClnMnemonic, deriveClnNode, HSM_SECRET_PLAIN, HSM_SECRET_ENCRYPTED, HSM_SECRET_MNEMONIC_WITH_PASS, HSM_SECRET_INVALID } from "./hsm-secret.js";
+import * as hodlHashes from "./hashes.js";
 import { bolt11Decode } from "./bolt11.js";
 import { bolt12Decode, bolt12RecipientVisibility } from "./bolt12.js";
 
@@ -213,7 +215,7 @@ let hodlLnCopyIcon = () => "";
 // normalizing or deriving.
 const LN_SEED_MAX_LENGTH = 4096;
 
-export function hodlLnKeyWipeMem() {
+const hodlLnClearResult = () => {
   if (hodlLnLast) {
     if (hodlLnLast.entropy) hodlLnLast.entropy.fill(0);
     if (hodlLnLast.salt) hodlLnLast.salt.fill(0);
@@ -225,20 +227,27 @@ export function hodlLnKeyWipeMem() {
   hodlLnReveal = false;
 };
 
-export function hodlLnWipeMem() {
+// The key side: the derived result and any held hsm_secret words. A
+// format, network or coin-type change calls this; the pasted invoice
+// survives it.
+export function hodlLnKeyWipeMem() {
   hodlLnClearResult();
   hodlLnHsmMnemonic = null;
 }
 
 // The full wipe: key material and the pasted invoice. Clear, End Session
-// and pagehide call this; a format, network or coin-type change only wipes
-// the key side (hodlLnKeyWipeMem), so a pasted invoice survives it.
+// and pagehide call this.
 export function hodlLnWipeMem() {
   hodlLnKeyWipeMem();
   hodlLnInvWipeMem();
 }
 
-const hodlLnFormat = () => (document.getElementById("ln-format")?.value === "bip39" ? "bip39" : "aezeed");
+const hodlLnFormat = () => {
+  const value = document.getElementById("ln-format")?.value;
+  if (value === "bip39") return "bip39";
+  if (value === "cln-hsm") return "cln-hsm";
+  return "aezeed";
+};
 const hodlLnCoinType = () => (document.getElementById("ln-network")?.value === "testnet" ? 1 : 0);
 const hodlLnNetworkName = () => (document.getElementById("ln-network")?.value === "testnet" ? "testnet" : "bitcoin");
 
@@ -343,7 +352,8 @@ function hodlRunLn() {
   const error = document.getElementById("ln-error");
   const session = document.getElementById("ln-session");
   error.textContent = "";
-  hodlLnKeyWipeMem();
+  error.dataset.code = "";
+  hodlLnClearResult();
   const format = hodlLnFormat();
   try {
     const text = String(document.getElementById("ln-seed").value || "");
@@ -401,7 +411,7 @@ function hodlRunLn() {
     session.textContent = t("Node key derived. Decoded key material stays in page memory until you clear it.");
     hodlLnJournalLog("derive", `${format} ${hodlLnLast.nodePubKey.slice(0, 8)}`, "ln");
   } catch (exception) {
-    hodlLnKeyWipeMem();
+    hodlLnClearResult();
     hodlLnRender();
     // Keyed errors (aezeed.js taxonomy, the validations above) format and
     // translate through t(); anything else shows its raw message.
@@ -740,6 +750,30 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
   if (clear) clear.onclick = () => hodlLnInvWipeMem();
   const go = document.getElementById("ln-go");
   if (!go) return;
+  // The shell owns the CLN controls (#ln-hsm-upload / #ln-hsm-file); the
+  // tool only wires them. A page without them (the LND/LDK fixtures, and any
+  // shell that predates C2) must behave exactly as before: no CLN-only code
+  // runs, and no format option is invented.
+  const upload = document.getElementById("ln-hsm-upload");
+  const hsmFile = document.getElementById("ln-hsm-file");
+  if (upload && hsmFile) {
+    upload.onclick = () => hsmFile.click();
+    hsmFile.onchange = hodlLnReadHsmFile;
+  }
+  // Typing is the most recent entry too: drop the held file mnemonic and its
+  // status line so Derive cannot silently use the file instead of the words.
+  // Only when a file mnemonic is held, so the LND/LDK formats are untouched.
+  const seedField = document.getElementById("ln-seed");
+  if (seedField) {
+    seedField.addEventListener("input", () => {
+      if (!hodlLnHsmMnemonic) return;
+      hodlLnHsmMnemonic = null;
+      const file = document.getElementById("ln-hsm-file");
+      if (file) file.value = "";
+      const session = document.getElementById("ln-session");
+      if (session) session.textContent = "";
+    });
+  }
   go.onclick = hodlRunLn;
   document.getElementById("ln-wipe").onclick = () => {
     hodlLnWipeMem();
@@ -758,7 +792,11 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
       // wrong (a mainnet pubkey beside "Testnet"): wipe and re-render on any
       // format or network change. The invoice card is not key material: it
       // survives, and is re-rendered so its network warning matches the page.
+      // The key side includes a held hsm_secret file's words, so the file
+      // input goes too.
       hodlLnKeyWipeMem();
+      const file = document.getElementById("ln-hsm-file");
+      if (file) file.value = "";
       hodlLnRender();
       hodlLnSyncFormat();
       hodlLnInvRender();
