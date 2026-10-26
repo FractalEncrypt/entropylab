@@ -2622,7 +2622,7 @@ test("Update key carries the fingerprint and LifeHash with it: rows show the res
   // A passphrase-grind row is its own seed, so its fingerprint is computed
   // from the key's words once and rendered with a LifeHash; an account row
   // keeps the key's fingerprint.
-  assert.match(vanityController, /function hodlVanityMatchFingerprint\(match, run\) \{[\s\S]*?if \(run\.method !== "passphrase"\) return \(match\.fingerprint = run\.sourceLabel\);[\s\S]*?hodlMnemonicToSeed\(mnemonic, match\.passphrase\)[\s\S]*?hodlFingerprintHex\(root\.fingerprint\)/);
+  assert.match(vanityController, /function hodlVanityMatchFingerprint\(match, run\) \{[\s\S]*?if \(run\.method !== "passphrase"\) return \(match\.fingerprint = run\.sourceLabel\);[\s\S]*?hodlSeedFromEntropy\(state\.result\.entropy, match\.passphrase\)[\s\S]*?hodlFingerprintHex\(root\.fingerprint\)/);
   assert.match(vanityController, /box\.querySelectorAll\("img\[data-vanity-lifehash\]"\)\.forEach\(\(image\) => hodlFillKeyTabLifehash\(image, image\.dataset\.vanityLifehash\)\);/);
   // The shared LifeHash filler tags the image with the fingerprint it was
   // asked for and lets only the latest request paint.
