@@ -462,6 +462,9 @@ function hodlRunLn() {
     hodlLnWorker?.worker.postMessage({ type: "drop" });
     hodlLnClearResult();
     hodlLnRender();
+    // As for a worker refusal: the status says what is left.
+    const session = document.getElementById("ln-session");
+    if (session) session.textContent = hodlLnHsmLoaded ? t("hsm_secret read. Press Derive.") : t("No node key derived. Enter a seed phrase and derive.");
     hodlLnShowError(error, exception);
     hodlLnJournalLog("derive-error", format, "ln");
   }

@@ -815,6 +815,12 @@ test("a successful derive reports the isolated-worker status", () => {
     assert.equal(page.getElementById("ln-error").textContent, "", "the derive reported an error");
     const status = page.getElementById("ln-session").textContent;
     assert.ok(status.length > 0 && status !== idle, "the derive left the status on the idle line");
+    // A page-side refusal then drops the result, and the status goes back to
+    // the idle line instead of still claiming a derived key.
+    page.getElementById("ln-seed").value = `${AEZEED_VECTOR_WORDS} ${"1!".repeat(3000)}`;
+    lnDerive(page);
+    assert.ok(page.getElementById("ln-error").textContent.length > 0, "the oversized paste was not refused");
+    assert.equal(page.getElementById("ln-session").textContent, idle, "a refused derive left the derived-key status");
   } finally {
     delete globalThis.document;
   }
