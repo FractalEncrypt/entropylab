@@ -837,6 +837,13 @@ function hodlCoreMixReset() {
   hodlCoreMixGeneration++;
   if (hodlCoreMix) wipeCoreMixSecrets(hodlCoreMix.secrets);
   hodlCoreMix = null;
+  // The summary describes the holder just dropped (End Session, a tab switch):
+  // it must not stay on screen as if a wallet were still loaded.
+  let summary = typeof document !== "undefined" ? document.getElementById("core-mix-summary") : null;
+  if (summary) {
+    summary.hidden = true;
+    summary.textContent = "";
+  }
 }
 function hodlCoreMixShowError(message) {
   let error = document.getElementById("core-mix-error");

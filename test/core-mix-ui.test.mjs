@@ -242,13 +242,25 @@ test("loading a new file wipes the previous wallet's secrets", () => {
   wipeCoreMixSecrets(context.hodlCoreMix.secrets);
 });
 
-test("the reset zeroes every secret and drops the holder", () => {
+test("the held secrets survive the load's document wipe", () => {
   const { context } = loadContext();
   assert.equal(context.hodlCoreMixLoadBytes(walletBytes(GENERATED_ROWS), "wallet.dat"), true);
+  const { secrets } = context.hodlCoreMix;
+  assert.ok(secrets.length > 0);
+  for (const secret of secrets) assert.ok(secret.length === 32 && secret.some((byte) => byte !== 0), "a held secret is not zeroed by the document wipe");
+  wipeCoreMixSecrets(secrets);
+});
+
+test("the reset zeroes every secret, drops the holder and hides its summary", () => {
+  const { context, elements } = loadContext();
+  assert.equal(context.hodlCoreMixLoadBytes(walletBytes(GENERATED_ROWS), "wallet.dat"), true);
+  assert.equal(elements["core-mix-summary"].hidden, false);
   const secrets = context.hodlCoreMix.secrets;
   context.hodlCoreMixReset();
   assert.equal(context.hodlCoreMix, null);
   for (const secret of secrets) assert.ok(secret.every((byte) => byte === 0));
+  assert.equal(elements["core-mix-summary"].hidden, true, "the dropped wallet's summary is hidden");
+  assert.equal(elements["core-mix-summary"].textContent, "");
 });
 
 test("the active key's wipe drops the wallet secrets", () => {
