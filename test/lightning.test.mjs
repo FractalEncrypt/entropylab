@@ -424,6 +424,52 @@ test("a type-2 hsm_secret file derives the same node id and zeroes the bytes", a
   }
 });
 
+test("a chosen hsm_secret file wins over words typed before it", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-format").value = "cln-hsm";
+    // A valid 12-word mnemonic that is not the file's: if the typed words
+    // still won, the node id would be this one's, not CLN_NODE_ID.
+    page.getElementById("ln-seed").value = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    const fileInput = page.getElementById("ln-hsm-file");
+    fileInput.files = [{ arrayBuffer: async () => clnType2File(CLN_ABANDON).buffer }];
+    await fileInput.onchange();
+    assert.equal(page.getElementById("ln-seed").value, "", "the file load left the typed words in #ln-seed");
+    lnDerive(page);
+    assert.equal(page.getElementById("ln-error").textContent, "", "the derive reported an error");
+    assert.ok(page.getElementById("ln-out").innerHTML.includes(CLN_NODE_ID), "Derive used the typed words, not the chosen file");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("words typed after a chosen hsm_secret file win, and the file mnemonic is dropped", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-format").value = "cln-hsm";
+    const fileInput = page.getElementById("ln-hsm-file");
+    fileInput.files = [{ arrayBuffer: async () => clnType2File(CLN_ABANDON).buffer }];
+    await fileInput.onchange();
+    assert.ok(page.getElementById("ln-session").textContent.length > 0, "the file load did not report its status");
+    const seed = page.getElementById("ln-seed");
+    seed.value = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    seed.dispatchEvent(new Event("input"));
+    assert.equal(page.getElementById("ln-session").textContent, "", "typing left the hsm_secret read status on screen");
+    lnDerive(page);
+    assert.equal(page.getElementById("ln-error").textContent, "", "the derive reported an error");
+    const html = page.getElementById("ln-out").innerHTML;
+    assert.ok(!html.includes(CLN_NODE_ID), "Derive used the file mnemonic, not the typed words");
+    assert.ok(html.includes('id="ln-node-pubkey"'), "the typed words rendered no node key");
+    // The held file mnemonic is gone: with the words cleared, Derive has
+    // nothing to use and refuses.
+    seed.value = "";
+    lnDerive(page);
+    assert.equal(page.getElementById("ln-error").dataset.code, "hsm-secret-missing", "the file mnemonic was still held after typing");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
 test("the CLN file path refuses type 3, encrypted, plain and invalid files with keyed errors", async () => {
   const withPassphrase = clnType2File(CLN_ABANDON);
   withPassphrase[0] = 0x42;
@@ -489,9 +535,26 @@ test("the CLN network field selects the test-network address prefix and key vers
     page.getElementById("ln-seed").value = CLN_ABANDON;
     lnDerive(page);
     assert.equal(page.getElementById("ln-error").textContent, "", "the derive reported an error");
-    const html = page.getElementById("ln-out").innerHTML;
+    let html = page.getElementById("ln-out").innerHTML;
     assert.ok(html.includes("tpub"), "the testnet descriptors do not use tpub");
     for (const address of clnExpectedAddresses(CLN_ABANDON, "testnet")) assert.ok(html.includes(address), `address ${address} is not on screen`);
+    // The account xprv is hidden until revealed; its version byte must be
+    // testnet's (tprv), not mainnet's (xprv).
+    const reveal = page.getElementById("ln-reveal");
+    reveal.checked = true;
+    reveal.dispatchEvent(new Event("change"));
+    assert.match(page.getElementById("ln-out").innerHTML, /id="ln-root-xprv"[^>]*>tprv/, "the testnet account xprv does not use tprv");
+    // Mainnet: the same seed, the other version bytes.
+    page.getElementById("ln-network").value = "mainnet";
+    page.getElementById("ln-network").dispatchEvent(new Event("change"));
+    page.getElementById("ln-seed").value = CLN_ABANDON;
+    lnDerive(page);
+    html = page.getElementById("ln-out").innerHTML;
+    assert.match(html, /wpkh\(xpub/, "the mainnet descriptors do not use xpub");
+    const mainReveal = page.getElementById("ln-reveal");
+    mainReveal.checked = true;
+    mainReveal.dispatchEvent(new Event("change"));
+    assert.match(page.getElementById("ln-out").innerHTML, /id="ln-root-xprv"[^>]*>xprv/, "the mainnet account xprv does not use xprv");
   } finally {
     delete globalThis.document;
   }
@@ -528,13 +591,15 @@ test("hodlLnWipeMem drops the CLN result so a re-render shows nothing", () => {
   }
 });
 
-test("the CLN result carries the not-a-channel-backup line", () => {
+test("the CLN result carries the not-a-channel-backup note", () => {
   const page = lnPage();
   try {
     page.getElementById("ln-format").value = "cln-hsm";
     page.getElementById("ln-seed").value = CLN_ABANDON;
     lnDerive(page);
-    assert.ok(page.getElementById("ln-out").innerHTML.includes("Single key. This is not a channel backup."));
+    // The note's wording is translatable copy; the data attribute is the
+    // stable hook (AGENTS.md: tests never assert English text).
+    assert.ok(page.getElementById("ln-out").innerHTML.includes('data-ln-note="single-key"'), "the CLN result is missing its single-key note");
   } finally {
     delete globalThis.document;
   }

@@ -282,7 +282,7 @@ function hodlLnRender() {
     ? (r.network === "testnet" ? t("testnet") : t("mainnet"))
     : aezeed ? (r.coinType === 1 ? t("testnet") : t("mainnet")) : "";
   const pathNote = cln
-    ? ` · ${networkName}`
+    ? ` · ${escapeHtml(networkName)}`
     : aezeed
       ? ` · ${hodlT("coin type {coinType} ({network})", { coinType: r.coinType, network: networkName })}`
       : ` · ${hodlT("the LDK node identity does not depend on the network")}`;
@@ -308,7 +308,7 @@ function hodlLnRender() {
       <ul class="ln-addresses">${r.addresses.map((address, index) => `<li><span class="muted">${index}</span> ${publicValueHtml(address, { clipboard: true })}</li>`).join("")}</ul>` : "";
   output.innerHTML = `
     <div class="ln-result">
-      ${cln ? `<p class="muted">${hodlT("Single key. This is not a channel backup.")}</p>` : ""}
+      ${cln ? `<p class="muted" data-ln-note="single-key">${hodlT("Single key. This is not a channel backup.")}</p>` : ""}
       ${publicFieldHtml(nodeKeyLabel, r.nodePubKey, { id: "ln-node-pubkey", copyIcon: hodlLnCopyIcon })}
       <p class="muted">${pathLabel} ${publicValueHtml(r.path, { clipboard: false })}${pathNote}</p>
       ${detailNote}
@@ -465,6 +465,10 @@ async function hodlLnReadHsmFile() {
     }
     hodlLnClearResult();
     hodlLnHsmMnemonic = readClnMnemonic(bytes);
+    // The file is the most recent entry: drop any typed words so Derive
+    // cannot silently use them instead of the file the status line names.
+    const seed = document.getElementById("ln-seed");
+    if (seed) seed.value = "";
     if (error) {
       error.textContent = "";
       error.dataset.code = "";
@@ -505,6 +509,20 @@ export function hodlInitLn({ journalLog, copyIcon = () => "" } = {}) {
   if (upload && hsmFile) {
     upload.onclick = () => hsmFile.click();
     hsmFile.onchange = hodlLnReadHsmFile;
+  }
+  // Typing is the most recent entry too: drop the held file mnemonic and its
+  // status line so Derive cannot silently use the file instead of the words.
+  // Only when a file mnemonic is held, so the LND/LDK formats are untouched.
+  const seedField = document.getElementById("ln-seed");
+  if (seedField) {
+    seedField.addEventListener("input", () => {
+      if (!hodlLnHsmMnemonic) return;
+      hodlLnHsmMnemonic = null;
+      const file = document.getElementById("ln-hsm-file");
+      if (file) file.value = "";
+      const session = document.getElementById("ln-session");
+      if (session) session.textContent = "";
+    });
   }
   go.onclick = hodlRunLn;
   document.getElementById("ln-wipe").onclick = () => {
