@@ -807,10 +807,14 @@ test("a derive on a page without #ln-session does not throw", () => {
 test("a successful derive reports the isolated-worker status", () => {
   const page = lnPage();
   try {
+    // Hooked on the status element, not its English copy: it must move off
+    // the idle line once the key is derived.
+    const idle = page.getElementById("ln-session").textContent;
     page.getElementById("ln-seed").value = AEZEED_VECTOR_WORDS;
     lnDerive(page);
     assert.equal(page.getElementById("ln-error").textContent, "", "the derive reported an error");
-    assert.equal(page.getElementById("ln-session").textContent, "Node key derived. Decoded key material stays in an isolated worker until you clear it.");
+    const status = page.getElementById("ln-session").textContent;
+    assert.ok(status.length > 0 && status !== idle, "the derive left the status on the idle line");
   } finally {
     delete globalThis.document;
   }

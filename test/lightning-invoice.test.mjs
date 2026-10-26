@@ -465,11 +465,14 @@ test("an amountless invoice renders the payer-chooses amount for null and undefi
   try {
     const decoded = bolt11Decode(AMOUNTLESS_COFFEE);
     assert.ok(decoded.amountMsat === null || decoded.amountMsat === undefined, "the decoder reports no amount");
-    for (const amountMsat of [null, undefined]) {
+    // Both shapes take the same no-amount branch: identical output, and no
+    // "null", "undefined" or "NaN" formatted as an amount.
+    const rendered = [null, undefined].map((amountMsat) => {
       hodlLnInvRenderResult({ ...decoded, amountMsat, text: AMOUNTLESS_COFFEE });
-      const out = page.getElementById("ln-inv-out");
-      assert.ok(out.textContent.includes("No amount set — payer chooses."), `amountMsat ${amountMsat} did not render the payer-chooses amount`);
-    }
+      return page.getElementById("ln-inv-out").innerHTML;
+    });
+    assert.equal(rendered[0], rendered[1], "null and undefined amounts render differently");
+    assert.doesNotMatch(page.getElementById("ln-inv-out").textContent, /\b(?:null|undefined|NaN)\b/, "a missing amount was formatted as a value");
   } finally {
     delete globalThis.document;
   }

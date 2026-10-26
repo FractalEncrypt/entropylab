@@ -334,6 +334,11 @@ function hodlLnMessage(data) {
       hodlLnRun += 1;
     }
     hodlLnRender();
+    // The result is gone, and a refused load drops the held file: the status
+    // says what is left, never "Node key derived…" or a dropped file's
+    // "hsm_secret read…".
+    const session = document.getElementById("ln-session");
+    if (session) session.textContent = hodlLnHsmLoaded ? t("hsm_secret read. Press Derive.") : t("No node key derived. Enter a seed phrase and derive.");
     const error = document.getElementById("ln-error");
     if (error) hodlLnShowError(error, data.error);
     if (data.request === "load-hsm") {
@@ -382,7 +387,13 @@ function hodlLnEnsureWorker() {
     hodlLnHsmRun += 1;
     hodlLnHsmLoaded = false;
     hodlLnHsmPending = false;
+    // A read still in flight is superseded by the run bump and returns early,
+    // so its flags are cleared here or every later Derive would wait forever.
+    hodlLnHsmReading = false;
+    hodlLnHsmDeriveQueued = false;
     hodlLnClearResult();
+    const session = document.getElementById("ln-session");
+    if (session) session.textContent = t("No node key derived. Enter a seed phrase and derive.");
     hodlLnRender();
     const error = document.getElementById("ln-error");
     if (error) {
@@ -837,7 +848,8 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
     document.getElementById("ln-out").innerHTML = "";
     document.getElementById("ln-error").textContent = "";
     document.getElementById("ln-error").dataset.code = "";
-    document.getElementById("ln-session").textContent = t("Accessible fields were cleared (best effort).");
+    const session = document.getElementById("ln-session");
+    if (session) session.textContent = t("Accessible fields were cleared (best effort).");
   };
   for (const id of ["ln-format", "ln-network"]) {
     document.getElementById(id)?.addEventListener("change", () => {
