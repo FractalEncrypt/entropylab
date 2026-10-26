@@ -1856,7 +1856,6 @@
   "session-state": "état de session",
   "Opened session snapshot": "Instantané de session ouvert",
   "Opened debug log": "Journal de débogage ouvert",
-  "Download wallet.dat": "Télécharger wallet.dat",
   "Keep notes, reusable key inputs, and session history together. Download a complete backup, including private key inputs and recovery material, to keep your work before closing this page. A password protects your files; without one, anyone with the file can open them.": "Conservez ensemble les notes, les entrées de clé réutilisables et l'historique de session. Téléchargez une sauvegarde complète, y compris les entrées de clé privée et le matériel de récupération, pour conserver votre travail avant de fermer cette page. Un mot de passe protège vos fichiers ; sans lui, toute personne possédant le fichier peut les ouvrir.",
   "Download backup": "Télécharger la sauvegarde",
   "Journal sections": "Sections du Journal",
@@ -2098,5 +2097,18 @@
   "PSBT you sent (base64 or hex)": "PSBT envoyé (base64 ou hex)",
   "cHNidP8B…": "cHNidP8B…",
   "Change outputs": "Sorties de monnaie",
-  "Output {n} is change back to your wallet.": "La sortie {n} est une monnaie retournée à votre portefeuille."
+  "Output {n} is change back to your wallet.": "La sortie {n} est une monnaie retournée à votre portefeuille.",
+  "Download updated wallet.dat": "Télécharger wallet.dat mis à jour",
+  "Copy Core deriveaddresses": "Copier Core deriveaddresses",
+  "Paste into Bitcoin Core's console (Window → Console), or after bitcoin-cli. Core prints the addresses; they must match the ones shown here. Use a node on the same network.": "Collez dans la console de Bitcoin Core (Fenêtre → Console), ou après bitcoin-cli. Core imprime les adresses ; elles doivent correspondre à celles affichées ici. Utilisez un nœud sur le même réseau.",
+  "No duplicate derived keys detected in the first 20 addresses of each branch.": "Aucune clé dérivée en double détectée dans les 20 premières adresses de chaque branche.",
+  "Key {a} at {pathA} and key {b} at {pathB}": "Clé {a} à {pathA} et clé {b} à {pathB}",
+  "…and {count} more.": "…et {count} de plus.",
+  "Potential key reuse: this descriptor derives the same public key in more than one place": "Réutilisation potentielle de clé : ce descripteur dérive la même clé publique à plusieurs endroits",
+  "Check a descriptor for key reuse": "Vérifier un descripteur pour la réutilisation de clé",
+  "wsh(sortedmulti(2,[…]xpub…/<0;1>/*,…))": "wsh(sortedmulti(2,[…]xpub…/<0;1>/*,…))",
+  "Check": "Vérifier",
+  "BIP 388 wallet policy": "Politique de portefeuille BIP 388",
+  "Download verification package": "Télécharger le package de vérification",
+  "Public data only (descriptors, xpubs, addresses) for checking this wallet with an independent Bitcoin Core tool.": "Données publiques uniquement (descripteurs, xpubs, adresses) pour vérifier ce portefeuille avec un outil Bitcoin Core indépendant."
 }

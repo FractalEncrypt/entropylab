@@ -1722,7 +1722,6 @@
   "Wallet check result": "Resultado de la verificación de la billetera",
   "Upload a wallet.dat to view its records and checks here.": "Cargue un wallet.dat para ver sus registros y verificaciones aquí.",
   "Upload wallet.dat": "Cargar wallet.dat",
-  "Download wallet.dat": "Descargar wallet.dat",
   "End Session / Clear Fields": "Finalizar sesión / Borrar campos",
   "Derive all pending": "Derivar todo lo pendiente",
   "Reviewing {name} for {network}. Derive to verify these inputs. Use the Network menu to change the saved network.": "Revisando {name} para {network}. Derive para verificar estas entradas. Use el menú Red para cambiar la red guardada.",
@@ -2098,5 +2097,19 @@
   "Check what the signer changed (optional)": "Verifica qué cambió el firmante (opcional)",
   "Paste the PSBT exactly as you sent it to the signer, then Inspect again. The returned PSBT above is compared with it field by field — the transaction, the signatures, and every other value the signer touched — and the verdict appears on top of the inspection.": "Pega el PSBT exactamente como lo enviaste al firmante, luego presiona Inspeccionar nuevamente. El PSBT devuelto arriba se compara campo por campo con él — la transacción, las firmas y cualquier otro valor que el firmante haya tocado — y el veredicto aparece en la parte superior de la inspección.",
   "PSBT you sent (base64 or hex)": "PSBT que enviaste (base64 o hex)",
-  "cHNidP8B…": "cHNidP8B…"
+  "cHNidP8B…": "cHNidP8B…",
+  "Upload sent .psbt": "Subir .psbt enviado",
+  "Download updated wallet.dat": "Descargar wallet.dat actualizado",
+  "Copy Core deriveaddresses": "Copiar Core deriveaddresses",
+  "Paste into Bitcoin Core's console (Window → Console), or after bitcoin-cli. Core prints the addresses; they must match the ones shown here. Use a node on the same network.": "Pega en la consola de Bitcoin Core (Ventana → Consola), o después de bitcoin-cli. Core imprime las direcciones; deben coincidir con las que se muestran aquí. Usa un nodo en la misma red.",
+  "No duplicate derived keys detected in the first 20 addresses of each branch.": "No se detectaron claves derivadas duplicadas en las primeras 20 direcciones de cada rama.",
+  "Key {a} at {pathA} and key {b} at {pathB}": "Clave {a} en {pathA} y clave {b} en {pathB}",
+  "…and {count} more.": "...y {count} más.",
+  "Potential key reuse: this descriptor derives the same public key in more than one place": "Reutilización potencial de clave: este descriptor deriva la misma clave pública en más de un lugar",
+  "Check a descriptor for key reuse": "Verificar un descriptor para reutilización de clave",
+  "wsh(sortedmulti(2,[…]xpub…/<0;1>/*,…))": "wsh(sortedmulti(2,[…]xpub…/<0;1>/*,…))",
+  "Check": "Verificar",
+  "BIP 388 wallet policy": "Política de billetera BIP 388",
+  "Download verification package": "Descargar paquete de verificación",
+  "Public data only (descriptors, xpubs, addresses) for checking this wallet with an independent Bitcoin Core tool.": "Solo datos públicos (descriptores, xpubs, direcciones) para verificar esta billetera con una herramienta independiente de Bitcoin Core."
 }
