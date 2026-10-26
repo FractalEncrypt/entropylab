@@ -2660,3 +2660,12 @@ test("the gap-limit note shows from index 20 for both prefixes, through hodlTTex
   // An invalid window hides and clears the note.
   assert.match(fn, /catch \(error\) \{[\s\S]*?gapNote\.hidden = true;\s*gapNote\.textContent = "";/);
 });
+
+// The Core wallet.dat + dice/cards method was removed (owner, 2026-10-26: back
+// burner). The Core Wallet tab and its wallet.dat reader stay; the mix goes.
+test("the Core wallet.dat + dice/cards key method is gone", () => {
+  assert.doesNotMatch(appSource, /corewallet|coreMix|CoreMix|core-mix/);
+  assert.equal(Object.hasOwn(hodlKeyModeLabels, "corewallet"), false);
+  assert.throws(() => read("src/js/core-mix.js"), /ENOENT/);
+  assert.match(appSource, /import \{ initCoreWallet \} from "\.\/core-wallet-ui\.js";/, "the Core Wallet tab stays");
+});
