@@ -141,7 +141,7 @@ import {
   serializeNotebook as hodlSerializeNotebook,
   wipeJournal,
 } from "./journal.js";
-import { KEY_VAULT_MAX_KEYS as hodlKeyVaultMaxKeys, keyVaultIdentity, keyResultSetup as hodlKeyResultSetup, parseKeyVault, serializeKeyVault } from "./keymanager.js";
+import { KEY_VAULT_MAX_KEYS as hodlKeyVaultMaxKeys, keyVaultIdentity, keyResultSetup as hodlKeyResultSetup, parseKeyVault, serializeKeyVault, setKeyVaultModes } from "./keymanager.js";
 import { clearClipboard as hodlClearClipboard, showCopiedIcon as hodlShowCopiedIcon, copyText } from "./clipboard.js";
 import { privateCopyButtonHtml as hodlPrivateCopyButtonHtml, initPrivateCopy as hodlInitPrivateCopy, isReadoutShown as hodlReadoutIsShown, renderAnnotatedPrivateText as hodlRenderAnnotatedPrivateText } from "./private-data.js";
 import { publicFieldHtml as hodlPublicFieldMarkup, publicValueHtml as hodlPublicValueHtml } from "./public-data.js";
@@ -835,6 +835,8 @@ function hodlCreateKeyMethodIcon(mode) {
 // mixed with a dice or card transcript. The wallet alone never makes a phrase,
 // and the secrets live only in this holder, wiped on every exit path.
 if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) hodlKeyModes.push("corewallet");
+// Key files and journal backups may only bring in the methods offered here.
+setKeyVaultModes(hodlKeyModes);
 var hodlCoreMix = null, hodlCoreMixSource = "dice", hodlCoreMixGeneration = 0;
 function hodlCoreMixReset() {
   // Every reset also retires a wallet.dat read still in flight: the file
