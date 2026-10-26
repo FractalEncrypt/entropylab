@@ -260,14 +260,19 @@ test("the three unwired checks fold into one Not checked here line; any other va
   assert.ok(bare.includes('data-audit-check="nonceReuse" data-audit-tone="warn"'));
 });
 
-test("the Not checked here note lives inside the checks block, so the groups draw one separator", () => {
+test("the Not checked here note stays visible outside the folded checks block", () => {
+  // TC's point 6: the checks, the note and the next disclosure are three
+  // separate pieces. A passing audit folds the checks, so a note inside the
+  // block would be hidden — it must render after the disclosure, outside it.
   const html = psbtSignerAuditHtml(reportFor([]), null, null, "mainnet");
   const open = html.indexOf('<details class="derivation-advanced" data-audit-checks');
   const close = html.indexOf("</details>", open);
   assert.ok(open >= 0 && close > open, "fixture: the checks block renders");
-  const block = html.slice(open, close);
-  assert.ok(block.includes("data-audit-unchecked"), "the note sits inside the block it describes");
-  assert.ok(!html.slice(close).includes("data-audit-unchecked"), "and not after it, where it would draw its own rule");
+  assert.ok(!/\bopen\b/.test(html.slice(open, html.indexOf(">", open))), "fixture: a passing audit folds the checks");
+  const note = html.indexOf("data-audit-unchecked");
+  assert.ok(note > close, "the note renders after the disclosure, not inside it");
+  const depth = (html.slice(0, note).match(/<details\b/g) || []).length - (html.slice(0, note).match(/<\/details>/g) || []).length;
+  assert.equal(depth, 0, "the note is outside every details element");
 });
 
 test("the checks block's open state comes from the check tones, never the rendered class names", () => {
@@ -633,4 +638,58 @@ test("the technical diff neutralizes bidi controls in a pair's decodeError", () 
   const diff = comparePsbtDocs(before, after);
   const html = psbtSignerAuditHtml(reportFor([], { diff, equal: false }), before, after, "mainnet");
   assert.ok(!html.includes("\u202e") && !html.includes("\u2066"), "bidi controls in a decodeError must be neutralized");
+});
+
+test("retiring a shown verdict removes the combined overall line", async () => {
+  const overall = { removed: false, remove() { this.removed = true; } };
+  const section = { removed: false, remove() { this.removed = true; } };
+  const output = {
+    querySelector(selector) {
+      if (selector === "[data-audit-section]") return section;
+      if (selector === "[data-psbt-overall]") return overall;
+      return null;
+    },
+  };
+  const app = await loadAppFunctions(["hodlPsbtClearSignerAudit"], { settable: ["hodlPsbtLast", "hodlPsbtInspected"], stubs: {
+    document: { getElementById: (id) => (id === "psbt-out" ? output : null) },
+    hodlSyncPsbtControls: () => {},
+  } });
+  app.__set.hodlPsbtLast({ audit: { report: { verdict: "pass" } } });
+  app.__set.hodlPsbtInspected({});
+  app.hodlPsbtClearSignerAudit();
+  assert.equal(section.removed, true, "the audit section is removed");
+  assert.equal(overall.removed, true, "the overall line is removed with it");
+});
+
+test("a language change paints the audit after the answer block and recomputes the overall line", async () => {
+  const answer = { inserted: [], insertAdjacentHTML(position, html) { this.inserted.push({ position, html }); } };
+  const output = {
+    innerHTML: "",
+    querySelector(selector) {
+      if (selector === "[data-psbt-answer]") return answer;
+      return null;
+    },
+    insertAdjacentHTML(position, html) { this.innerHTML = html + this.innerHTML; },
+  };
+  let overallCalls = 0;
+  const app = await loadAppFunctions(["hodlRefreshPsbtLocale", "hodlPsbtPaintSignerAudit"], { settable: ["hodlPsbtLast", "hodlNonceLast"], stubs: {
+    document: { getElementById: (id) => (id === "psbt-out" ? output : null) },
+    hodlPaintPsbtSession: () => {},
+    hodlPaintPsbtKeyNotes: () => {},
+    hodlSetPsbtError: () => {},
+    hodlSetNonceError: () => {},
+    hodlPsbtSyncNonceHistoryControls: () => {},
+    hodlRenderPsbt: () => "inspection",
+    hodlRenderRawTx: () => "inspection",
+    hodlPsbtSignerAuditMarkup: () => "AUDIT",
+    hodlPsbtInsertOverall: () => { overallCalls += 1; },
+  } });
+  const last = { kind: "psbt", parsed: {}, sourceTag: new Uint8Array([1]), checkedAt: "t", network: "mainnet", audit: { report: { verdict: "pass" } } };
+  app.__set.hodlPsbtLast(last);
+  app.__set.hodlNonceLast(null);
+  app.hodlRefreshPsbtLocale();
+  assert.equal(answer.inserted.length, 1, "the audit is inserted after the answer block");
+  assert.equal(answer.inserted[0].position, "afterend");
+  assert.equal(answer.inserted[0].html, "AUDIT");
+  assert.equal(overallCalls, 1, "the overall line is recomputed");
 });

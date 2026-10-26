@@ -47,6 +47,8 @@ function evaluate(name, scope) {
 
 const analysisSummary = evaluate("hodlPsbtAnalysisSummary", { hodlT: interpolate, hodlTAttr: (text) => String(text), hodlEscapeHtml: escapeHtml });
 const overallLine = evaluate("hodlPsbtOverallLine", { hodlT: interpolate });
+// The real nonce row, so a render-level test sees the reason the row carries.
+const nonceCheck = evaluate("hodlPsbtNonceCheck", { hodlTText: interpolate });
 
 // A fake element with the DOM surface the extracted functions touch. The
 // tests never assert on classes or copy; they read data-* attributes and the
@@ -140,6 +142,13 @@ function renderScope(overrides = {}) {
     hodlSats: sats,
     hodlInspectorNetwork: () => "mainnet",
     hodlSessionOwnership: () => new Map(),
+    // The same ownership rule the output-ownership warning uses: a script
+    // hex lookup with the address fallback.
+    matchOwnership: (map, scriptOrAddress) => {
+      const key = typeof scriptOrAddress === "string" ? scriptOrAddress : hexOf(scriptOrAddress);
+      return { state: map.has(key) ? "ours" : "unknown" };
+    },
+    hodlPsbtHd: null,
     hodlRenderOutputHtml: (output, index) => "<p class='psbt-kv'>output " + index + "</p>",
     hodlOwnershipWarning: () => "",
     hodlWitUtxo: () => null,
@@ -292,6 +301,7 @@ test("the answer block comes first, ahead of the analysis rows and the sections"
 test("the signer audit is inserted after the answer block, never above it", () => {
   const answer = fakeElement();
   const output = fakeElement({ querySelector: (selector) => (selector === "[data-psbt-answer]" ? answer : null) });
+  const paintSignerAudit = evaluate("hodlPsbtPaintSignerAudit", { hodlPsbtSignerAuditMarkup: () => "AUDIT", hodlPsbtInsertOverall: () => {} });
   const prepend = evaluate("hodlPsbtPrependSignerAudit", {
     document: { getElementById: (id) => (id === "psbt-audit-before" ? { value: "SENT" } : null) },
     hodlPsbtBytesFromText: () => new Uint8Array([0x70]),
@@ -301,6 +311,7 @@ test("the signer audit is inserted after the answer block, never above it", () =
     hodlAuditSigner: () => ({ verdict: "pass" }),
     hodlPsbtSignerAuditMarkup: () => "AUDIT",
     hodlPsbtInsertOverall: () => {},
+    hodlPsbtPaintSignerAudit: paintSignerAudit,
   });
   prepend(output, new Uint8Array([0x70]), "psbt", "mainnet");
   assert.equal(answer.inserted.length, 1, "the audit goes after the answer block");
@@ -516,8 +527,66 @@ test("a check incomplete for any other reason still makes the overall line amber
   assert.equal(state, "incomplete");
 });
 
+// The audit fixture's shape: one P2WPKH input signed by one key, no session
+// key loaded. One signature is all the nonce check has, so its only gap is
+// the count — the case the owner ruled must not turn the overall line amber.
+const oneSignatureScope = (overrides = {}) => ({
+  hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }),
+  hodlPartialSigs: () => [{ der: new Uint8Array([0x30, 0x44]), pubkey: new Uint8Array(33).fill(2), sighash: 1, raw: new Uint8Array([1]) }],
+  hodlSigParts: () => ({ r: new Uint8Array(32).fill(1), s: new Uint8Array(32).fill(2) }),
+  hodlInputScriptCode: () => new Uint8Array([0x76, 0xa9]),
+  hodlScriptHasCodeSeparator: () => false,
+  hodlBip143: () => new Uint8Array(32).fill(3),
+  hodlSecp256k1: { verify: () => true },
+  hodlPrivForPub: () => ({ key: new Uint8Array(32).fill(4), owned: true }),
+  hodlRfc6979Compare: () => ({ ok: true, message: "", className: "psbt-ok" }),
+  hodlCompressedPubkey: () => new Uint8Array(33).fill(2),
+  hodlPsbtMasterFingerprint: () => "00000000",
+  hodlPsbtDerivationFingerprints: () => ({}),
+  hodlSighashProblems: () => [],
+  hodlPsbtNonceCheck: nonceCheck,
+  ...overrides,
+});
+
+test("a single-signature PSBT whose only nonce gap is the count is not amber", () => {
+  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope());
+  const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.equal(state, "complete", "one signature is nothing to compare, not a coverage gap");
+  assert.ok(!html.includes("ANALYSIS INCOMPLETE"));
+  assert.ok(html.includes("data-incomplete-reason='nothing-to-compare'"), "the row carries the reason");
+  // The row itself still reads Incomplete: only the overall line ignores it.
+  assert.ok(/<li data-psbt-check-state='incomplete' data-incomplete-reason='nothing-to-compare'>/.test(html));
+});
+
+test("a single-signature PSBT with an unsupported signature still counts", () => {
+  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope({ hodlPrivForPub: () => null, hodlPrivFromPath: () => null }));
+  const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.equal(state, "incomplete", "a signature that could not be checked is a real coverage gap");
+  assert.ok(!html.includes("data-incomplete-reason='nothing-to-compare'"));
+});
+
 test("the audit fixture shows no amber overall line above a green audit verdict", () => {
-  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
+  const html = renderPsbt(psbtFixture(), {}, oneSignatureScope());
   const analysis = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
   assert.equal(overallState({ tier: "pass", analysis }), "ok");
+});
+
+test("the glance line counts an output the ownership warning treats as ours", () => {
+  const outputs = [{ amount: 30000n, script: scriptA }, { amount: 20000n, script: scriptB }];
+  // The map holds the address form only: the script-hex lookup misses, the
+  // address fallback the ownership warning uses is what finds it.
+  const map = new Map([["addr-" + hexOf(scriptA), {}]]);
+  const matchOwnership = (ownership, scriptOrAddress) => {
+    const key = typeof scriptOrAddress === "string" ? scriptOrAddress : hexOf(scriptOrAddress);
+    return { state: ownership.has(key) ? "ours" : "unknown" };
+  };
+  const html = renderPsbt(psbtFixture({ outputs }), {}, {
+    hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }),
+    hodlSessionOwnership: () => map,
+    matchOwnership,
+    hodlAddr: (script) => "addr-" + hexOf(script),
+  });
+  const glance = glanceOf(html);
+  assert.ok(glance.includes("0.00030000"), "the output the warning treats as ours counts as change");
+  assert.ok(glance.includes("Sends 0.00020000 BTC"), "and it is not counted as a send");
 });

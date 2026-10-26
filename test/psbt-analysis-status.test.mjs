@@ -106,3 +106,35 @@ test("nonce status never claims no repeated r while a repeat is suspected", () =
   assert.equal(clean.state, "complete");
   assert.match(clean.detail, /no repeated r was found/);
 });
+
+test("a nonce check incomplete only because there is nothing to compare carries the reason", () => {
+  const row = hodlPsbtNonceCheck([], [], true, [], 1, 0, "", "nothing-to-compare");
+  assert.equal(row.state, "incomplete", "the row still reads Incomplete");
+  assert.equal(row.incompleteReason, "nothing-to-compare");
+});
+
+test("a nonce check incomplete for another cause carries no nothing-to-compare reason", () => {
+  const row = hodlPsbtNonceCheck([], [], true, [], 1, 0, "", "");
+  assert.equal(row.state, "incomplete");
+  assert.equal(row.incompleteReason, undefined);
+});
+
+test("the overall line ignores a nothing-to-compare check", () => {
+  const checks = [
+    { state: "incomplete", label: "Nonce analysis", detail: "x", incompleteReason: "nothing-to-compare" },
+    { state: "complete", label: "Other", detail: "y" },
+  ];
+  const line = hodlPsbtOverallLine(checks);
+  assert.equal(line.state, "complete");
+  assert.match(line.html, /LISTED CHECKS COMPLETE/);
+});
+
+test("the overall line still counts a nonce check incomplete for another cause", () => {
+  const checks = [
+    { state: "incomplete", label: "Nonce analysis", detail: "x" },
+    { state: "complete", label: "Other", detail: "y" },
+  ];
+  const line = hodlPsbtOverallLine(checks);
+  assert.equal(line.state, "incomplete");
+  assert.match(line.html, /ANALYSIS INCOMPLETE/);
+});

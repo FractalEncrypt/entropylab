@@ -424,12 +424,14 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   // The block's own state, never the rendered class names: a bad or warn
   // check value opens it, whatever the tier.
   const rowsProblem = tones.some((tone) => tone === "bad" || tone === "warn");
-  // The "Not checked here" note lives inside the block it describes, so the
-  // checks, the note and the next disclosure do not each draw a rule.
+  // The "Not checked here" note renders directly after the checks disclosure,
+  // outside it: a passing audit folds the checks, and the caveat must stay
+  // visible. It draws no rule of its own — the next group's label is the one
+  // separator — so it is a plain muted line, never a section label.
   const unchecked = folded
-    ? `<li class="muted" data-audit-unchecked="${Object.keys(UNCHECKED).join(" ")}">${T("Not checked here: nonce reuse, anti-exfil, change outputs.")}</li>`
+    ? `<p class="muted" data-audit-unchecked="${Object.keys(UNCHECKED).join(" ")}">${T("Not checked here: nonce reuse, anti-exfil, change outputs.")}</p>`
     : "";
-  const checksBlock = `<details class="derivation-advanced" data-audit-checks${tier !== "pass" || rowsProblem ? " open data-has-problem" : ""}><summary>${T("Show the {n} checks", { n: visibleChecks.length + (stats ? 1 : 0) })}</summary><ul>${rowsHtml}${unchecked}</ul></details>`;
+  const checksBlock = `<details class="derivation-advanced" data-audit-checks${tier !== "pass" || rowsProblem ? " open data-has-problem" : ""}><summary>${T("Show the {n} checks", { n: visibleChecks.length + (stats ? 1 : 0) })}</summary><ul>${rowsHtml}</ul></details>${unchecked}`;
   const groupOf = (code) => {
     const at = FINDING_GROUPS.findIndex((codes) => codes.includes(code));
     return at === -1 ? FINDING_GROUPS.length - 1 : at;

@@ -10333,9 +10333,11 @@ function hodlRefreshPsbtLocale() {
     let options = { network: last.network, transcript: last.transcript, record: false, ...(last.limits ? { limits: last.limits } : {}) };
     try {
       output.innerHTML = last.kind === "psbt" ? hodlRenderPsbt(last.parsed, last.sourceTag, last.checkedAt, view, options) : hodlRenderRawTx(last.parsed, last.sourceTag, last.checkedAt, view, options);
-      // The signer audit above it is painted again too: a "Do not broadcast"
-      // verdict must not vanish on a language switch.
-      if (last.audit) output.insertAdjacentHTML("afterbegin", hodlPsbtSignerAuditMarkup(last.audit));
+      // The signer audit is painted again too, in the same answer-first
+      // order as a fresh render: a "Do not broadcast" verdict must not
+      // vanish on a language switch, and the combined overall line must
+      // come back with it.
+      if (last.audit) hodlPsbtPaintSignerAudit(output, last.audit);
     } catch {
       // The run rendered this once; if it cannot again, the shown result stays.
     }
@@ -11470,13 +11472,7 @@ function hodlPsbtShowMore(event) {
   let paintAll = () => {
     let inputsOpen = output.querySelector?.("[data-psbt-inputs]")?.open;
     output.innerHTML = render(options);
-    if (last.audit) {
-      let markup = hodlPsbtSignerAuditMarkup(last.audit);
-      let answer = output.querySelector?.("[data-psbt-answer]");
-      if (answer) answer.insertAdjacentHTML("afterend", markup);
-      else output.insertAdjacentHTML("afterbegin", markup);
-      hodlPsbtInsertOverall(output);
-    }
+    if (last.audit) hodlPsbtPaintSignerAudit(output, last.audit);
     if (inputsOpen) {
       let details = output.querySelector?.("[data-psbt-inputs]");
       if (details) details.open = true;
@@ -12168,6 +12164,18 @@ function hodlPsbtInsertOverall(output) {
   output.querySelector?.("[data-psbt-overall]")?.remove?.();
   section.insertAdjacentHTML("beforebegin", "<p data-psbt-overall data-psbt-overall-state='" + state + "' class='psbt-" + state + "'><strong>" + text + "</strong></p>");
 }
+
+// Paints a signer audit into the Inspector's output in the answer-first
+// order: the answer block first, the audit after it, then the combined
+// overall line. Every repaint (Show more, a language change) goes through
+// here, so the order and the overall line never drift apart.
+function hodlPsbtPaintSignerAudit(output, audit) {
+  let markup = hodlPsbtSignerAuditMarkup(audit);
+  let answer = output.querySelector?.("[data-psbt-answer]");
+  if (answer) answer.insertAdjacentHTML("afterend", markup);
+  else output.insertAdjacentHTML("afterbegin", markup);
+  hodlPsbtInsertOverall(output);
+}
 function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
   let raw = String(document.getElementById("psbt-audit-before")?.value || "").trim();
   if (!raw) return null;
@@ -12198,11 +12206,7 @@ function hodlPsbtPrependSignerAudit(output, returnedBytes, kind, network) {
   }
   // The audit sits after the answer block, never above it: the answer comes
   // first, the audit's detail one click away.
-  let markup = hodlPsbtSignerAuditMarkup(audit);
-  let answer = output.querySelector?.("[data-psbt-answer]");
-  if (answer) answer.insertAdjacentHTML("afterend", markup);
-  else output.insertAdjacentHTML("afterbegin", markup);
-  hodlPsbtInsertOverall(output);
+  hodlPsbtPaintSignerAudit(output, audit);
   return audit;
 }
 // An audit upload belongs to the session it started in. Ending the session
@@ -12230,11 +12234,14 @@ async function hodlPsbtLoadAuditUpload(chosen) {
 // computed from: any edit inside the card retires it on the spot, so a
 // stale verdict is never left on screen. The next Inspect re-runs it.
 function hodlPsbtClearSignerAudit() {
-  const section = document.getElementById("psbt-out")?.querySelector("[data-audit-section]");
+  const output = document.getElementById("psbt-out");
+  const section = output?.querySelector("[data-audit-section]");
   // The cached report counts as a shown verdict even when a repaint left it
   // out of the DOM: both are retired together (Wicked's review of #1118).
   if (!section && !hodlPsbtLast?.audit) return;
   section?.remove();
+  // The combined overall line was computed from the verdict: it goes with it.
+  output?.querySelector("[data-psbt-overall]")?.remove();
   // Nor may a language change paint the retired verdict again.
   if (hodlPsbtLast) hodlPsbtLast.audit = null;
   // The verdict belonged to the exact pair of PSBTs it was computed from, so
@@ -13263,7 +13270,7 @@ function hodlOwnershipWarning(outputs, network, map) {
 // owner's option (b)); it still shows as its own row in the summary. A
 // problem outranks incomplete coverage, and both are named when both hold.
 function hodlPsbtOverallLine(checks) {
-  let counted = checks.filter((check) => check.incompleteReason !== "no-key"),
+  let counted = checks.filter((check) => check.incompleteReason !== "no-key" && check.incompleteReason !== "nothing-to-compare"),
     incomplete = counted.some((check) => check.state === "incomplete"),
     problem = counted.some((check) => check.state === "problem"),
     text = problem && incomplete ? hodlT("ISSUES FOUND — ANALYSIS ALSO INCOMPLETE") : problem ? hodlT("ISSUES FOUND") : incomplete ? hodlT("ANALYSIS INCOMPLETE") : hodlT("LISTED CHECKS COMPLETE"),
@@ -13284,7 +13291,7 @@ function hodlPsbtAnalysisSummary(checks) {
       label = state === "complete" ? hodlT("Completed") : state === "problem" ? hodlT("Problem found") : hodlT("Incomplete"),
       className = state === "complete" ? "psbt-ok" : state === "problem" ? "psbt-bad" : "psbt-warn";
     // The row's own reason, so the overall rule reads a flag, never the text.
-    let reason = check.incompleteReason === "no-key" ? " data-incomplete-reason='no-key'" : "";
+    let reason = check.incompleteReason === "no-key" ? " data-incomplete-reason='no-key'" : check.incompleteReason === "nothing-to-compare" ? " data-incomplete-reason='nothing-to-compare'" : "";
     if (state === "complete") {
       covered.push("<li><span class='label'>" + hodlEscapeHtml(check.label) + "</span>: " + hodlEscapeHtml(check.detail) + "</li>");
       return "<li data-psbt-check-state='complete'><span class='label'>" + hodlEscapeHtml(check.label) + "</span> — <span class='" + className + "'>" + label + "</span></li>";
@@ -13303,12 +13310,12 @@ function hodlSchnorrReuseHtml(schnorrReused) {
     ? "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce detected for the same key.") + "</strong> " + hodlT("The same R value appears on two Taproot signatures that sign different messages. If both signatures are valid, the private key can be recovered. Do not broadcast this transaction.") + "</p>"
     : "<p class='psbt-bad'><strong>" + hodlT("Reused Schnorr nonce across different keys.") + "</strong> " + hodlT("The same R value appears on Taproot signatures under different keys, so their nonce was reused. If the keys are related, as a Taproot output key is to its internal key or as keys from one wallet are, the private key can be recovered. Do not broadcast this transaction.") + "</p>";
 }
-function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0, rfc6979Note = "") {
+function hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused = [], ecdsaCompared = 2, schnorrCompared = 0, rfc6979Note = "", incompleteReason = "") {
   let label = hodlTText("Nonce analysis"), row;
   if (reused.length) row = { label, state: "problem", detail: hodlTText("A repeated ECDSA nonce was detected; open the Nonce Inspector for the affected signatures.") };
   else if (schnorrReused.length) row = { label, state: "problem", detail: schnorrReused.some((pair) => pair.sameKey) ? hodlTText("Two Taproot signatures reuse a nonce under the same key, which can reveal the private key. Open the Nonce Inspector to see which ones.") : hodlTText("Two Taproot signatures share a nonce under different keys, which can reveal a private key. Open the Nonce Inspector to see which ones.") };
   else if (possible.length) row = { label, state: "incomplete", detail: hodlTText("A possible repeated ECDSA nonce for the same public key could not be confirmed from this file; open the Nonce Inspector and verify the signatures independently.") };
-  else if (nonceIncomplete) row = { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks.") };
+  else if (nonceIncomplete) row = { label, state: "incomplete", detail: hodlTText("Coverage is partial: unreadable signatures, fewer than two comparable ECDSA signatures, missing key/digest data, unsupported scripts, or Taproot/Schnorr signatures prevented one or more nonce checks."), incompleteReason: incompleteReason || undefined };
   // The completed line names the signatures that were compared (DeepSeek's
   // red-team of #1051, F4).
   else if (schnorrCompared) row = { label, state: "complete", detail: ecdsaCompared ? hodlTText("All ECDSA and Taproot signatures in this PSBT had comparable nonce values; no repeated nonce was found for the same key within this file.") : hodlTText("All Taproot signatures in this PSBT had comparable nonce values; no repeated R value was found for the same key within this file.") };
@@ -13851,7 +13858,9 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   let glanceTotal = tx.outputs.reduce((sum, output) => sum + output.amount, 0n),
     glanceCount = tx.outputs.length,
     glanceChange = 0n;
-  if (ownershipMap.size) for (const output of tx.outputs) if (ownershipMap.has(hodlHex.encode(output.script))) glanceChange += output.amount;
+  // The same ownership rule as the warning below, address fallback included,
+  // so the glance line and the warning can never disagree about what is ours.
+  if (ownershipMap.size) for (const output of tx.outputs) if (matchOwnership(ownershipMap, output.script).state === "ours" || matchOwnership(ownershipMap, hodlAddr(output.script, network)).state === "ours") glanceChange += output.amount;
   let glanceParts = [];
   if (feeProblem) {
     glanceParts.push(feeProblem);
@@ -13928,6 +13937,11 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // is not a clean result (DeepSeek's red-team of #1051, F1).
   let schnorrCompared = schnorrRecords.length - schnorrIncomplete;
   let nonceIncomplete = uninspected || schnorrIncomplete || tapUninspected || unsupportedNonceChecks || crossKey.length || rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0;
+  // A nonce check that is incomplete only because there is nothing to
+  // compare (one comparable signature, or none) is the no-key case's
+  // sibling: the row still reads Incomplete, but the overall line does not
+  // count it (owner, 2026-10-26). Any other cause keeps the check counting.
+  let nonceNothingToCompare = !possible.length && !uninspected && !schnorrIncomplete && !tapUninspected && !unsupportedNonceChecks && !crossKey.length && (rValues.length === 1 || schnorrCompared === 1 || rValues.length + schnorrCompared === 0);
   let nonceVerdict = reused.length || schnorrReused.length ? "reuse" : crossKey.length ? "cross-key" : possible.length ? "possible" : nonceIncomplete ? "incomplete" : "clean";
   if (view !== "inspect" && options?.record !== false) hodlPsbtRecordNonceInspection("psbt", rValues, nonceSourceTag, nonceVerdict, nonceCheckedAt);
   let checks = [
@@ -13957,7 +13971,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         ? hodlTText("Compared with the loaded session key only within accounts 0–2, 50 receive and 50 change addresses, and four supported script types; outputs outside that range remain unclassified.")
         : hodlTText("No session key was loaded, so output ownership and change derivation were not checked."),
     },
-    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared, rfc6979Note),
+    hodlPsbtNonceCheck(reused, possible, nonceIncomplete, schnorrReused, rValues.length, schnorrCompared, rfc6979Note, nonceNothingToCompare ? "nothing-to-compare" : ""),
     {
       label: hodlTText("BIP-174 / consensus cross-check"),
       state: referenceVerdict.state,
