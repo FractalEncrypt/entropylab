@@ -237,15 +237,16 @@ const phraseBytesFromIndices = (indices) => {
 
 // PBKDF2-HMAC-SHA512(phrase bytes, saltFor(passphrase), 2048, 64), with the
 // phrase bytes, the indices copy and the salt zeroed in finally, as
-// mnemonicToSeedSync does.
+// mnemonicToSeedSync does. Every secret copy is made inside the try, so a
+// passphrase saltFor refuses still leaves nothing behind.
 const seedFromEntropy = (entropy, passphrase = "") => {
   if (!(entropy instanceof Uint8Array) || ![16, 20, 24, 28, 32].includes(entropy.length)) {
     throw new RangeError("invalid entropy length");
   }
-  const indices = indicesFromEntropy(entropy);
-  const salt = saltFor(passphrase);
-  let phrase = new Uint8Array(0);
+  let indices = new Uint16Array(0), salt = new Uint8Array(0), phrase = new Uint8Array(0);
   try {
+    indices = indicesFromEntropy(entropy);
+    salt = saltFor(passphrase);
     phrase = phraseBytesFromIndices(indices);
     return pbkdf2Sha512(phrase, salt, 2048, 64);
   } finally {
@@ -257,10 +258,10 @@ const seedFromEntropy = (entropy, passphrase = "") => {
 
 const seedFromIndices = (indices, passphrase = "") => {
   if (!(indices instanceof Uint16Array) || !WORD_COUNTS.includes(indices.length)) throw new Error("Invalid mnemonic");
-  const owned = Uint16Array.from(indices);
-  const salt = saltFor(passphrase);
-  let phrase = new Uint8Array(0), entropy = new Uint8Array(0);
+  let owned = new Uint16Array(0), salt = new Uint8Array(0), phrase = new Uint8Array(0), entropy = new Uint8Array(0);
   try {
+    owned = Uint16Array.from(indices);
+    salt = saltFor(passphrase);
     for (const index of owned) if (index > 2047) throw new Error("Invalid mnemonic");
     entropy = entropyFromIndices(owned);
     if (!validChecksum(owned, entropy)) throw new Error("Invalid mnemonic");

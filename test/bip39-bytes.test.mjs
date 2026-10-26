@@ -77,19 +77,55 @@ test("byte-based seeds refuse bad input", () => {
 // constructor, as the hdkey tests observe its allocations. After the call
 // every one must be zero.
 function observeBip39Allocations(operation) {
-  const RealUint8Array = globalThis.Uint8Array, allocated = [];
-  const Observed = new Proxy(RealUint8Array, {
-    construct(target, args, newTarget) {
-      const bytes = Reflect.construct(target, args, newTarget === Observed ? target : newTarget);
-      if (new Error().stack.split("\n")[2]?.includes("/src/js/bip39.js:")) allocated.push(bytes);
-      return bytes;
-    },
-  });
-  let result;
-  globalThis.Uint8Array = Observed;
-  try { result = operation(); } finally { globalThis.Uint8Array = RealUint8Array; }
-  return { result, allocated };
+  // Both typed-array kinds bip39.js allocates directly: the phrase, salt and
+  // checksum bytes, and the Uint16Array word-index copies (new or .from()).
+  // Frame 3 (under this helper and the trap) is the allocating call site, so
+  // buffers hashes.js returns (the seed itself) are not counted.
+  const allocated = [], real = { Uint8Array: globalThis.Uint8Array, Uint16Array: globalThis.Uint16Array };
+  const fromBip39 = () => new Error().stack.split("\n")[3]?.includes("/src/js/bip39.js:");
+  const observe = (Real) => {
+    const Observed = new Proxy(Real, {
+      construct(target, args, newTarget) {
+        const bytes = Reflect.construct(target, args, newTarget === Observed ? target : newTarget);
+        if (fromBip39()) allocated.push(bytes);
+        return bytes;
+      },
+      get(target, key) {
+        if (key !== "from") return Reflect.get(target, key);
+        return function from(...args) {
+          const bytes = Real.from(...args);
+          if (fromBip39()) allocated.push(bytes);
+          return bytes;
+        };
+      },
+    });
+    return Observed;
+  };
+  let result, error;
+  globalThis.Uint8Array = observe(real.Uint8Array);
+  globalThis.Uint16Array = observe(real.Uint16Array);
+  try { result = operation(); } catch (caught) { error = caught; } finally {
+    globalThis.Uint8Array = real.Uint8Array;
+    globalThis.Uint16Array = real.Uint16Array;
+  }
+  return { result, error, allocated };
 }
+
+test("a passphrase saltFor refuses leaves no word-index copy behind", () => {
+  for (const passphrase of [null, "\uD800"]) {
+    for (const operation of [
+      () => seedFromEntropy(VECTOR_ENTROPY, passphrase),
+      () => seedFromIndices(indicesOf(VECTOR_PHRASE), passphrase),
+    ]) {
+      const { error, allocated } = observeBip39Allocations(operation);
+      assert.match(String(error?.message), /Invalid passphrase/);
+      assert.ok(allocated.some((buffer) => buffer instanceof globalThis.Uint16Array && buffer.length > 0), "must observe the word-index copy");
+      for (const buffer of allocated) {
+        assert.ok(buffer.every((value) => value === 0), `a ${buffer.length}-element ${buffer.constructor.name} still holds secret material`);
+      }
+    }
+  }
+});
 
 test("byte-based seed derivation zeroes the phrase, salt and index buffers", () => {
   for (const operation of [
