@@ -430,6 +430,19 @@ test("a short card transcript gets the low-entropy warning", () => {
   assert.match(warning.detail, /2 of 58 recommended cards/);
 });
 
+test("the Derive-time warning check reaches the core-mix transcript", () => {
+  const context = warningContext({ source: "dice" });
+  Object.assign(context, {
+    hodlKeyMode: "corewallet",
+    hodlTargetWordCount: 24,
+    document: { getElementById: (id) => id === "core-mix-transcript" ? { value: "1" } : null },
+  });
+  vm.runInContext(fnSource("hodlLowEntropyWarning"), context);
+  const warning = context.hodlLowEntropyWarning();
+  assert.ok(warning, "a one-roll core-mix transcript warns through the dispatcher");
+  assert.match(warning.detail, /1 of 99 recommended rolls/);
+});
+
 test("a full transcript gets no low-entropy warning", () => {
   const context = warningContext({ source: "dice" });
   assert.equal(context.hodlLowEntropyWarningFor("corewallet", "coldcard", "1".repeat(99), 24), null);
@@ -492,6 +505,36 @@ test("a wallet.dat read that finishes after a reset is zeroed, not loaded", asyn
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(loaded, false, "the late read is not loaded");
   assert.ok(bytes.every((byte) => byte === 0), "the late read's bytes are zeroed");
+});
+
+test("a stale wallet.dat read that fails keeps the newer wallet", async () => {
+  let rejectA, loadedName = null, resets = 0, errors = 0;
+  const first = { size: 3, name: "A.dat", arrayBuffer: () => new Promise((_, reject) => { rejectA = reject; }) };
+  const second = { size: 3, name: "B.dat", arrayBuffer: async () => new Uint8Array([4, 5, 6]).buffer };
+  const file = { files: [first], value: "" };
+  const context = vm.createContext({
+    file,
+    hodlCoreMixGeneration: 0,
+    hodlActiveKey: 0,
+    hodlKeys: [{ id: "key-1" }],
+    hodlKeyMode: "corewallet",
+    CORE_WALLET_MAX_BYTES: 64 * 1024 * 1024,
+    hodlT: (text) => text,
+    hodlCoreMixLoadBytes: (_, name) => { loadedName = name; },
+    hodlCoreMixReset: () => { resets++; },
+    hodlCoreMixShowError: () => { errors++; },
+    hodlSyncDeriveButton: () => {},
+  });
+  vm.runInContext(`file.onchange = ${fileHandlerSource()};`, context);
+  context.file.onchange();
+  file.files = [second];
+  context.file.onchange();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(loadedName, "B.dat", "the newer pick loads");
+  rejectA(new Error("NotReadableError"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(resets, 0, "the stale failure does not reset the newer wallet");
+  assert.equal(errors, 0, "the stale failure shows no error");
 });
 
 test("Derive follows the loaded wallet and the active tab", () => {

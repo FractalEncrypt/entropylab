@@ -6817,14 +6817,18 @@ function hodlRenderKeyForm() {
       let generation = ++hodlCoreMixGeneration, keyId = hodlKeys[hodlActiveKey]?.id ?? null;
       // typeof keeps the standalone Node extraction working (narrow test slices).
       if (typeof hodlInvalidateDerivation === "function") hodlInvalidateDerivation();
+      if (typeof hodlInvalidateLiveKeyResult === "function") hodlInvalidateLiveKeyResult();
+      let stale =() => hodlKeyMode !== "corewallet" || generation !== hodlCoreMixGeneration || keyId !== (hodlKeys[hodlActiveKey]?.id ?? null);
       (async () => {
         let bytes = null;
         try {
           if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlT("This wallet file is too large to inspect safely."));
           bytes = new Uint8Array(await chosen.arrayBuffer());
-          if (hodlKeyMode !== "corewallet" || generation !== hodlCoreMixGeneration || keyId !== (hodlKeys[hodlActiveKey]?.id ?? null)) return;
+          if (stale()) return;
           hodlCoreMixLoadBytes(bytes, chosen.name);
         } catch (exception) {
+          // A stale read that fails must not clear the wallet a newer pick loaded.
+          if (stale()) return;
           hodlCoreMixReset();
           hodlCoreMixShowError(exception.message || String(exception));
         } finally {
@@ -7692,6 +7696,7 @@ function hodlLowEntropyWarning() {
   try {
     if (hodlKeyMode === "dice") return hodlLowEntropyWarningFor("dice", hodlDiceMethod, document.getElementById("dice")?.value ?? "", hodlTargetWordCount);
     if (hodlKeyMode === "cards") return hodlLowEntropyWarningFor("cards", hodlCardMethod, document.getElementById(hodlCardMethod === "direct" ? "direct-cards" : "cards")?.value ?? "", hodlTargetWordCount);
+    if (hodlKeyMode === "corewallet") return hodlLowEntropyWarningFor("corewallet", null, document.getElementById("core-mix-transcript")?.value ?? "", hodlTargetWordCount);
   } catch {
   }
   return null;
@@ -15318,6 +15323,9 @@ function hodlSelectedKeyNetwork() {
 function hodlRestoreKey() {
   hodlKeyManagerSyncReviewedContext();
   let state = hodlKeys[hodlActiveKey];
+  // A wallet loaded for a key that was removed or replaced (Journal detach)
+  // must not stay in memory under the next key.
+  if (typeof hodlCoreMixReset === "function" && hodlCoreMix && hodlCoreMix.keyId !== (state?.id ?? null)) hodlCoreMixReset();
   if (!state) {
     hodlKeyMode = "dice";
     hodlDiceMethod = "coldcard";
