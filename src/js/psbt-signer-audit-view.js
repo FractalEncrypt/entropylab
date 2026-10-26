@@ -409,8 +409,10 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   const checks = report?.checks ?? {};
   const folded = Object.entries(UNCHECKED).every(([key, value]) => checks[key] === value);
   const visibleChecks = checkRows().filter(([key]) => !(folded && Object.hasOwn(UNCHECKED, key)));
+  const tones = [];
   const rows = visibleChecks.map(([key, label, values]) => {
     const [text, tone] = lookup(values, checks[key]) ?? [T("Unknown"), "warn"];
+    tones.push(tone);
     return valueRow(label, text, key, tone);
   }).join("");
   const stats = report?.stats && report.stats.newSignatures > 0
@@ -419,10 +421,15 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   // The check rows collapse into one block, but a block that holds a problem
   // or a warning never does: it opens and says so, whatever the tier.
   const rowsHtml = rows + stats;
-  const checksBlock = `<details class="derivation-advanced" data-audit-checks${tier !== "pass" || rowsHtml.includes("psbt-bad") || rowsHtml.includes("psbt-warn") ? " open data-has-problem" : ""}><summary>${T("Show the {n} checks", { n: visibleChecks.length + (stats ? 1 : 0) })}</summary><ul>${rowsHtml}</ul></details>`;
+  // The block's own state, never the rendered class names: a bad or warn
+  // check value opens it, whatever the tier.
+  const rowsProblem = tones.some((tone) => tone === "bad" || tone === "warn");
+  // The "Not checked here" note lives inside the block it describes, so the
+  // checks, the note and the next disclosure do not each draw a rule.
   const unchecked = folded
-    ? `<p class="muted" data-audit-unchecked="${Object.keys(UNCHECKED).join(" ")}">${T("Not checked here: nonce reuse, anti-exfil, change outputs.")}</p>`
+    ? `<li class="muted" data-audit-unchecked="${Object.keys(UNCHECKED).join(" ")}">${T("Not checked here: nonce reuse, anti-exfil, change outputs.")}</li>`
     : "";
+  const checksBlock = `<details class="derivation-advanced" data-audit-checks${tier !== "pass" || rowsProblem ? " open data-has-problem" : ""}><summary>${T("Show the {n} checks", { n: visibleChecks.length + (stats ? 1 : 0) })}</summary><ul>${rowsHtml}${unchecked}</ul></details>`;
   const groupOf = (code) => {
     const at = FINDING_GROUPS.findIndex((codes) => codes.includes(code));
     return at === -1 ? FINDING_GROUPS.length - 1 : at;
@@ -440,7 +447,7 @@ export const psbtSignerAuditHtml = (report, beforeDoc, afterDoc, network, { copy
   const diff = report?.diff
     ? `<details class="derivation-advanced" data-audit-diff><summary>${T("Show every difference (technical)")}</summary>${psbtDiffHtml(report.diff, neutralizeDocText(beforeDoc), neutralizeDocText(afterDoc), network, { copyIcon, beforeLabel: t("the PSBT you sent"), afterLabel: t("the returned PSBT") })}</details>`
     : "";
-  return `<section class="psbt-analysis-summary" data-audit-section data-audit-tier="${tier}" aria-label="${TA("PSBT signer audit")}">${heading()}${verdict}${checksBlock}${unchecked}${groups}${diff}<p class="edge-note is-private" data-audit-limitation>${T("This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.")}</p></section>`;
+  return `<section class="psbt-analysis-summary" data-audit-section data-audit-tier="${tier}" aria-label="${TA("PSBT signer audit")}">${heading()}${verdict}${checksBlock}${groups}${diff}<p class="edge-note is-private" data-audit-limitation>${T("This audit checks what changed between the two PSBTs and what EntropyLab can verify — signatures are checked against the previous outputs the PSBT claims, not the blockchain. It does not prove the signing device or its firmware is trustworthy.")}</p></section>`;
 };
 
 // The fail-closed read error: there is no verdict to show, only what kept

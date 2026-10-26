@@ -46,6 +46,7 @@ function evaluate(name, scope) {
 }
 
 const analysisSummary = evaluate("hodlPsbtAnalysisSummary", { hodlT: interpolate, hodlTAttr: (text) => String(text), hodlEscapeHtml: escapeHtml });
+const overallLine = evaluate("hodlPsbtOverallLine", { hodlT: interpolate });
 
 // A fake element with the DOM surface the extracted functions touch. The
 // tests never assert on classes or copy; they read data-* attributes and the
@@ -159,6 +160,7 @@ function renderScope(overrides = {}) {
     cappedHtml: (items, render) => items.map(render).join(""),
     isP2tr: () => false,
     hodlPsbtAnalysisSummary: analysisSummary,
+    hodlPsbtOverallLine: overallLine,
     ...overrides,
   };
 }
@@ -168,7 +170,7 @@ function renderPsbt(psbt, options = {}, overrides = {}) {
   return render(psbt, new Uint8Array(), "2024-01-01T00:00:00.000Z", "inspect", options);
 }
 
-const glanceOf = (html) => html.match(/<p class='psbt-kv' data-psbt-glance>(.*?)<\/p>/)[1];
+const glanceOf = (html) => html.match(/<p[^>]*data-psbt-glance[^>]*>([\s\S]*?)<\/p>/)[1];
 
 test("the glance line states the total, the output count and the fee", () => {
   const html = renderPsbt(psbtFixture({ outputs: [{ amount: 30000n, script: scriptA }, { amount: 20000n, script: scriptB }] }), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
@@ -198,18 +200,151 @@ test("the glance line names change only when the ownership map claims an output"
   assert.ok(!unowned.includes("0.00030000"), "no change part without an ownership map");
 });
 
+test("the glance line uses the Fees section's unit, never sats", () => {
+  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
+  const glance = glanceOf(html);
+  assert.ok(glance.includes("0.00010000 BTC"), "the fee is BTC with 8 decimals, as the Fees section shows it");
+  assert.ok(!glance.includes("sats"), "no sats in the glance line");
+});
+
+test("without a session key the glance line states the outputs total, change included", () => {
+  const outputs = [{ amount: 30000n, script: scriptA }, { amount: 20000n, script: scriptB }];
+  const glance = glanceOf(renderPsbt(psbtFixture({ outputs }), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) }));
+  assert.ok(glance.includes("Outputs total 0.00050000 BTC"), "the total includes every output");
+  assert.ok(!glance.includes("Sends"), "no send claim without a key to classify the outputs");
+});
+
+test("with a session key the glance line counts only what does not return to the key", () => {
+  const outputs = [{ amount: 30000n, script: scriptA }, { amount: 20000n, script: scriptB }];
+  const glance = glanceOf(renderPsbt(psbtFixture({ outputs }), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }), hodlSessionOwnership: () => new Map([[hexOf(scriptA), {}]]) }));
+  assert.ok(glance.includes("Sends 0.00020000 BTC"), "the owned output is change, not a send");
+  assert.ok(!glance.includes("Outputs total"));
+});
+
+test("the glance line repeats the Fees section's problem in the same severity", () => {
+  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 40000n, script: scriptA }) });
+  const glance = glanceOf(html);
+  assert.ok(glance.includes("Inconsistent claimed amounts:"), "the same problem the Fees section shows");
+  assert.ok(glance.includes("outputs exceed claimed inputs by 0.00010000 BTC"));
+  assert.ok(!glance.includes("fee unknown"), "a problem is never softened to fee unknown");
+  const fees = html.slice(html.indexOf("Tx fees"));
+  assert.ok(fees.includes("Inconsistent claimed amounts:"), "fixture: the Fees section shows the problem");
+  // Severity is safety-critical here: the glance must never be calmer than
+  // the detail it summarizes. It is carried as data, never read from a class.
+  const glanceTag = html.match(/<p[^>]*data-psbt-glance[^>]*>/)[0];
+  const severity = glanceTag.match(/data-severity='(\w+)'/);
+  assert.ok(severity, "the glance carries its severity as data, not a class");
+  assert.equal(severity[1], "bad", "the glance carries the problem's severity");
+});
+
+test("the glance line repeats the Fees section's conflicting-UTXO problem in the same severity", () => {
+  // One input whose witness UTXO and non-witness UTXO claim different
+  // amounts: the Fees section reports the conflict, so the glance must too.
+  const html = renderPsbt(psbtFixture(), {}, {
+    hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }),
+    hodlNonWitUtxo: () => ({ amount: 50000n, script: scriptA }),
+  });
+  const fees = html.slice(html.indexOf("Tx fees"));
+  assert.ok(fees.includes("carry conflicting witness and non-witness UTXO amounts"), "fixture: the Fees section shows the conflict");
+  const glance = glanceOf(html);
+  assert.ok(glance.includes("carry conflicting witness and non-witness UTXO amounts"), "the glance shows the same problem, not a calm fee unknown");
+  const glanceTag = html.match(/<p[^>]*data-psbt-glance[^>]*>/)[0];
+  const severity = glanceTag.match(/data-severity='(\w+)'/);
+  assert.ok(severity, "the glance carries its severity as data, not a class");
+  assert.equal(severity[1], "bad", "in the same severity as the Fees section");
+});
+
 test("the inputs section is collapsed when no input has a problem", () => {
   const html = renderPsbt(psbtFixture());
   const tag = html.match(/<details class='derivation-advanced' data-psbt-inputs[^>]*>/)[0];
   assert.ok(!/\bopen\b/.test(tag));
-  assert.ok(!tag.includes("data-has-problem"));
+  assert.ok(!tag.includes("data-problem"));
 });
 
 test("the inputs section is open and marked when an input has a warning", () => {
   const html = renderPsbt(psbtFixture(), {}, { hodlSighashPolicy: () => { throw new Error("malformed sighash policy"); } });
   const tag = html.match(/<details class='derivation-advanced' data-psbt-inputs[^>]*>/)[0];
   assert.ok(/\bopen\b/.test(tag));
-  assert.ok(tag.includes("data-has-problem"));
+  assert.ok(tag.includes("data-problem='true'"));
+});
+
+test("the inputs block has one heading: its summary, with no repeated Tx inputs label inside", () => {
+  const html = renderPsbt(psbtFixture());
+  const open = html.indexOf("<details class='derivation-advanced' data-psbt-inputs");
+  const close = html.indexOf("</details>", open);
+  const block = html.slice(open, close);
+  assert.ok(block.includes("psbt-section-label"), "the summary carries the section band");
+  assert.ok(!block.includes("Tx inputs"), "no repeated inner heading");
+  assert.equal((block.match(/psbt-section-label/g) || []).length, 1, "one heading");
+});
+
+test("the answer block comes first, ahead of the analysis rows and the sections", () => {
+  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
+  const answer = html.indexOf("data-psbt-answer");
+  const glance = html.indexOf("data-psbt-glance");
+  const rows = html.indexOf("data-psbt-check-state");
+  const outputs = html.indexOf("Tx outputs");
+  assert.ok(answer >= 0 && glance > answer, "the glance line sits inside the answer block");
+  assert.ok(answer < rows, "the answer block comes before the analysis rows");
+  assert.ok(rows < outputs, "the analysis rows come before the sections");
+});
+
+test("the signer audit is inserted after the answer block, never above it", () => {
+  const answer = fakeElement();
+  const output = fakeElement({ querySelector: (selector) => (selector === "[data-psbt-answer]" ? answer : null) });
+  const prepend = evaluate("hodlPsbtPrependSignerAudit", {
+    document: { getElementById: (id) => (id === "psbt-audit-before" ? { value: "SENT" } : null) },
+    hodlPsbtBytesFromText: () => new Uint8Array([0x70]),
+    isPsbtMagic: () => true,
+    psbtInspectDoc: () => ({}),
+    hodlPsbtSignerAuditVerify: () => undefined,
+    hodlAuditSigner: () => ({ verdict: "pass" }),
+    hodlPsbtSignerAuditMarkup: () => "AUDIT",
+    hodlPsbtInsertOverall: () => {},
+  });
+  prepend(output, new Uint8Array([0x70]), "psbt", "mainnet");
+  assert.equal(answer.inserted.length, 1, "the audit goes after the answer block");
+  assert.equal(answer.inserted[0].position, "afterend");
+  assert.equal(answer.inserted[0].html, "AUDIT");
+  assert.equal(output.inserted.length, 0, "nothing is inserted above the answer block");
+});
+
+test("the folding decision reads data-problem, never the rendered class names", () => {
+  for (const name of ["hodlRenderPsbt", "hodlPsbtShowMore"]) {
+    const source = extractFunction(appSource, name);
+    assert.ok(!/\.includes\(\s*["']psbt-(bad|warn)["']\s*\)/.test(source), `${name} must not decide folding from psbt-bad/psbt-warn`);
+  }
+});
+
+// The 2-of-3 multisig shape: one input carries a Taproot signature, the other
+// carries none, so signing is expected and the unsigned input is a problem.
+const tapSigFixture = { r: new Uint8Array(32).fill(1), s: new Uint8Array(32).fill(2), sighash: 0, source: "tap-key", pubkey: new Uint8Array(), leafHash: null };
+const multisigPsbt = () => {
+  const psbt = psbtFixture({ inputs: 2 });
+  psbt.inputs = [[{ type: 0x13 }], []];
+  return psbt;
+};
+const multisigScope = {
+  hodlTapSigsParsed: (entries) => (entries.length ? [tapSigFixture] : []),
+  hodlTapSighashProblems: () => [],
+};
+
+test("an unsigned input where signing is expected carries data-problem and stays open", () => {
+  const html = renderPsbt(multisigPsbt(), {}, multisigScope);
+  const tag = html.match(/<details class='derivation-advanced' data-psbt-inputs[^>]*>/)[0];
+  assert.ok(/\bopen\b/.test(tag), "the block is open");
+  assert.ok(tag.includes("data-problem='true'"), "the block carries the problem flag");
+  const sections = html.split("<p class='psbt-kv'").slice(1);
+  const unsigned = sections.find((section) => section.includes("Not signed yet"));
+  assert.ok(unsigned, "fixture: one input is unsigned");
+  assert.ok(unsigned.startsWith(" data-problem='true'"), "the unsigned input carries the problem flag");
+  const signed = sections.find((section) => section.includes("signature(s) present"));
+  assert.ok(signed && !signed.startsWith(" data-problem='true'"), "the signed input carries no problem flag");
+});
+
+test("the glance line states the signing progress when an input carries a signature", () => {
+  const glance = glanceOf(renderPsbt(multisigPsbt(), {}, multisigScope));
+  assert.ok(glance.includes("1 of 2 inputs signed"));
 });
 
 test("Show more renders inside the collapsed inputs block", () => {
@@ -276,12 +411,20 @@ test("Show more keeps the inputs block open across a repaint", () => {
   assert.equal(harness.details.open, true, "the repaint must reopen the block the user had open");
 });
 
-test("Show more opens the inputs block when the new chunk carries a warning", () => {
-  const harness = showMoreHarness(() => ({ chunk: "<p class='psbt-warn'>warning</p>", tail: "" }));
+test("Show more opens the inputs block when the new chunk carries a problem", () => {
+  const harness = showMoreHarness(() => ({ chunk: "<p class='psbt-kv' data-problem='true'>problem</p>", tail: "" }));
   const showMore = evaluate("hodlPsbtShowMore", harness.scope);
   showMore(harness.event);
   assert.equal(harness.details.open, true);
-  assert.equal(harness.details.hasAttribute("data-has-problem"), true);
+  assert.equal(harness.details.hasAttribute("data-problem"), true);
+});
+
+test("Show more does not open the inputs block for a chunk that only carries a class name", () => {
+  const harness = showMoreHarness(() => ({ chunk: "<p class='psbt-warn'>warning</p>", tail: "" }));
+  const showMore = evaluate("hodlPsbtShowMore", harness.scope);
+  showMore(harness.event);
+  assert.equal(harness.details.open, false, "the class name alone decides nothing");
+  assert.equal(harness.details.hasAttribute("data-problem"), false);
 });
 
 // ---- the signer audit ----------------------------------------------------
@@ -357,4 +500,24 @@ test("the overall line is amber otherwise", () => {
 
 test("no overall line without an audit", () => {
   assert.equal(overallState({ tier: undefined, analysis: "complete" }), null);
+});
+
+test("with no key loaded and no other problem the overall line is not amber", () => {
+  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
+  const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.equal(state, "complete", "the no-key ownership check does not count");
+  assert.ok(!html.includes("ANALYSIS INCOMPLETE"));
+});
+
+test("a check incomplete for any other reason still makes the overall line amber", () => {
+  // No UTXO claim: the fee check could not run, so it counts.
+  const html = renderPsbt(psbtFixture());
+  const state = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.equal(state, "incomplete");
+});
+
+test("the audit fixture shows no amber overall line above a green audit verdict", () => {
+  const html = renderPsbt(psbtFixture(), {}, { hodlWitUtxo: () => ({ amount: 60000n, script: scriptA }) });
+  const analysis = html.match(/data-psbt-analysis-overall='(\w+)'/)[1];
+  assert.equal(overallState({ tier: "pass", analysis }), "ok");
 });

@@ -260,6 +260,21 @@ test("the three unwired checks fold into one Not checked here line; any other va
   assert.ok(bare.includes('data-audit-check="nonceReuse" data-audit-tone="warn"'));
 });
 
+test("the Not checked here note lives inside the checks block, so the groups draw one separator", () => {
+  const html = psbtSignerAuditHtml(reportFor([]), null, null, "mainnet");
+  const open = html.indexOf('<details class="derivation-advanced" data-audit-checks');
+  const close = html.indexOf("</details>", open);
+  assert.ok(open >= 0 && close > open, "fixture: the checks block renders");
+  const block = html.slice(open, close);
+  assert.ok(block.includes("data-audit-unchecked"), "the note sits inside the block it describes");
+  assert.ok(!html.slice(close).includes("data-audit-unchecked"), "and not after it, where it would draw its own rule");
+});
+
+test("the checks block's open state comes from the check tones, never the rendered class names", () => {
+  const source = readFileSync(new URL("../src/js/psbt-signer-audit-view.js", import.meta.url), "utf8");
+  assert.ok(!/\.includes\(\s*["']psbt-(bad|warn)["']\s*\)/.test(source), "the view must not decide folding from psbt-bad/psbt-warn");
+});
+
 test("a missing check value renders Unknown in the warning tone, never a table row named undefined", () => {
   // sighashPolicy has an "undefined" value (a real sighash state); a check
   // the report leaves out must not read it.
