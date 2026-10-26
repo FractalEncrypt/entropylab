@@ -60,6 +60,7 @@ import { coreMixEntropy, coreMixSecrets, wipeCoreMixSecrets } from "./core-mix.j
 import { auditSigner as hodlAuditSigner } from "./psbt-signer-audit.js";
 import { psbtSignerAuditVerification as hodlPsbtSignerAuditVerify } from "./psbt-signer-audit-verify.js";
 import { psbtSignerAuditErrorHtml as hodlPsbtSignerAuditErrorHtml, psbtSignerAuditHtml as hodlPsbtSignerAuditHtml } from "./psbt-signer-audit-view.js";
+import { checkRbfReplacement as hodlCheckRbfReplacement } from "./psbt-rbf-check.js";
 // The Lightning node key tool (its own workspace tab): aezeed deciphering
 // and the LND/LDK node identity derivations live in lightning.js/aezeed.js.
 import { hodlInitLn, hodlLnWipeMem } from "./lightning.js";
@@ -848,6 +849,9 @@ function hodlCoreMixReset() {
     summary.hidden = true;
     summary.textContent = "";
   }
+  // Its error line goes too: a refusal for the dropped file must not linger.
+  let error = typeof document !== "undefined" ? document.getElementById("core-mix-error") : null;
+  if (error) error.textContent = "";
 }
 function hodlCoreMixShowError(message) {
   let error = document.getElementById("core-mix-error");
@@ -4696,7 +4700,7 @@ function hodlCoreMixSelectedEntropy(targetWords = hodlTargetWordCount) {
   } catch (error) {
     return { ok: false, error: hodlNote(error.message || String(error)) };
   }
-  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's {count} spend secrets and the {source} transcript; the first {bits} bits of that hash become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
+  notes.push(hodlNote("SHA-256 of the domain tag, the wallet's spend secrets ({count}) and the {source} transcript; the first {bits} bits of that hash become the seed.", { count: hodlCoreMix.count, source, bits: config.bits }));
   return { ok: true, bytes, hex: hodlHex.encode(bytes), bits: config.bits, sourceBits, method: "core-wallet-mix-v1", notes, warnings };
 }
 function hodlUpdateCards() {
@@ -6887,7 +6891,7 @@ function hodlRenderKeyForm() {
       (async () => {
         let bytes = null;
         try {
-          if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlT("This wallet file is too large to inspect safely."));
+          if (chosen.size > CORE_WALLET_MAX_BYTES) throw new Error(hodlTText("This wallet file is too large to inspect safely."));
           bytes = new Uint8Array(await chosen.arrayBuffer());
           if (stale()) return;
           hodlCoreMixLoadBytes(bytes, chosen.name);
@@ -6906,7 +6910,7 @@ function hodlRenderKeyForm() {
       hodlCoreMixSource = sourceSelect.value === "cards" ? "cards" : "dice";
       if (state) state.coreMixSource = hodlCoreMixSource;
       let helpEl = document.getElementById("core-mix-transcript-help");
-      if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlT("Two characters per card, rank then suit (AS 7H TD …).") : hodlT("Faces 1–6, as many rolls as the dice method recommends.");
+      if (helpEl) helpEl.textContent = hodlCoreMixSource === "cards" ? hodlTText("Two characters per card, rank then suit (AS 7H TD …).") : hodlTText("Faces 1–6, as many rolls as the dice method recommends.");
       // A stale result, or a derivation still running on the old source, must
       // not survive the change.
       hodlInvalidateDerivation();
@@ -11531,7 +11535,7 @@ function hodlSetButtonEnabled(id, on) {
 }
 // The two cards that run an inspection, and what each one's run reads.
 var hodlPsbtCards = [
-  { text: "psbt-text", fields: ["psbt-key", "psbt-pass", "psbt-audit-before"], go: "psbt-go", download: "psbt-download", out: "psbt-out", session: "psbt-session" },
+  { text: "psbt-text", fields: ["psbt-key", "psbt-pass", "psbt-audit-before", "psbt-rbf-original"], go: "psbt-go", download: "psbt-download", out: "psbt-out", session: "psbt-session" },
   { text: "nonce-text", fields: ["nonce-key", "nonce-pass", "psbt-ax-transcript"], go: "nonce-go", out: "nonce-out", session: "nonce-session" },
 ];
 // A run is stamped with everything it read: the payload, the key fields and
@@ -11599,10 +11603,11 @@ function hodlEndPsbtSession() {
   hodlPsbtWipeMem();
   hodlPsbtClearNonceHistory(true);
   hodlPsbtRetireAuditUploads();
+  hodlPsbtRetireRbfUploads();
   hodlPsbtLast = null;
   hodlPsbtInspected = {};
   hodlPsbtSessionSpec = hodlNote("Accessible fields were cleared (best effort).");
-  for (let id of ["psbt-key", "psbt-pass", "psbt-text", "psbt-audit-before", "psbt-ax-transcript", "nonce-key", "nonce-pass", "nonce-text", "descriptor-reuse-text"]) {
+  for (let id of ["psbt-key", "psbt-pass", "psbt-text", "psbt-audit-before", "psbt-rbf-original", "psbt-ax-transcript", "nonce-key", "nonce-pass", "nonce-text", "descriptor-reuse-text"]) {
     let field = document.getElementById(id);
     if (field) field.value = "";
   }
@@ -11799,6 +11804,19 @@ function hodlInitPsbt() {
     auditFile.value = "";
     if (chosen) hodlPsbtLoadAuditUpload(chosen);
   });
+  // The RBF screen is preview-only: its field and picker exist only in
+  // preview builds, so the wiring is gated the same way as the markup.
+  if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) {
+    const rbfFile = document.getElementById("psbt-rbf-file");
+    document.getElementById("psbt-rbf-upload").onclick = () => rbfFile.click();
+    rbfFile.addEventListener("change", () => {
+      const chosen = rbfFile.files?.[0];
+      rbfFile.value = "";
+      if (chosen) hodlPsbtLoadRbfUpload(chosen);
+    });
+    // Editing the original retires a verdict computed from the old one.
+    document.getElementById("psbt-rbf-original")?.addEventListener("input", hodlPsbtClearRbfVerdict);
+  }
   document.getElementById("psbt-download").onclick = () => {
     hodlSetPsbtError(null);
     try {
@@ -12431,6 +12449,190 @@ var hodlPsbtAuditUploadGeneration = 0;
 function hodlPsbtRetireAuditUploads() {
   hodlPsbtAuditUploadGeneration += 1;
 }
+// An RBF-original upload belongs to the session it started in, exactly like
+// the audit upload: ending the session retires a read that is still pending.
+var hodlPsbtRbfUploadGeneration = 0;
+
+function hodlPsbtRetireRbfUploads() {
+  hodlPsbtRbfUploadGeneration += 1;
+}
+
+// The rendered verdict belongs to the exact pair of PSBTs it was computed
+// from: any change to either side retires it, so a green verdict can never
+// sit next to a different original.
+function hodlPsbtClearRbfVerdict() {
+  document.getElementById("psbt-out")?.querySelector("[data-rbf-verdict]")?.remove();
+}
+
+function hodlPsbtLoadRbfUpload(file) {
+  // Each pick retires the reads still pending, so the last file chosen wins.
+  let generation = ++hodlPsbtRbfUploadGeneration;
+  (async () => {
+    try {
+      let bytes = psbtBytesFromUpload(new Uint8Array(await file.arrayBuffer()));
+      if (generation !== hodlPsbtRbfUploadGeneration) return;
+      document.getElementById("psbt-rbf-original").value = hodlBytesToB64(bytes);
+      hodlPsbtClearRbfVerdict();
+      // A programmatic fill fires no input event: refresh Inspect and Clear
+      // like the audit upload does (typeof: narrow test slices).
+      if (typeof hodlSyncPsbtControls === "function") hodlSyncPsbtControls();
+    } catch (exception) {
+      if (generation !== hodlPsbtRbfUploadGeneration) return;
+      hodlSetPsbtError({ raw: exception.message || String(exception) });
+    }
+  })();
+}
+
+function hodlPsbtRbfAmount(value) {
+  if (typeof value === "bigint") return value;
+  if (Number.isInteger(value) && value >= 0) return BigInt(value);
+  throw new Error("An output amount must be a non-negative integer.");
+}
+
+function hodlPsbtRbfBtc(sats) {
+  let abs = sats < 0n ? -sats : sats;
+  return `${sats < 0n ? "-" : ""}${abs / 100000000n}.${String(abs % 100000000n).padStart(8, "0")}`;
+}
+
+function hodlPsbtRbfShowScript(scriptHex, network) {
+  try {
+    let address = hodlAddressFromScript(hodlHex.decode(scriptHex), network);
+    if (address) return address;
+  } catch {
+    // A script that does not decode on this network is shown as hex.
+  }
+  return scriptHex;
+}
+
+// checkRbfReplacement compares plain transaction descriptions. These build
+// them from the inspector's parsed shapes; input txids keep the byte order
+// the parser reports, the same on both sides of the comparison.
+function hodlPsbtRbfNormalizeTx(tx) {
+  return {
+    version: tx.version,
+    locktime: tx.locktime,
+    inputs: tx.inputs.map((input) => ({
+      txid: hodlHex.encode(input.txid),
+      vout: input.vout,
+      sequence: input.sequence,
+      sighash: null,
+      amount: null,
+      amountVerified: false,
+    })),
+    outputs: tx.outputs.map((output) => ({ script: hodlHex.encode(output.script), amount: hodlPsbtRbfAmount(output.amount) })),
+  };
+}
+
+function hodlPsbtRbfNormalizePsbt(doc) {
+  let normalized = hodlPsbtRbfNormalizeTx(doc.tx);
+  for (let i = 0; i < normalized.inputs.length; i++) {
+    let entries = doc.inputs[i] || [], input = normalized.inputs[i];
+    // BIP-174 input types: 0x00 non_witness_utxo, 0x01 witness_utxo,
+    // 0x03 sighash type.
+    let sighash = entries.find((entry) => entry.type === 3 && entry.keydata.length === 0);
+    if (sighash) {
+      if (sighash.val.length !== 4) throw new Error("A sighash type must be 4 bytes.");
+      input.sighash = hodlR32(sighash.val, 0);
+    }
+    let witness = entries.find((entry) => entry.type === 1 && entry.keydata.length === 0);
+    if (witness) {
+      if (witness.val.length < 8) throw new Error("A witness utxo is too short.");
+      input.amount = hodlPsbtRbfAmount(new DataView(witness.val.buffer, witness.val.byteOffset, witness.val.byteLength).getBigUint64(0, true));
+    }
+    let nonWitness = entries.find((entry) => entry.type === 0 && entry.keydata.length === 0);
+    if (nonWitness) {
+      let prevTx = parseRawTx(nonWitness.val), prevOutput = prevTx.outputs[input.vout];
+      if (!prevOutput) throw new Error("The non-witness utxo has no output at this input's index.");
+      input.amount = hodlPsbtRbfAmount(prevOutput.amount);
+      // Verified only when the previous transaction's txid — double SHA-256
+      // of its non-witness serialization — is the input's outpoint txid. A
+      // bare witness_utxo amount stays an unverified claim.
+      input.amountVerified = hodlHex.encode(hodlSha256(hodlSha256(serializeTx(prevTx)))) === input.txid;
+    }
+  }
+  return normalized;
+}
+
+function hodlPsbtRbfItemLine(item, network) {
+  let dest = item.script !== undefined ? hodlPsbtRbfShowScript(item.script, network) : "";
+  switch (item.code) {
+    case "payment-changed": return hodlT("A payment to {dest} changed from {before} BTC to {after} BTC.", { dest, before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "payment-removed": return hodlT("A payment of {before} BTC to {dest} was removed.", { dest, before: hodlPsbtRbfBtc(item.before) });
+    case "change-removed": return hodlT("Your change output of {before} BTC was removed.", { before: hodlPsbtRbfBtc(item.before) });
+    case "change-decreased": return hodlT("Your change decreased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "output-decreased-unverified": return hodlT("One output decreased. Check that it is your change.");
+    case "own-output-increased": return hodlT("An output this key derives increased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "new-own-output": return hodlT("A new output of {after} BTC goes to an address this key derives.", { after: hodlPsbtRbfBtc(item.after) });
+    case "new-output-unverified": return hodlT("A new output of {after} BTC to {dest} appeared.", { dest, after: hodlPsbtRbfBtc(item.after) });
+    case "multiple-decreases": return hodlT("More than one output decreased.");
+    case "input-dropped": return hodlT("An input from the original transaction was dropped.");
+    case "input-added": return hodlT("An input was added.");
+    case "fee-incomplete": return hodlT("Fee comparison incomplete.");
+    case "fee-not-increased": return hodlT("The fee did not increase.");
+    case "version-changed": return hodlT("The transaction version changed.");
+    case "locktime-changed": return hodlT("The transaction locktime changed.");
+    case "sequence-changed": return hodlT("An input's sequence changed.");
+    case "sighash-changed": return hodlT("An input's sighash type changed.");
+    case "sighash-not-all": return hodlT("An input does not sign with SIGHASH_ALL.");
+    case "change-redirected": return hodlT("Your change was redirected: your own output went down or disappeared while a new output this key cannot derive appeared.");
+    default: return hodlT("A change this check does not recognize.");
+  }
+}
+
+function hodlPsbtRbfNote(verdict, lines) {
+  let cls = { green: "is-public", red: "is-private", amber: "is-caution", neutral: "is-muted" }[verdict] || "is-caution";
+  let headline = {
+    green: hodlT("Payments preserved; fee increased."),
+    red: hodlT("A payment was changed or removed."),
+    amber: hodlT("Additional review needed."),
+    neutral: hodlT("No shared inputs."),
+  }[verdict] || hodlT("Additional review needed.");
+  let html = `<div class="edge-note ${cls}" data-rbf-verdict="${verdict}"><p><strong>${headline}</strong></p>`;
+  if (verdict === "neutral") html += `<p>${hodlT("This does not directly replace the supplied transaction.")}</p>`;
+  if (lines.length > 0) html += `<ul>${lines.map((line) => `<li data-rbf-item="${line.code}">${line.message}</li>`).join("")}</ul>`;
+  html += `<p>${hodlT("This compares the supplied transactions. It does not confirm that the network will accept the replacement.")}</p></div>`;
+  return html;
+}
+
+// The fee-bump check (preview): compare the transaction the user broadcast
+// with the replacement PSBT being inspected and fail closed — a bump is
+// clean only when the payments are provably intact and the extra fee comes
+// out of the user's own change (Electrum GHSA-6jp4-8v48-cc5v).
+function hodlPsbtPrependRbfCheck(output, returnedBytes, kind, network) {
+  let raw = String(document.getElementById("psbt-rbf-original")?.value || "").trim();
+  if (!raw) return null;
+  let result = null, note;
+  if (kind !== "psbt") {
+    note = hodlPsbtRbfNote("amber", [{ code: "replacement-raw", message: hodlT("Inspect the fee-bump PSBT, not a raw transaction.") }]);
+  } else {
+    let original = null;
+    try {
+      let originalBytes = hodlPsbtBytesFromText(raw);
+      original = isPsbtMagic(originalBytes) ? hodlPsbtRbfNormalizePsbt(hodlParsePsbt(originalBytes)) : hodlPsbtRbfNormalizeTx(parseRawTx(originalBytes));
+    } catch {
+      // The original is the only side this failure can be blamed on.
+      result = null;
+      note = hodlPsbtRbfNote("amber", [{ code: "original-unreadable", message: hodlT("The original transaction could not be read. Check the paste and Inspect again.") }]);
+    }
+    if (original) {
+      try {
+        let replacement = hodlPsbtRbfNormalizePsbt(hodlParsePsbt(returnedBytes));
+        let ownership = hodlSessionOwnership(network);
+        let ownsScript = ownership.size === 0 ? null : (scriptHex) => matchOwnership(ownership, hodlHex.decode(scriptHex)).state === "ours";
+        result = hodlCheckRbfReplacement({ original, replacement, ownsScript });
+        let lines = result.verdict === "neutral" ? [] : result.items.map((item) => ({ code: item.code, message: hodlPsbtRbfItemLine(item, network) }));
+        note = hodlPsbtRbfNote(result.verdict, lines);
+      } catch {
+        // The inspected PSBT failed to normalize or compare: never blame the
+        // original, and never pass.
+        result = null;
+        note = hodlPsbtRbfNote("amber", []);
+      }
+    }
+  }
+  output.insertAdjacentHTML("afterbegin", note);
+  return result;
+}
 async function hodlPsbtLoadAuditUpload(chosen) {
   const generation = ++hodlPsbtAuditUploadGeneration;
   try {
@@ -12450,6 +12652,9 @@ async function hodlPsbtLoadAuditUpload(chosen) {
 function hodlPsbtClearSignerAudit() {
   const output = document.getElementById("psbt-out");
   const section = output?.querySelector("[data-audit-section]");
+  // The RBF verdict is retired for the same reasons, and before the early
+  // return below: it must go even when no audit section is on screen.
+  hodlPsbtClearRbfVerdict();
   // The cached report counts as a shown verdict even when a repaint left it
   // out of the DOM: both are retired together (Wicked's review of #1118).
   if (!section && !hodlPsbtLast?.audit) return;
@@ -12494,6 +12699,9 @@ function hodlRunPsbt() {
     let limits = { inputs: PSBT_INSPECTOR_LIMIT, outputs: PSBT_INSPECTOR_LIMIT, step: PSBT_INSPECTOR_LIMIT, format: hodlFormatCount };
     output.innerHTML = kind === "psbt" ? hodlRenderPsbt(parsed, sourceTag, checkedAt, "inspect", { network, limits }) : hodlRenderRawTx(parsed, sourceTag, checkedAt, "inspect", { network, limits });
     let audit = hodlPsbtPrependSignerAudit(output, bytes, kind, network);
+    // Preview only: the RBF verdict is prepended after the audit so it
+    // renders above it (Electrum GHSA-6jp4-8v48-cc5v).
+    if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) hodlPsbtPrependRbfCheck(output, bytes, kind, network);
     hodlPsbtLast = { kind, parsed, sourceTag, checkedAt, network, limits, audit };
     hodlJournalLog("inspect", kind, "psbt");
   } catch (exception) {
@@ -20558,6 +20766,12 @@ function hodlInitSecretFieldAutoClear() {
       let field = document.getElementById(id);
       if (field) field.value = "";
     }
+    // The pasted RBF original is a PSBT too: it can hide an xprv in
+    // proprietary fields, so it wipes with the same sweep, and a pending
+    // upload of it retires with the session.
+    let psbtRbfOriginal = document.getElementById("psbt-rbf-original");
+    if (psbtRbfOriginal) psbtRbfOriginal.value = "";
+    try { hodlPsbtRetireRbfUploads(); } catch {}
     // The key-reuse verdict lists derived keys and paths: retire it with its field.
     for (let id of ["descriptor-reuse-out", "descriptor-reuse-error"]) {
       let output = document.getElementById(id);
