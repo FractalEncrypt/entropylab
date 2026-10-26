@@ -48,7 +48,7 @@ import { hex as hodlHex } from "./coders.js";
 import { addressFor, addressFromScript, descriptorDerive, p2pkhScript, p2shP2wpkhScript, p2shScript, p2trKeyScript, p2wpkhScript, p2wshScript } from "./addresses.js";
 import { base58checkDecode, base58checkEncode } from "./base58.js";
 import { HDKey as hodlHDKey } from "./hdkey.js";
-import { entropyToMnemonic as hodlEntropyToMnemonic, mnemonicToEntropy as hodlMnemonicToEntropy, mnemonicToSeedSync as hodlMnemonicToSeed, validateMnemonic as hodlIsValidMnemonic } from "./bip39.js";
+import { entropyToMnemonic as hodlEntropyToMnemonic, mnemonicToEntropy as hodlMnemonicToEntropy, mnemonicToSeedSync as hodlMnemonicToSeed, seedFromEntropy as hodlSeedFromEntropy, seedFromIndices as hodlSeedFromIndices, validateMnemonic as hodlIsValidMnemonic } from "./bip39.js";
 import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
@@ -1098,6 +1098,22 @@ function hodlResultHasSeed(result) {
 function hodlResultMnemonic(result) {
   return result?.entropy ? hodlEntropyToMnemonic(result.entropy, hodlBip39Wordlist) : null;
 }
+
+// Validated words -> wordlist indices (hodlBip39WordIndex, built once from
+// the frozen wordlist), so they derive their seed as bytes without a joined
+// phrase string.
+function hodlWordIndices(words) {
+  let indices = new Uint16Array(words.length);
+  words.forEach((word, i) => {
+    let index = hodlBip39WordIndex.get(word);
+    if (index === undefined) {
+      indices.fill(0);
+      throw new Error("Invalid mnemonic");
+    }
+    indices[i] = index;
+  });
+  return indices;
+}
 function hodlResultEntropyHex(result) {
   return result?.entropy ? hodlHex.encode(result.entropy) : null;
 }
@@ -1109,7 +1125,7 @@ function hodlResultSeedHex(result) {
 // derived with produced, or a BIP-85 child's words with the given passphrase.
 function hodlSeedSessionRoot(result, passphrase = "") {
   if (result?.rootNode) return hodlResultRootNode(result);
-  let seed = hodlMnemonicToSeed(hodlResultMnemonic(result), passphrase);
+  let seed = hodlSeedFromEntropy(result.entropy, passphrase);
   try {
     return hodlHDKey.fromMasterSeed(seed);
   } finally {
@@ -1507,7 +1523,16 @@ async function hodlMnemonicWalletWithProgress(value, passphrase, network, count,
   // never as text (#546 B2).
   // The derivation records them with its row keys, so one that never commits
   // zeroes them.
-  let mnemonic = validation.words.join(" "), seed = hodlMnemonicToSeed(mnemonic, passphrase), entropy = hodlMnemonicToEntropy(mnemonic, hodlBip39Wordlist), root;
+  // The seed comes from the word indices as bytes, never a joined phrase
+  // string. The phrase text is still built once for hodlMnemonicToEntropy,
+  // which has no byte-based counterpart yet.
+  let indices = hodlWordIndices(validation.words), seed, entropy, root;
+  try {
+    seed = hodlSeedFromIndices(indices, passphrase);
+  } finally {
+    indices.fill(0);
+  }
+  entropy = hodlMnemonicToEntropy(validation.words.join(" "), hodlBip39Wordlist);
   for (let bytes of [entropy, seed]) hodlActiveDerivation?.rowKeys?.push(bytes);
   try {
     root = hodlHDKey.fromMasterSeed(seed);
@@ -7851,6 +7876,8 @@ function hodlFingerprintMnemonic() {
   }
   return null;
 }
+// Still text: its only source, hodlFingerprintMnemonic, builds the phrase
+// from the live inputs as a string; the byte-based preview is a later phase.
 function hodlMasterFingerprint(mnemonic, passphrase = "") {
   let seed = hodlMnemonicToSeed(mnemonic, passphrase);
   try {
@@ -11471,7 +11498,12 @@ function hodlLoadPsbtKey(text, passphrase) {
       if (mnemonic.error?.key) throw hodlError(mnemonic.error.key, mnemonic.error.vars);
       throw hodlError("Enter a BIP39 seed phrase, root xprv/tprv, WIF, or 64-character hex key.");
     }
-    let seed = hodlMnemonicToSeed(mnemonic.words.join(" "), passphrase || "");
+    let indices = hodlWordIndices(mnemonic.words), seed;
+    try {
+      seed = hodlSeedFromIndices(indices, passphrase || "");
+    } finally {
+      indices.fill(0);
+    }
     try {
       hodlPsbtHd = hodlHDKey.fromMasterSeed(seed);
     } finally {
@@ -12868,7 +12900,12 @@ function hodlSpLoadKey(text, passphrase) {
     if (mnemonic.error?.key) throw hodlError(mnemonic.error.key, mnemonic.error.vars);
     throw hodlError("Enter a BIP39 seed phrase or a BIP32 root xprv/tprv.");
   }
-  let seed = hodlMnemonicToSeed(mnemonic.words.join(" "), passphrase || "");
+  let indices = hodlWordIndices(mnemonic.words), seed;
+  try {
+    seed = hodlSeedFromIndices(indices, passphrase || "");
+  } finally {
+    indices.fill(0);
+  }
   try {
     hodlSpHd = hodlHDKey.fromMasterSeed(seed);
   } finally {
@@ -19776,9 +19813,9 @@ function hodlCopyVanityValue(button, value, label) {
 function hodlVanityMatchFingerprint(match, run) {
   if (match.fingerprint) return match.fingerprint;
   if (run.method !== "passphrase") return (match.fingerprint = run.sourceLabel);
-  let state = hodlVanitySourceKeys().find((candidate) => candidate.id === run.sourceId), mnemonic = hodlResultMnemonic(state?.result);
-  if (!mnemonic) return "";
-  let seed = hodlMnemonicToSeed(mnemonic, match.passphrase), root = null;
+  let state = hodlVanitySourceKeys().find((candidate) => candidate.id === run.sourceId);
+  if (!state?.result?.entropy) return "";
+  let seed = hodlSeedFromEntropy(state.result.entropy, match.passphrase), root = null;
   try {
     root = hodlHDKey.fromMasterSeed(seed);
     return (match.fingerprint = hodlFingerprintHex(root.fingerprint));
@@ -20035,9 +20072,8 @@ function hodlVanityMatchAddress(match, run, state) {
   let root = null, node = null, scan = null, spend = null;
   try {
     if (run.method === "passphrase") {
-      let mnemonic = hodlResultMnemonic(state.result);
-      if (!mnemonic) throw hodlError("The key has no seed words, so this match's passphrase cannot be checked.");
-      let seed = hodlMnemonicToSeed(mnemonic, match.passphrase);
+      if (!state.result?.entropy) throw hodlError("The key has no seed words, so this match's passphrase cannot be checked.");
+      let seed = hodlSeedFromEntropy(state.result.entropy, match.passphrase);
       try {
         root = hodlHDKey.fromMasterSeed(seed);
       } finally {
