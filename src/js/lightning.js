@@ -120,7 +120,7 @@ let hodlLnCopyIcon = () => "";
 // normalizing or deriving.
 const LN_SEED_MAX_LENGTH = 4096;
 
-export function hodlLnWipeMem() {
+export function hodlLnKeyWipeMem() {
   if (hodlLnLast) {
     if (hodlLnLast.entropy) hodlLnLast.entropy.fill(0);
     if (hodlLnLast.salt) hodlLnLast.salt.fill(0);
@@ -130,6 +130,13 @@ export function hodlLnWipeMem() {
   }
   hodlLnLast = null;
   hodlLnReveal = false;
+}
+
+// The full wipe: key material and the pasted invoice. Clear, End Session
+// and pagehide call this; a format, network or coin-type change only wipes
+// the key side (hodlLnKeyWipeMem), so a pasted invoice survives it.
+export function hodlLnWipeMem() {
+  hodlLnKeyWipeMem();
   hodlLnInvWipeMem();
 }
 
@@ -219,7 +226,7 @@ function hodlRunLn() {
   const error = document.getElementById("ln-error");
   const session = document.getElementById("ln-session");
   error.textContent = "";
-  hodlLnWipeMem();
+  hodlLnKeyWipeMem();
   const format = hodlLnFormat();
   try {
     const text = String(document.getElementById("ln-seed").value || "");
@@ -259,7 +266,7 @@ function hodlRunLn() {
     session.textContent = t("Node key derived. Decoded key material stays in page memory until you clear it.");
     hodlLnJournalLog("derive", `${format} ${hodlLnLast.nodePubKey.slice(0, 8)}`, "ln");
   } catch (exception) {
-    hodlLnWipeMem();
+    hodlLnKeyWipeMem();
     hodlLnRender();
     // Keyed errors (aezeed.js taxonomy, the validations above) format and
     // translate through t(); anything else shows its raw message.
@@ -325,6 +332,23 @@ const lnInvPageNetwork = () => {
   return LN_INV_NETWORKS.includes(value) ? value : "mainnet";
 };
 
+// The decoder names the network the invoice is for; the page names its own.
+// Both use the same vocabulary (mainnet, testnet, signet, regtest), but a
+// decoder that returns an alias (bitcoin, bc, tb, tbs, bcrt) must not make a
+// matching invoice look wrong. Normalize, and fail closed (warn) on unknown.
+const LN_INV_NETWORK_ALIASES = {
+  bitcoin: "mainnet",
+  bc: "mainnet",
+  mainnet: "mainnet",
+  testnet: "testnet",
+  tb: "testnet",
+  signet: "signet",
+  tbs: "signet",
+  regtest: "regtest",
+  bcrt: "regtest",
+};
+export const lnInvNetworkName = (value) => LN_INV_NETWORK_ALIASES[value] || String(value);
+
 const lnInvFormatMsat = (msat) => {
   const value = BigInt(msat);
   const btc = value / 100000000000n;
@@ -371,13 +395,13 @@ function hodlLnInvRender() {
   const pageNetwork = lnInvPageNetwork();
   const parts = [];
   if (r.kind === "bolt11") {
-    parts.push(`<div class="edge-note ln-inv-states">
-      <p>${hodlT("Present — checksum verifies.")}</p>
-      <p>${hodlT("Structurally valid — required fields present.")}</p>
-      ${r.signatureValid ? `<p class="ok">${hodlT("Signature valid — verifies against recovered node id.")}</p>` : ""}
+    parts.push(`<div class="edge-note ln-inv-states" data-ln-inv-kind="invoice">
+      <p data-ln-inv-state="checksum">${hodlT("Present — checksum verifies.")}</p>
+      <p data-ln-inv-state="structure">${hodlT("Structurally valid — required fields present.")}</p>
+      ${r.signatureValid ? `<p class="ok" data-ln-inv-state="signature">${hodlT("Signature valid — verifies against recovered node id.")}</p>` : ""}
     </div>`);
-    if (r.network !== pageNetwork) {
-      parts.push(`<p class="warn">${hodlT("This invoice is for Bitcoin {network}, but page network is {pageNetwork}.", { network: r.network, pageNetwork })}</p>`);
+    if (lnInvNetworkName(r.network) !== pageNetwork) {
+      parts.push(`<p class="warn" data-ln-inv-warning="network">${hodlT("This invoice is for Bitcoin {network}, but page network is {pageNetwork}.", { network: lnInvNetworkName(r.network), pageNetwork })}</p>`);
     }
     parts.push(lnInvRow(hodlT("Amount"), r.amountMsat === null
       ? hodlT("No amount set — payer chooses.")
@@ -404,24 +428,28 @@ function hodlLnInvRender() {
       }
     }
   } else {
+    const kindKey = r.hrp === "lno" ? "offer" : r.hrp === "lnr" ? "invoice-request" : "invoice";
     const kindNoun = r.hrp === "lno" ? t("Offer") : r.hrp === "lnr" ? t("Invoice request") : t("Invoice");
-    parts.push(`<div class="edge-note ln-inv-states">
-      <p>${hodlT("Present — no checksum (BOLT12 omits it).")}</p>
-      <p>${hodlT("Structurally valid — required fields present.")}</p>
-      <p class="muted">${hodlT("Signature not checked — never marks BOLT12 verified.")}</p>
+    parts.push(`<div class="edge-note ln-inv-states" data-ln-inv-kind="${kindKey}">
+      <p data-ln-inv-state="checksum">${hodlT("Present — no checksum (BOLT12 omits it).")}</p>
+      <p data-ln-inv-state="structure">${hodlT("Structurally valid — required fields present.")}</p>
+      <p class="muted" data-ln-inv-state="signature">${hodlT("Signature not checked — never marks BOLT12 verified.")}</p>
     </div>`);
-    const chains = r.fields.chains || (r.fields.chain ? [r.fields.chain] : null);
-    if (chains && !chains.includes(LN_INV_CHAIN_HASHES[pageNetwork])) {
-      parts.push(`<p class="warn">${hodlT("This invoice is for Bitcoin {network}, but page network is {pageNetwork}.", { network: chains.map(lnInvChainName).join(", "), pageNetwork })}</p>`);
+    // BOLT12: an absent offer_chains means the offer is for bitcoin
+    // (mainnet) only. Treat "no chain field" as the mainnet chain so a
+    // chainless offer warns on a testnet page.
+    const chains = r.fields.chains || (r.fields.chain ? [r.fields.chain] : [LN_INV_CHAIN_HASHES.mainnet]);
+    if (!chains.includes(LN_INV_CHAIN_HASHES[pageNetwork])) {
+      parts.push(`<p class="warn" data-ln-inv-warning="chain">${hodlT("This invoice is for Bitcoin {network}, but page network is {pageNetwork}.", { network: chains.map(lnInvChainName).join(", "), pageNetwork })}</p>`);
     }
     parts.push(lnInvRow(hodlT("Kind"), escapeHtml(kindNoun)));
     const visibility = bolt12RecipientVisibility(r.fields);
     if (visibility.kind === "blinded") {
-      parts.push(`<p class="edge-note">${hodlT("Recipient node id is not in this {kind} (blinded paths).", { kind: kindNoun })}</p>`);
+      parts.push(`<p class="edge-note" data-ln-inv-visibility="blinded">${hodlT("Recipient node id is not in this {kind} (blinded paths).", { kind: kindNoun })}</p>`);
     } else if (visibility.kind === "published") {
-      parts.push(`<p class="warn">${hodlT("No blinded path — this {kind} publishes its signing key in the clear. That is a signing key, not a destination.", { kind: kindNoun })}</p>`);
+      parts.push(`<p class="warn" data-ln-inv-warning="published-key" data-ln-inv-visibility="published">${hodlT("No blinded path — this {kind} publishes its signing key in the clear. That is a signing key, not a destination.", { kind: kindNoun })}</p>`);
     } else {
-      parts.push(`<p class="muted">${hodlT("No recipient information in this {kind}.", { kind: kindNoun })}</p>`);
+      parts.push(`<p class="muted" data-ln-inv-visibility="none">${hodlT("No recipient information in this {kind}.", { kind: kindNoun })}</p>`);
     }
     parts.push(lnInvRow(hodlT("Blinded paths"), `${escapeHtml(String(visibility.pathCount))} ${hodlT("(counted, never followed)")}`));
     if (r.fields.amount !== undefined) parts.push(lnInvRow(hodlT("Amount"), `${escapeHtml(r.fields.amount)} msat`));
@@ -522,10 +550,12 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
     document.getElementById(id)?.addEventListener("change", () => {
       // A stale result next to a flipped select is how a correct seed looks
       // wrong (a mainnet pubkey beside "Testnet"): wipe and re-render on any
-      // format or network change.
-      hodlLnWipeMem();
+      // format or network change. The invoice card is not key material: it
+      // survives, and is re-rendered so its network warning matches the page.
+      hodlLnKeyWipeMem();
       hodlLnRender();
       hodlLnSyncFormat();
+      hodlLnInvRender();
     });
   }
   document.getElementById("ln-session").textContent = t("No node key derived. Enter a seed phrase and derive.");
