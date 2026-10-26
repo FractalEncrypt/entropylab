@@ -7,8 +7,9 @@
 // CLN hsm_secret) runs inside the terminable worker; the worker alone holds
 // the decoded entropy, salt, seeds, xprvs and the CLN mnemonic; the page
 // receives public fields only (the secret text only while revealed); Clear
-// and a format or network change terminate the worker; and an answer whose
-// run id is stale is ignored.
+// and a format or network change ask the worker to scrub its secrets and
+// its WebAssembly memory, then terminate it (on the "scrubbed" answer or a
+// short bound); and an answer whose run id is stale is ignored.
 //
 // Expected values come from the pinned reference libraries (@scure/bip32,
 // @scure/bip39) and the CLN v26.06.9 vectors already pinned in
@@ -265,6 +266,25 @@ test("load-hsm takes the type-2 file bytes and the page never receives the mnemo
   assert.ok(!wire.includes(clnXprv), "the account xprv reached the page");
 });
 
+test("the worker answers scrubbed after dropping its secrets and retiring its WebAssembly", async () => {
+  const [derived, revealed, scrubbed, emptyReveal, after] = await ask([
+    { type: "init" },
+    { type: "derive", run: 51, format: "aezeed", words: AEZEED_WORDS.split(" "), passphrase: "", coinType: 0 },
+    { type: "reveal", run: 51 },
+    { type: "scrub" },
+    { type: "reveal", run: 52 },
+    { type: "derive", run: 53, format: "aezeed", words: AEZEED_WORDS.split(" "), passphrase: "", coinType: 0 },
+  ]);
+  assert.equal(derived.type, "derived");
+  assert.equal(revealed.secrets.rootXprv, lndMainnet.rootXprv, "the worker held no secret before the scrub");
+  assert.equal(scrubbed.type, "scrubbed", "the worker did not answer the scrub");
+  assert.equal(emptyReveal.secrets, null, "the scrub left a secret to reveal");
+  // The scrub retired the worker's own WebAssembly instance: a later derive
+  // is refused, as after End Session on the page.
+  assert.equal(after.type, "error");
+  assert.match(after.error.message, /session has ended/);
+});
+
 test("refusals carry the same keyed codes as today", async () => {
   // A bad BIP39 checksum (LDK): today's keyed error carries no code.
   const bad = "abandon ".repeat(12).trim();
@@ -372,7 +392,7 @@ test("Clear and a network change terminate the worker, and its late answers are 
     const network = page.getElementById("ln-network");
     network.value = "testnet";
     network.dispatchEvent({ type: "change" });
-    assert.equal(first.terminated, true, "a network change terminates the worker");
+    await until(() => first.terminated, "the network change terminating the worker");
     assert.equal(page.getElementById("ln-node-pubkey"), null, "the result survived the network change");
     // A late answer from the stopped worker must not bring the old result back.
     first.onmessage?.({ data: { type: "derived", run: first.run, result: { format: "aezeed", coinType: 0, nodePubKey: "02" + "00".repeat(32), path: "m/1017'/0'/6'/0/0", internalVersion: 0, birthdayDays: 0, birthdayTimestamp: 1231006505 } } });
@@ -383,9 +403,91 @@ test("Clear and a network change terminate the worker, and its late answers are 
     const second = spawned.at(-1);
     assert.ok(second && second !== first, "a new worker was spawned");
     page.getElementById("ln-wipe").onclick();
-    assert.equal(second.terminated, true, "Clear terminates the worker");
+    await until(() => second.terminated, "Clear terminating the worker");
     assert.equal(page.getElementById("ln-out").innerHTML, "", "Clear left the result on screen");
   } finally {
+    await cleanup();
+  }
+});
+
+test("the page terminates the worker on its scrubbed answer, ahead of the bound", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-seed").value = AEZEED_WORDS;
+    page.getElementById("ln-go").onclick();
+    await until(() => page.getElementById("ln-out").innerHTML.includes(lndMainnet.nodePubKey), "the node key");
+    const worker = spawned.at(-1);
+    assert.ok(worker, "the derivation ran in a key worker");
+    let terminatedOnScrubbed = null;
+    const pageHandler = worker.onmessage;
+    worker.onmessage = (event) => {
+      pageHandler(event);
+      if (event.data && event.data.type === "scrubbed") terminatedOnScrubbed = worker.terminated;
+    };
+    page.getElementById("ln-wipe").onclick();
+    assert.equal(worker.terminated, false, "the worker was terminated before it answered the scrub");
+    await until(() => worker.terminated, "the scrubbed worker's termination");
+    assert.equal(terminatedOnScrubbed, true, "the termination did not follow the scrubbed answer");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the page terminates a worker that never answers the scrub after a bound", async () => {
+  const page = lnPage();
+  const silent = [];
+  ln.hodlLnSetWorkerFactory(() => {
+    const worker = {
+      onmessage: null,
+      onerror: null,
+      terminated: false,
+      postMessage() {}, // never answers: no scrubbed answer ever comes
+      terminate() {
+        this.terminated = true;
+      },
+    };
+    silent.push(worker);
+    spawned.push(worker);
+    return { worker, url: null };
+  });
+  try {
+    page.getElementById("ln-seed").value = AEZEED_WORDS;
+    page.getElementById("ln-go").onclick();
+    const worker = silent.at(-1);
+    assert.ok(worker, "the derive spawned no worker");
+    page.getElementById("ln-wipe").onclick();
+    assert.equal(worker.terminated, false, "a worker that never answered was terminated before the bound");
+    await until(() => worker.terminated, "the bound termination of the silent worker");
+  } finally {
+    ln.hodlLnSetWorkerFactory(nodeFactory);
+    await cleanup();
+  }
+});
+
+test("a crashed worker is terminated and its blob URL revoked at once", async () => {
+  const page = lnPage();
+  const revoked = [];
+  const originalRevoke = URL.revokeObjectURL;
+  URL.revokeObjectURL = (url) => {
+    revoked.push(url);
+  };
+  ln.hodlLnSetWorkerFactory(() => {
+    const worker = new NodeWebWorker();
+    spawned.push(worker);
+    return { worker, url: "blob:ln-key-worker-test" };
+  });
+  try {
+    page.getElementById("ln-seed").value = AEZEED_WORDS;
+    page.getElementById("ln-go").onclick();
+    await until(() => page.getElementById("ln-out").innerHTML.includes(lndMainnet.nodePubKey), "the node key");
+    const worker = spawned.at(-1);
+    worker.onerror?.({ message: "boom" });
+    assert.equal(worker.terminated, true, "the crashed worker was not terminated at once");
+    assert.deepEqual(revoked, ["blob:ln-key-worker-test"], "the crashed worker's blob URL was not revoked");
+    assert.equal(page.getElementById("ln-error").textContent, "boom");
+  } finally {
+    URL.revokeObjectURL = originalRevoke;
+    ln.hodlLnSetWorkerFactory(nodeFactory);
     await cleanup();
   }
 });
@@ -418,17 +520,25 @@ test("scripts/build.mjs injects the bundled worker source as __LN_WORKER_SOURCE_
 
 // End Session retires the WebAssembly module for the rest of this process,
 // so this test must stay last: nothing after it can derive.
-test("after End Session the Lightning tool refuses to derive and spawns no worker", async () => {
+test("after End Session the Lightning tool refuses to derive and terminates its live worker", async () => {
   const page = lnPage();
   try {
-    const before = spawned.length;
-    wasmLoader.retireWasm();
-    assert.throws(() => wasmLoader.wasmModuleBytes(), /session has ended/, "the module bytes are still handed out after End Session");
     page.getElementById("ln-seed").value = AEZEED_WORDS;
     page.getElementById("ln-go").onclick();
-    assert.match(page.getElementById("ln-error").textContent, /session has ended/, "the refusal is not shown in #ln-error");
+    await until(() => page.getElementById("ln-out").innerHTML.includes(lndMainnet.nodePubKey), "the node key");
+    const live = spawned.at(-1);
+    assert.ok(live, "the derivation ran in a key worker");
+    const before = spawned.length;
+    wasmLoader.retireWasm();
+    assert.equal(wasmLoader.wasmRetired(), true, "the retired predicate does not report the retired session");
+    assert.throws(() => wasmLoader.wasmModuleBytes(), /session has ended/, "the module bytes are still handed out after End Session");
+    page.getElementById("ln-go").onclick();
+    // The refusal's stable marker is its error code, not the English copy.
+    assert.equal(page.getElementById("ln-error").dataset.code, "session-ended", "the refusal is not the session-ended error");
+    assert.ok(page.getElementById("ln-error").textContent.length > 0, "the refusal is not shown in #ln-error");
     assert.equal(page.getElementById("ln-out").innerHTML, "", "a retired session derived a node key");
     assert.equal(spawned.length, before, "a key worker was spawned after End Session");
+    await until(() => live.terminated, "the retired session's live worker was terminated");
   } finally {
     await cleanup();
   }

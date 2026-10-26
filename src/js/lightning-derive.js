@@ -265,7 +265,7 @@ export function deriveLightning({ format, words, passphrase = "", coinType = 0 }
 // result only, except a "revealed" answer, which carries the secret text on
 // explicit request. Every refusal keeps the keyed error shape (message, key,
 // vars, code) the page translates today.
-export function createLnKeyHandler(post) {
+export function createLnKeyHandler(post, { scrubWasm = () => {} } = {}) {
   let held = null; // the last derivation's secrets
   let hsmMnemonic = null; // the type-2 words read from a chosen hsm_secret file
 
@@ -386,6 +386,18 @@ export function createLnKeyHandler(post) {
       // page's own in-page refusal did. The held file's words survive a
       // derive refusal.
       drop();
+      return;
+    }
+    if (data.type === "scrub") {
+      // The page is about to terminate this worker: drop every held secret,
+      // then overwrite this worker's own WebAssembly memory (scrubWasm is
+      // retireWasm in the shipped worker; the in-process stand-in shares the
+      // page's instance, so it passes nothing). Answer so the page can
+      // terminate ahead of its bound.
+      drop();
+      hsmMnemonic = null;
+      scrubWasm();
+      post({ type: "scrubbed" });
     }
   };
 }

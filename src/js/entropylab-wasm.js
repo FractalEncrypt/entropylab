@@ -66,6 +66,9 @@ export const wasmReady = syncInit
   : WebAssembly.instantiate(wasmBytes, {}).then(({ instance }) => bind(instance));
 
 let retired = false;
+// The Lightning key worker can outlive End Session unless the page stops it:
+// the page checks this on every worker use, not only at spawn.
+export const wasmRetired = () => retired;
 export const requireReady = () => {
   if (retired) throw new Error("This session has ended; reload the page to start a new one.");
   if (!wasm) throw new Error("EntropyLab WebAssembly is not initialized yet; await wasmReady.");

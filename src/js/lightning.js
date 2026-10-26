@@ -21,12 +21,13 @@
 // key worker (ln-worker.js): the worker holds the decoded entropy, salt,
 // seeds, xprvs and a loaded hsm_secret's words; this page holds the public
 // result, and the secret text only while the user reveals it. Clear, a
-// format or network change, End Session and page hide terminate the worker,
-// which takes its whole heap and WebAssembly memory with it.
+// format or network change, End Session and page hide ask the worker to
+// scrub its secrets and overwrite its WebAssembly memory, then terminate
+// it, so its whole heap goes with it.
 //
 // Deterministic transformations of user input only: nothing here generates
 // entropy.
-import { wasmModuleBytes } from "./entropylab-wasm.js";
+import { wasmModuleBytes, wasmRetired } from "./entropylab-wasm.js";
 import { createLnKeyHandler } from "./lightning-derive.js";
 import { t, tHtml as hodlT } from "./i18n.js";
 import { privateCopyButtonHtml } from "./private-data.js";
@@ -88,12 +89,45 @@ export function hodlLnSetWorkerFactory(factory) {
   hodlLnSpawnWorker = factory;
 }
 
+const hodlLnStopping = new Set(); // workers asked to scrub, termination still owed
+
+const hodlLnTerminate = (spawned) => {
+  clearTimeout(spawned.scrubTimer);
+  hodlLnStopping.delete(spawned);
+  spawned.worker.terminate();
+  if (spawned.url) URL.revokeObjectURL(spawned.url);
+};
+
+// Terminating a worker hands its memory back to the browser unscrubbed, so
+// every stop first asks the worker to scrub itself: it drops every held
+// secret, zeroes its typed arrays and overwrites its own WebAssembly memory
+// (the same retireWasm End Session uses on the page), then answers
+// "scrubbed". The worker is terminated as soon as that answer arrives, or
+// after a short bound if it is too busy or already gone to answer —
+// whichever comes first.
 const hodlLnStopWorker = () => {
-  if (hodlLnWorker) {
-    hodlLnWorker.worker.terminate();
-    if (hodlLnWorker.url) URL.revokeObjectURL(hodlLnWorker.url);
-  }
+  const spawned = hodlLnWorker;
+  if (!spawned) return;
   hodlLnWorker = null;
+  hodlLnStopping.add(spawned);
+  try {
+    spawned.worker.postMessage({ type: "scrub" });
+  } catch {
+    // A worker that cannot take the scrub is terminated all the same.
+  }
+  if (hodlLnStopping.has(spawned)) {
+    // No synchronous "scrubbed" answer: terminate on the answer or the bound.
+    spawned.scrubTimer = setTimeout(() => hodlLnTerminate(spawned), 250);
+  }
+};
+
+// pagehide cannot wait for the "scrubbed" answer — the page may be frozen
+// with the worker's heap intact — so post the scrub and terminate in the
+// same turn. Best effort: the worker may be killed before it runs the
+// scrub, but its heap does not outlive the page.
+const hodlLnStopWorkerNow = () => {
+  hodlLnStopWorker();
+  for (const spawned of [...hodlLnStopping]) hodlLnTerminate(spawned);
 };
 
 // The page's copies: the public result and any revealed secret text. The
@@ -213,7 +247,12 @@ function hodlLnRender() {
       hodlLnReveal = revealToggle.checked;
       // The secret text is asked of the key worker only now, and dropped on hide.
       hodlLnRevealed = null;
-      if (hodlLnReveal) hodlLnWorker?.worker.postMessage({ type: "reveal", run: hodlLnRun });
+      // A retired session (End Session) keeps no worker to ask: scrub and
+      // terminate a leftover one instead of posting to it.
+      if (hodlLnReveal) {
+        if (wasmRetired()) hodlLnStopWorker();
+        else hodlLnWorker?.worker.postMessage({ type: "reveal", run: hodlLnRun });
+      }
       hodlLnRender();
     });
   }
@@ -292,16 +331,33 @@ function hodlLnMessage(data) {
 // linear memory. The worker is reused across derives so a loaded
 // hsm_secret's words survive to the next Derive; the wipes terminate it.
 function hodlLnEnsureWorker() {
+  // End Session retires the module while a worker may still be running, so
+  // the retired state is checked on every use, not only at spawn: a retired
+  // session scrubs and terminates any worker it still holds, and refuses.
+  if (wasmRetired()) {
+    hodlLnStopWorker();
+    throw Object.assign(new Error("This session has ended; reload the page to start a new one."), { code: "session-ended" });
+  }
   if (hodlLnWorker) return hodlLnWorker.worker;
   // The module bytes come first: a retired session refuses here, before any
   // worker is spawned.
   const wasm = wasmModuleBytes();
   const spawned = hodlLnSpawnWorker();
   hodlLnWorker = spawned;
-  spawned.worker.onmessage = (event) => hodlLnMessage(event.data);
+  spawned.worker.onmessage = (event) => {
+    if (event.data && event.data.type === "scrubbed") {
+      // The worker scrubbed its secrets and its WebAssembly memory:
+      // terminate it now, ahead of the bound.
+      hodlLnTerminate(spawned);
+      return;
+    }
+    hodlLnMessage(event.data);
+  };
   spawned.worker.onerror = (event) => {
-    // A crashed worker can never answer again: both runs are over, and any
-    // answer it already queued is stale.
+    // A crashed worker can never answer again — and cannot scrub itself:
+    // terminate it and revoke its URL at once, or its heap survives. Both
+    // runs are over, and any answer it already queued is stale.
+    hodlLnTerminate(spawned);
     if (hodlLnWorker !== spawned) return;
     hodlLnWorker = null;
     hodlLnRun += 1;
@@ -312,7 +368,7 @@ function hodlLnEnsureWorker() {
     hodlLnRender();
     const error = document.getElementById("ln-error");
     if (error) {
-      error.textContent = event && typeof event.message === "string" && event.message !== "" ? event.message : "The Lightning key worker stopped.";
+      error.textContent = event && typeof event.message === "string" && event.message !== "" ? event.message : t("The Lightning key worker stopped.");
       error.dataset.code = "";
     }
   };
@@ -325,6 +381,10 @@ function hodlRunLn() {
   error.textContent = "";
   error.dataset.code = "";
   hodlLnClearResult();
+  // Re-render with the click, before anything is posted: the previous
+  // result — and any revealed secret text — leaves the screen now, not when
+  // the worker answers.
+  hodlLnRender();
   const format = hodlLnFormat();
   // Every Derive click supersedes the previous run — even one refused below,
   // before anything is posted: the earlier run's in-flight answer is stale
@@ -348,12 +408,16 @@ function hodlRunLn() {
         code: "hsm-secret-passphrase-not-needed",
       });
     }
+    // A file that is loaded or still loading is the latest entry: derive
+    // from the words the worker holds, not the box. The worker processes
+    // messages in order, so a pending load arrives before this derive.
+    const fromFile = format === "cln-hsm" && (hodlLnHsmPending || hodlLnHsmLoaded);
     hodlLnEnsureWorker().postMessage({
       type: "derive",
       run: hodlLnRun,
       format,
-      words,
-      text,
+      words: fromFile ? [] : words,
+      text: fromFile ? "" : text,
       passphrase,
       coinType: format === "aezeed" ? hodlLnCoinType() : 0,
       network: hodlLnNetworkName(),
@@ -393,15 +457,30 @@ async function hodlLnReadHsmFile() {
   if (!input) return;
   const file = input.files && input.files[0];
   if (!file) return;
+  // The file is the latest entry from the moment it is picked: bump the
+  // load generation and mark the load pending BEFORE the read, and clear
+  // any typed words, so words typed earlier cannot win over the file and a
+  // Derive during the read cannot use the box. The load has its own
+  // generation, separate from the derive run: a Derive clicked while the
+  // file loads must not drop the load's reply, and typing supersedes the
+  // load.
+  hodlLnHsmRun += 1;
+  hodlLnHsmPending = true;
+  const run = hodlLnHsmRun;
+  const seed = document.getElementById("ln-seed");
+  if (seed) seed.value = "";
   let bytes = null;
   try {
     bytes = new Uint8Array(await file.arrayBuffer());
-    // The load has its own generation, separate from the derive run: a
-    // Derive clicked while the file loads must not drop the load's reply,
-    // and typing supersedes the load.
-    hodlLnHsmRun += 1;
-    hodlLnHsmPending = true;
-    hodlLnEnsureWorker().postMessage({ type: "load-hsm", run: hodlLnHsmRun, bytes }, [bytes.buffer]);
+    if (run !== hodlLnHsmRun) {
+      // Typing (or a wipe) during the read superseded the file: the load is
+      // never posted. The bytes were never transferred; wipe them here and
+      // keep the typed words.
+      bytes.fill(0);
+      bytes = null;
+      return;
+    }
+    hodlLnEnsureWorker().postMessage({ type: "load-hsm", run, bytes }, [bytes.buffer]);
   } catch (exception) {
     // A file that could not be read drops the last result's secrets and the
     // held file's words, as the in-page refusal did.
@@ -699,6 +778,11 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
     });
   }
   go.onclick = hodlRunLn;
+  // pagehide cannot wait for the worker's scrub answer: scrub and terminate
+  // in the same turn (best effort — see hodlLnStopWorkerNow).
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("pagehide", hodlLnStopWorkerNow);
+  }
   document.getElementById("ln-wipe").onclick = () => {
     hodlLnWipeMem();
     for (const id of ["ln-seed", "ln-pass", "ln-hsm-file"]) {
