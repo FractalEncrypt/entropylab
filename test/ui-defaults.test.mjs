@@ -1713,9 +1713,9 @@ test("virtual keypads never focus the field on touch so the mobile keyboard stay
   }
 });
 
-test("workspace tabs ship Core Wallet and the Journal and hold back only Lightning", () => {
-  // The release tab list is unconditional: exactly eight entries, in order,
-  // with Core Wallet and the Journal released and Lightning held back.
+test("workspace tabs ship every tool, with Lightning after Transactions", () => {
+  // The release tab list is unconditional: exactly nine entries, in order.
+  // Lightning joined after Transactions (owner, 2026-10-26).
   const declaration = appSource.match(/^var hodlWorkspaceTabs = (\[.*\]);$/m);
   assert.ok(declaration, "the workspace tab list is missing");
   assert.doesNotMatch(declaration[1], /__ENTROPYLAB_TEST_HOOKS__|\.\.\./, "no release tab may be gated behind test hooks");
@@ -1724,15 +1724,17 @@ test("workspace tabs ship Core Wallet and the Journal and hold back only Lightni
     ["calc", "Keys", "Keys"],
     ["msig", "Multi Signature", "MultiSig"],
     ["psbt", "Transactions", "Txns"],
+    ["ln", "Lightning", "LN"],
     ["core", "Core Wallet", "Core"],
     ["bip85", "BIP-85 Child", "BIP-85"],
     ["sp", "Silent Payments", "SP"],
     ["vanity", "Vanity Address", "Vanity"],
     ["journal", "Journal", "Journal"],
   ]);
-  assert.equal(entries.some((entry) => entry[0] === "ln"), false, "Lightning stays held back from the release tab list");
   // Release first paint and no-JS show the static strip: every release tool has its button there.
   assert.match(shell, /aria-controls="core-card"/);
+  assert.match(shell, /aria-controls="ln-card"/);
+  assert.doesNotMatch(shell, /held back/);
   for (const markup of [shell]) {
     assert.match(markup, /id="bip85-card"/);
     assert.match(markup, /id="bip85-go"/);
@@ -2183,7 +2185,8 @@ test("each static tool tab points at a tab panel the shell has", () => {
   const start = shell.indexOf('id="workspace-tabs"');
   const strip = shell.slice(start, shell.indexOf("</div>", start));
   const tabs = strip.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
-  assert.equal(tabs.length, 7, "the static strip carries the seven release tools");
+  // Every release tool except the Journal, which the boot render adds.
+  assert.equal(tabs.length, 8, "the static strip carries the eight static release tools");
   for (const tab of tabs) {
     const ids = tab.match(/aria-controls="([^"]*)"/)?.[1].split(" ").filter(Boolean) ?? [];
     assert.ok(ids.length, `${tab} names no panel`);
