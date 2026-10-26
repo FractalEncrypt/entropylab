@@ -31,8 +31,12 @@ const wasmBytes = injectedBytes ?? (() => {
   return bytes;
 })();
 // A copy of the module bytes (public) for a key worker to instantiate its own
-// instance, with its own linear memory, from.
-export const wasmModuleBytes = () => wasmBytes.slice();
+// instance, with its own linear memory, from. A retired session gets none:
+// the module must not run again, so no key worker can be spawned from it.
+export const wasmModuleBytes = () => {
+  if (retired) throw new Error("This session has ended; reload the page to start a new one.");
+  return wasmBytes.slice();
+};
 
 // The shadow-stack region is verified against the binary at load and the
 // exports are wrapped to zero that region once per task; see

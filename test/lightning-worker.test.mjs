@@ -390,7 +390,46 @@ test("Clear and a network change terminate the worker, and its late answers are 
   }
 });
 
+test("the page resets the file input after the transfer detaches the hsm_secret buffer", async () => {
+  const page = lnPage();
+  try {
+    page.getElementById("ln-format").value = "cln-hsm";
+    const fileInput = page.getElementById("ln-hsm-file");
+    const bytes = clnType2File(CLN_WORDS);
+    fileInput.files = [{ arrayBuffer: async () => bytes.buffer }];
+    // node:worker_threads honours the transfer list: the post detaches the
+    // page's view of the bytes, so wiping it would throw a TypeError and
+    // skip the input reset (the browser failure this pins).
+    await fileInput.onchange();
+    assert.equal(bytes.byteLength, 0, "the worker did not detach the transferred buffer");
+    assert.equal(fileInput.value, "", "the file input was not reset");
+    await until(() => page.getElementById("ln-session").textContent.length > 0, "the hsm-loaded status");
+    page.getElementById("ln-go").onclick();
+    await until(() => page.getElementById("ln-out").innerHTML.includes(CLN_NODE_ID), "the derived node id");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("scripts/build.mjs injects the bundled worker source as __LN_WORKER_SOURCE__", () => {
   const build = readFileSync(new URL("../scripts/build.mjs", import.meta.url), "utf8");
   assert.match(build, /__LN_WORKER_SOURCE__: JSON\.stringify\(/, "the page bundle must carry the key worker source");
+});
+
+// End Session retires the WebAssembly module for the rest of this process,
+// so this test must stay last: nothing after it can derive.
+test("after End Session the Lightning tool refuses to derive and spawns no worker", async () => {
+  const page = lnPage();
+  try {
+    const before = spawned.length;
+    wasmLoader.retireWasm();
+    assert.throws(() => wasmLoader.wasmModuleBytes(), /session has ended/, "the module bytes are still handed out after End Session");
+    page.getElementById("ln-seed").value = AEZEED_WORDS;
+    page.getElementById("ln-go").onclick();
+    assert.match(page.getElementById("ln-error").textContent, /session has ended/, "the refusal is not shown in #ln-error");
+    assert.equal(page.getElementById("ln-out").innerHTML, "", "a retired session derived a node key");
+    assert.equal(spawned.length, before, "a key worker was spawned after End Session");
+  } finally {
+    await cleanup();
+  }
 });

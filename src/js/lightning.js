@@ -47,7 +47,9 @@ let hodlLnHsmLoaded = false; // a type-2 hsm_secret file's words are loaded in t
 let hodlLnJournalLog = () => {};
 let hodlLnCopyIcon = () => "";
 let hodlLnWorker = null; // { worker, url } of the running key worker
-let hodlLnRun = 0; // answers from a stopped or superseded worker are ignored
+let hodlLnRun = 0; // derive generation: answers from a stopped or superseded run are ignored
+let hodlLnHsmRun = 0; // hsm_secret load generation, separate from the derive run
+let hodlLnHsmPending = false; // a load is in the worker, its reply still owed
 let hodlLnPendingFormat = "aezeed"; // the in-flight derive's format, for the journal
 
 // A 24-word seed phrase is a few hundred characters; past this bound the
@@ -63,10 +65,12 @@ let hodlLnSpawnWorker = () => {
     const url = URL.createObjectURL(new Blob([hodlLnWorkerSource], { type: "text/javascript" }));
     return { worker: new Worker(url), url };
   }
-  if (typeof Worker === "undefined") {
-    // No Web Workers (the Node tests): the same protocol handler runs in
-    // process and answers synchronously. A production build always carries
-    // the worker source.
+  if (typeof Worker === "undefined" && typeof process !== "undefined" && process.versions?.node) {
+    // No Web Workers, and only under Node (the test suite): the same
+    // protocol handler runs in process and answers synchronously. A
+    // production build always carries the worker source, so any other
+    // workerless environment falls through to the refusal below instead of
+    // deriving keys outside the terminable worker.
     const standIn = { onmessage: null, onerror: null, terminated: false };
     const handle = createLnKeyHandler((message) => standIn.onmessage?.({ data: message }));
     standIn.postMessage = (data) => {
@@ -107,9 +111,11 @@ const hodlLnClearResult = () => {
 // invoice survives it.
 export function hodlLnKeyWipeMem() {
   hodlLnRun += 1;
+  hodlLnHsmRun += 1;
   hodlLnStopWorker();
   hodlLnClearResult();
   hodlLnHsmLoaded = false;
+  hodlLnHsmPending = false;
 }
 
 // The full wipe: key material and the pasted invoice. Clear, End Session
@@ -224,11 +230,13 @@ const hodlLnShowError = (error, exception) => {
   error.dataset.code = exception && typeof exception.code === "string" ? exception.code : "";
 };
 
-// The key worker answers a derive, a reveal or an hsm_secret load. An
-// answer from a stopped or superseded worker carries a stale run id and is
-// ignored.
+// The key worker answers a derive, a reveal or an hsm_secret load. Each
+// request kind has its own generation — the derive run and the hsm_secret
+// load run — and an answer whose id is stale for its kind came from a
+// stopped or superseded request and is ignored.
 function hodlLnMessage(data) {
-  if (!data || data.run !== hodlLnRun) return;
+  if (!data || typeof data.type !== "string") return;
+  if (data.request === "load-hsm" || data.type === "hsm-loaded" ? data.run !== hodlLnHsmRun : data.run !== hodlLnRun) return;
   if (data.type === "derived") {
     hodlLnLast = data.result;
     hodlLnRender();
@@ -245,6 +253,7 @@ function hodlLnMessage(data) {
   }
   if (data.type === "hsm-loaded") {
     // The worker holds the file's words; the page keeps only the flag.
+    hodlLnHsmPending = false;
     hodlLnHsmLoaded = true;
     hodlLnClearResult();
     // The file is the most recent entry: drop any typed words so Derive
@@ -263,7 +272,10 @@ function hodlLnMessage(data) {
   }
   if (data.type === "error") {
     hodlLnClearResult();
-    if (data.request === "load-hsm") hodlLnHsmLoaded = false;
+    if (data.request === "load-hsm") {
+      hodlLnHsmLoaded = false;
+      hodlLnHsmPending = false;
+    }
     hodlLnRender();
     const error = document.getElementById("ln-error");
     if (error) hodlLnShowError(error, data.error);
@@ -281,13 +293,21 @@ function hodlLnMessage(data) {
 // hsm_secret's words survive to the next Derive; the wipes terminate it.
 function hodlLnEnsureWorker() {
   if (hodlLnWorker) return hodlLnWorker.worker;
+  // The module bytes come first: a retired session refuses here, before any
+  // worker is spawned.
+  const wasm = wasmModuleBytes();
   const spawned = hodlLnSpawnWorker();
   hodlLnWorker = spawned;
   spawned.worker.onmessage = (event) => hodlLnMessage(event.data);
   spawned.worker.onerror = (event) => {
-    // A crashed worker can never answer again: the run is over.
+    // A crashed worker can never answer again: both runs are over, and any
+    // answer it already queued is stale.
     if (hodlLnWorker !== spawned) return;
     hodlLnWorker = null;
+    hodlLnRun += 1;
+    hodlLnHsmRun += 1;
+    hodlLnHsmLoaded = false;
+    hodlLnHsmPending = false;
     hodlLnClearResult();
     hodlLnRender();
     const error = document.getElementById("ln-error");
@@ -296,7 +316,6 @@ function hodlLnEnsureWorker() {
       error.dataset.code = "";
     }
   };
-  const wasm = wasmModuleBytes();
   spawned.worker.postMessage({ type: "init", wasm: wasm.buffer }, [wasm.buffer]);
   return spawned.worker;
 }
@@ -307,6 +326,11 @@ function hodlRunLn() {
   error.dataset.code = "";
   hodlLnClearResult();
   const format = hodlLnFormat();
+  // Every Derive click supersedes the previous run — even one refused below,
+  // before anything is posted: the earlier run's in-flight answer is stale
+  // and must not render beside the refusal.
+  hodlLnRun += 1;
+  hodlLnPendingFormat = format;
   try {
     const text = String(document.getElementById("ln-seed").value || "");
     if (text.length > LN_SEED_MAX_LENGTH) {
@@ -324,9 +348,6 @@ function hodlRunLn() {
         code: "hsm-secret-passphrase-not-needed",
       });
     }
-    // A new derive supersedes any answer still in flight.
-    hodlLnRun += 1;
-    hodlLnPendingFormat = format;
     hodlLnEnsureWorker().postMessage({
       type: "derive",
       run: hodlLnRun,
@@ -375,10 +396,16 @@ async function hodlLnReadHsmFile() {
   let bytes = null;
   try {
     bytes = new Uint8Array(await file.arrayBuffer());
-    hodlLnEnsureWorker().postMessage({ type: "load-hsm", run: hodlLnRun, bytes }, [bytes.buffer]);
+    // The load has its own generation, separate from the derive run: a
+    // Derive clicked while the file loads must not drop the load's reply,
+    // and typing supersedes the load.
+    hodlLnHsmRun += 1;
+    hodlLnHsmPending = true;
+    hodlLnEnsureWorker().postMessage({ type: "load-hsm", run: hodlLnHsmRun, bytes }, [bytes.buffer]);
   } catch (exception) {
     // A file that could not be read drops the last result's secrets and the
     // held file's words, as the in-page refusal did.
+    hodlLnHsmPending = false;
     hodlLnWorker?.worker.postMessage({ type: "drop" });
     hodlLnWorker?.worker.postMessage({ type: "drop-hsm" });
     hodlLnClearResult();
@@ -388,7 +415,9 @@ async function hodlLnReadHsmFile() {
     if (error) hodlLnShowError(error, exception);
     hodlLnJournalLog("hsm-file-error", exception && typeof exception.code === "string" ? exception.code : "unknown", "ln");
   } finally {
-    if (bytes) bytes.fill(0);
+    // The transfer detached the buffer: the page holds nothing left to wipe.
+    // The input reset must run either way.
+    if (bytes && bytes.byteLength > 0) bytes.fill(0);
     input.value = "";
   }
 }
@@ -649,15 +678,19 @@ export function hodlInitLn({ journalLog, copyIcon = () => "", qrSvg = () => "", 
     upload.onclick = () => hsmFile.click();
     hsmFile.onchange = hodlLnReadHsmFile;
   }
-  // Typing is the most recent entry too: the worker drops the held file
-  // mnemonic and the page its status line, so Derive cannot silently use the
-  // file instead of the words. Only when a file is loaded, so the LND/LDK
-  // formats are untouched.
+  // Typing is the most recent entry too — even while a file is still
+  // loading. Every input supersedes the load's generation, so a late reply
+  // is ignored; and while a load is pending or a file is loaded, the worker
+  // (which processes messages in order) drops the held file mnemonic and the
+  // page its status line, so Derive cannot silently use the file instead of
+  // the words. Otherwise the LND/LDK formats are untouched.
   const seedField = document.getElementById("ln-seed");
   if (seedField) {
     seedField.addEventListener("input", () => {
-      if (!hodlLnHsmLoaded) return;
+      hodlLnHsmRun += 1;
+      if (!hodlLnHsmLoaded && !hodlLnHsmPending) return;
       hodlLnHsmLoaded = false;
+      hodlLnHsmPending = false;
       hodlLnWorker?.worker.postMessage({ type: "drop-hsm" });
       const file = document.getElementById("ln-hsm-file");
       if (file) file.value = "";
