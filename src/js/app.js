@@ -11316,7 +11316,7 @@ function hodlSetButtonEnabled(id, on) {
 }
 // The two cards that run an inspection, and what each one's run reads.
 var hodlPsbtCards = [
-  { text: "psbt-text", fields: ["psbt-key", "psbt-pass", "psbt-audit-before"], go: "psbt-go", download: "psbt-download", out: "psbt-out", session: "psbt-session" },
+  { text: "psbt-text", fields: ["psbt-key", "psbt-pass", "psbt-audit-before", "psbt-rbf-original"], go: "psbt-go", download: "psbt-download", out: "psbt-out", session: "psbt-session" },
   { text: "nonce-text", fields: ["nonce-key", "nonce-pass", "psbt-ax-transcript"], go: "nonce-go", out: "nonce-out", session: "nonce-session" },
 ];
 // A run is stamped with everything it read: the payload, the key fields and
@@ -11579,6 +11579,8 @@ function hodlInitPsbt() {
       rbfFile.value = "";
       if (chosen) hodlPsbtLoadRbfUpload(chosen);
     });
+    // Editing the original retires a verdict computed from the old one.
+    document.getElementById("psbt-rbf-original")?.addEventListener("input", hodlPsbtClearRbfVerdict);
   }
   document.getElementById("psbt-download").onclick = () => {
     hodlSetPsbtError(null);
@@ -12192,14 +12194,25 @@ function hodlPsbtRetireRbfUploads() {
   hodlPsbtRbfUploadGeneration += 1;
 }
 
+// The rendered verdict belongs to the exact pair of PSBTs it was computed
+// from: any change to either side retires it, so a green verdict can never
+// sit next to a different original.
+function hodlPsbtClearRbfVerdict() {
+  document.getElementById("psbt-out")?.querySelector("[data-rbf-verdict]")?.remove();
+}
+
 function hodlPsbtLoadRbfUpload(file) {
   // Each pick retires the reads still pending, so the last file chosen wins.
   let generation = ++hodlPsbtRbfUploadGeneration;
   (async () => {
     try {
-      let bytes = await psbtBytesFromUpload(file);
+      let bytes = psbtBytesFromUpload(new Uint8Array(await file.arrayBuffer()));
       if (generation !== hodlPsbtRbfUploadGeneration) return;
       document.getElementById("psbt-rbf-original").value = hodlBytesToB64(bytes);
+      hodlPsbtClearRbfVerdict();
+      // A programmatic fill fires no input event: refresh Inspect and Clear
+      // like the audit upload does (typeof: narrow test slices).
+      if (typeof hodlSyncPsbtControls === "function") hodlSyncPsbtControls();
     } catch (exception) {
       if (generation !== hodlPsbtRbfUploadGeneration) return;
       hodlSetPsbtError({ raw: exception.message || String(exception) });
@@ -12220,7 +12233,7 @@ function hodlPsbtRbfBtc(sats) {
 
 function hodlPsbtRbfShowScript(scriptHex, network) {
   try {
-    let address = hodlAddressFromScript(bytesFromHex(scriptHex), network);
+    let address = hodlAddressFromScript(hodlHex.decode(scriptHex), network);
     if (address) return address;
   } catch {
     // A script that does not decode on this network is shown as hex.
@@ -12271,7 +12284,7 @@ function hodlPsbtRbfNormalizePsbt(doc) {
       // Verified only when the previous transaction's txid — double SHA-256
       // of its non-witness serialization — is the input's outpoint txid. A
       // bare witness_utxo amount stays an unverified claim.
-      input.amountVerified = hodlHex.encode(hodlSha256(hodlSha256(hodlTxSerialize(prevTx, false)))) === input.txid;
+      input.amountVerified = hodlHex.encode(hodlSha256(hodlSha256(serializeTx(prevTx)))) === input.txid;
     }
   }
   return normalized;
@@ -12280,14 +12293,14 @@ function hodlPsbtRbfNormalizePsbt(doc) {
 function hodlPsbtRbfItemLine(item, network) {
   let dest = item.script !== undefined ? hodlPsbtRbfShowScript(item.script, network) : "";
   switch (item.code) {
-    case "payment-changed": return hodlTText("A payment to {dest} changed from {before} BTC to {after} BTC.", { dest, before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
-    case "payment-removed": return hodlTText("A payment of {before} BTC to {dest} was removed.", { dest, before: hodlPsbtRbfBtc(item.before) });
-    case "change-removed": return hodlTText("Your change output of {before} BTC was removed.", { before: hodlPsbtRbfBtc(item.before) });
-    case "change-decreased": return hodlTText("Your change decreased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "payment-changed": return hodlT("A payment to {dest} changed from {before} BTC to {after} BTC.", { dest, before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "payment-removed": return hodlT("A payment of {before} BTC to {dest} was removed.", { dest, before: hodlPsbtRbfBtc(item.before) });
+    case "change-removed": return hodlT("Your change output of {before} BTC was removed.", { before: hodlPsbtRbfBtc(item.before) });
+    case "change-decreased": return hodlT("Your change decreased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
     case "output-decreased-unverified": return hodlT("One output decreased. Check that it is your change.");
-    case "own-output-increased": return hodlTText("An output this key derives increased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
-    case "new-own-output": return hodlTText("A new output of {after} BTC goes to an address this key derives.", { after: hodlPsbtRbfBtc(item.after) });
-    case "new-output-unverified": return hodlTText("A new output of {after} BTC to {dest} appeared.", { dest, after: hodlPsbtRbfBtc(item.after) });
+    case "own-output-increased": return hodlT("An output this key derives increased from {before} BTC to {after} BTC.", { before: hodlPsbtRbfBtc(item.before), after: hodlPsbtRbfBtc(item.after) });
+    case "new-own-output": return hodlT("A new output of {after} BTC goes to an address this key derives.", { after: hodlPsbtRbfBtc(item.after) });
+    case "new-output-unverified": return hodlT("A new output of {after} BTC to {dest} appeared.", { dest, after: hodlPsbtRbfBtc(item.after) });
     case "multiple-decreases": return hodlT("More than one output decreased.");
     case "input-dropped": return hodlT("An input from the original transaction was dropped.");
     case "input-added": return hodlT("An input was added.");
@@ -12329,19 +12342,29 @@ function hodlPsbtPrependRbfCheck(output, returnedBytes, kind, network) {
   if (kind !== "psbt") {
     note = hodlPsbtRbfNote("amber", [{ code: "replacement-raw", message: hodlT("Inspect the fee-bump PSBT, not a raw transaction.") }]);
   } else {
+    let original = null;
     try {
       let originalBytes = hodlPsbtBytesFromText(raw);
-      let original = isPsbtMagic(originalBytes) ? hodlPsbtRbfNormalizePsbt(hodlParsePsbt(originalBytes)) : hodlPsbtRbfNormalizeTx(parseRawTx(originalBytes));
-      let replacement = hodlPsbtRbfNormalizePsbt(hodlParsePsbt(returnedBytes));
-      let ownership = hodlSessionOwnership(network);
-      let ownsScript = ownership.size === 0 ? null : (scriptHex) => matchOwnership(ownership, bytesFromHex(scriptHex)).state === "ours";
-      result = hodlCheckRbfReplacement({ original, replacement, ownsScript });
-      let lines = result.verdict === "neutral" ? [] : result.items.map((item) => ({ code: item.code, message: hodlPsbtRbfItemLine(item, network) }));
-      note = hodlPsbtRbfNote(result.verdict, lines);
+      original = isPsbtMagic(originalBytes) ? hodlPsbtRbfNormalizePsbt(hodlParsePsbt(originalBytes)) : hodlPsbtRbfNormalizeTx(parseRawTx(originalBytes));
     } catch {
-      // Any unreadable or unexpected input is a failed check, never a pass.
+      // The original is the only side this failure can be blamed on.
       result = null;
       note = hodlPsbtRbfNote("amber", [{ code: "original-unreadable", message: hodlT("The original transaction could not be read. Check the paste and Inspect again.") }]);
+    }
+    if (original) {
+      try {
+        let replacement = hodlPsbtRbfNormalizePsbt(hodlParsePsbt(returnedBytes));
+        let ownership = hodlSessionOwnership(network);
+        let ownsScript = ownership.size === 0 ? null : (scriptHex) => matchOwnership(ownership, hodlHex.decode(scriptHex)).state === "ours";
+        result = hodlCheckRbfReplacement({ original, replacement, ownsScript });
+        let lines = result.verdict === "neutral" ? [] : result.items.map((item) => ({ code: item.code, message: hodlPsbtRbfItemLine(item, network) }));
+        note = hodlPsbtRbfNote(result.verdict, lines);
+      } catch {
+        // The inspected PSBT failed to normalize or compare: never blame the
+        // original, and never pass.
+        result = null;
+        note = hodlPsbtRbfNote("amber", []);
+      }
     }
   }
   output.insertAdjacentHTML("afterbegin", note);
@@ -12365,6 +12388,9 @@ async function hodlPsbtLoadAuditUpload(chosen) {
 // stale verdict is never left on screen. The next Inspect re-runs it.
 function hodlPsbtClearSignerAudit() {
   const section = document.getElementById("psbt-out")?.querySelector("[data-audit-section]");
+  // The RBF verdict is retired for the same reasons, and before the early
+  // return below: it must go even when no audit section is on screen.
+  hodlPsbtClearRbfVerdict();
   // The cached report counts as a shown verdict even when a repaint left it
   // out of the DOM: both are retired together (Wicked's review of #1118).
   if (!section && !hodlPsbtLast?.audit) return;

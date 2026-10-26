@@ -249,7 +249,11 @@ export const checkRbfReplacement = ({ original, replacement, ownsScript } = {}) 
     if (input.sequence !== after.sequence) {
       items.push({ code: "sequence-changed", txid: input.txid, vout: input.vout, before: input.sequence, after: after.sequence });
     }
-    if (input.sighash !== after.sighash) {
+    // A raw original carries no sighash field (null); an explicit SIGHASH_ALL
+    // in the bump PSBT is the same commitment, not a change.
+    const beforeSighash = input.sighash === null ? 1 : input.sighash;
+    const afterSighash = after.sighash === null ? 1 : after.sighash;
+    if (beforeSighash !== afterSighash) {
       items.push({ code: "sighash-changed", txid: input.txid, vout: input.vout, before: input.sighash, after: after.sighash });
     }
   }

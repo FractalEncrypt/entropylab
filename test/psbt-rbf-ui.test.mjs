@@ -15,6 +15,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkRbfReplacement } from "../src/js/psbt-rbf-check.js";
+import { hex as hodlHex } from "../src/js/coders.js";
+import { serializeTx as realSerializeTx, parseRawTx as realParseRawTx } from "../src/js/tx.js";
+import { psbtBytesFromUpload as realPsbtBytesFromUpload } from "../src/js/psbt-editor.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -217,11 +220,15 @@ const psbtBytesFromText = (raw) => {
 };
 const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 
-const hodlT = (text) => text;
-const hodlTText = (text, params) => text.replace(/\{([a-z]+)\}/g, (whole, name) => {
+const escapeHtml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+const interpolate = (text, params) => text.replace(/\{([a-z]+)\}/g, (whole, name) => {
   if (!params || !(name in params)) throw new Error(`missing interpolation ${name} in "${text}"`);
   return String(params[name]);
 });
+// hodlT is the HTML-escaping translator, hodlTText the plain-text one: the
+// doubles keep that split, so a line routed through the wrong one shows.
+const hodlT = (text, params) => escapeHtml(interpolate(text, params));
+const hodlTText = (text, params) => interpolate(text, params);
 
 // --- Harness: extract the app functions, run them against the doubles ---
 const extract = (name) => {
@@ -237,12 +244,11 @@ const rbfHarness = (sessionScripts = []) => {
     hodlT,
     hodlTText,
     bytesToHex,
-    hodlHex: { encode: bytesToHex },
-    bytesFromHex,
+    hodlHex,
     hodlSha256: sha256,
     hodlR32: read32,
-    hodlTxSerialize: serializeTx,
-    parseRawTx,
+    serializeTx: realSerializeTx,
+    parseRawTx: realParseRawTx,
     hodlParsePsbt: parsePsbt,
     isPsbtMagic,
     hodlPsbtBytesFromText: psbtBytesFromText,
@@ -454,6 +460,7 @@ test("the screen and its wiring exist only behind the preview flag", () => {
   const run = app.slice(runStart, app.indexOf("\nfunction ", runStart));
   assert.match(run, /typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__\)\s*hodlPsbtPrependRbfCheck\(/, "the call in hodlRunPsbt is preview-gated");
   assert.match(app, /if \(typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__\) \{\s*const rbfFile = document\.getElementById\("psbt-rbf-file"\);/, "the upload wiring is preview-gated");
+  assert.match(app, /document\.getElementById\("psbt-rbf-original"\)\?\.addEventListener\("input", hodlPsbtClearRbfVerdict\)/, "editing the original retires the verdict");
   const optionsAt = shell.indexOf('id="psbt-rbf-options"');
   assert.ok(optionsAt > 0, "the RBF options block exists in the shell");
   const previewOpen = shell.lastIndexOf("<!-- preview -->", optionsAt);
@@ -467,6 +474,29 @@ test("the screen and its wiring exist only behind the preview flag", () => {
   assert.match(shell, /<summary>Check a fee bump \(RBF\) \(optional\)<\/summary>/);
 });
 
+test("the RBF upload fills #psbt-rbf-original from a File-like object with arrayBuffer()", async () => {
+  const elements = { "psbt-rbf-original": { value: "" } };
+  let cleared = 0;
+  // Uint8Array is the test realm's: the real psbtBytesFromUpload checks
+  // `instanceof Uint8Array`, and a vm-realm array would fail that check for
+  // a reason that has nothing to do with the app.
+  const context = vm.createContext({
+    hodlPsbtRbfUploadGeneration: 0,
+    document: { getElementById: (id) => elements[id] || null },
+    hodlBytesToB64: (bytes) => Buffer.from(bytes).toString("base64"),
+    hodlSetPsbtError: () => {},
+    psbtBytesFromUpload: realPsbtBytesFromUpload,
+    hodlPsbtClearRbfVerdict: () => { cleared += 1; },
+    Uint8Array,
+  });
+  vm.runInContext(extract("hodlPsbtLoadRbfUpload"), context);
+  const bytes = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff, 0x00);
+  context.hodlPsbtLoadRbfUpload({ arrayBuffer: async () => bytes.buffer });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(elements["psbt-rbf-original"].value, Buffer.from(bytes).toString("base64"));
+  assert.equal(cleared, 1, "the upload retires a shown verdict");
+});
+
 test("a later RBF-original pick wins over an earlier read that finishes last", async () => {
   const elements = { "psbt-rbf-original": { value: "" } };
   const context = vm.createContext({
@@ -474,17 +504,60 @@ test("a later RBF-original pick wins over an earlier read that finishes last", a
     document: { getElementById: (id) => elements[id] || null },
     hodlBytesToB64: (bytes) => Buffer.from(bytes).toString("base64"),
     hodlSetPsbtError: () => {},
-    psbtBytesFromUpload: (file) => file.read(),
+    psbtBytesFromUpload: realPsbtBytesFromUpload,
+    hodlPsbtClearRbfVerdict: () => {},
+    Uint8Array,
   });
   vm.runInContext(extract("hodlPsbtLoadRbfUpload"), context);
   let releaseA;
-  const slowA = { read: () => new Promise((resolve) => { releaseA = () => resolve(new Uint8Array([0xaa])); }) };
-  const fastB = { read: async () => new Uint8Array([0xbb]) };
+  const slowA = { arrayBuffer: () => new Promise((resolve) => { releaseA = () => resolve(Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff, 0xaa).buffer); }) };
+  const fastB = { arrayBuffer: async () => Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff, 0xbb).buffer };
   context.hodlPsbtLoadRbfUpload(slowA);
   context.hodlPsbtLoadRbfUpload(fastB);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(elements["psbt-rbf-original"].value, Buffer.from([0xbb]).toString("base64"));
+  assert.equal(elements["psbt-rbf-original"].value, Buffer.from([0x70, 0x73, 0x62, 0x74, 0xff, 0xbb]).toString("base64"));
   releaseA();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(elements["psbt-rbf-original"].value, Buffer.from([0xbb]).toString("base64"), "the stale read does not overwrite the newer pick");
+  assert.equal(elements["psbt-rbf-original"].value, Buffer.from([0x70, 0x73, 0x62, 0x74, 0xff, 0xbb]).toString("base64"), "the stale read does not overwrite the newer pick");
+});
+
+test("editing the RBF original retires the rendered verdict", () => {
+  let removed = 0;
+  const verdict = { remove: () => { removed += 1; } };
+  const out = { querySelector: (selector) => (selector === "[data-rbf-verdict]" ? verdict : null) };
+  const context = vm.createContext({
+    document: { getElementById: (id) => (id === "psbt-out" ? out : null) },
+  });
+  vm.runInContext(extract("hodlPsbtClearRbfVerdict"), context);
+  context.hodlPsbtClearRbfVerdict();
+  assert.equal(removed, 1);
+});
+
+test("retiring the signer audit also retires the RBF verdict", () => {
+  let cleared = 0;
+  const context = vm.createContext({
+    document: { getElementById: () => null },
+    hodlPsbtLast: null,
+    hodlPsbtInspected: {},
+    hodlSyncPsbtControls: () => {},
+    hodlPsbtClearRbfVerdict: () => { cleared += 1; },
+  });
+  vm.runInContext(extract("hodlPsbtClearSignerAudit"), context);
+  context.hodlPsbtClearSignerAudit();
+  assert.equal(cleared, 1, "the verdict goes even when no audit section is on screen");
+});
+
+test("finding lines are HTML-escaped, never raw text", () => {
+  const { context } = rbfHarness();
+  context.hodlAddressFromScript = () => '<img src=x onerror="alert(1)">';
+  const line = context.hodlPsbtRbfItemLine({ code: "payment-removed", script: THEIRS_HEX, before: 100000n }, "mainnet");
+  assert.doesNotMatch(line, /<img/);
+  assert.match(line, /&lt;img/);
+});
+
+test("a replacement PSBT that does not normalize is amber without blaming the original", () => {
+  const { result, html } = runRbf({ session: [OURS_HEX], originalText: b64(CLEAN.original), replacementBytes: Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff, 0x00) });
+  assert.equal(result, null);
+  assert.match(html, /data-rbf-verdict="amber"/);
+  assert.doesNotMatch(html, /The original transaction could not be read\./);
 });

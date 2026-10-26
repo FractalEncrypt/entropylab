@@ -262,6 +262,14 @@ test("a sighash change on a kept input is amber", () => {
   assert.ok(codes(result).includes("sighash-not-all"));
 });
 
+test("a null sighash and an explicit SIGHASH_ALL are not a sighash change", () => {
+  const original = transaction([input(TXID_A, 0, { sighash: null })], [output(THEIRS, 100000n), output(OURS, 50000n)]);
+  const replacement = transaction([input(TXID_A, 0, { sighash: 1 })], [output(THEIRS, 100000n), output(OURS, 49000n)]);
+  const result = checkRbfReplacement({ original, replacement, ownsScript: ownsOnly(OURS) });
+  assert.equal(result.verdict, "green");
+  assert.deepEqual(codes(result), ["change-decreased"]);
+});
+
 test("a non-ALL sighash on a replacement input is amber", () => {
   const original = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 50000n)]);
   const replacement = transaction([input(TXID_A, 0, { sighash: 0x81 })], [output(THEIRS, 100000n), output(OURS, 49000n)]);
