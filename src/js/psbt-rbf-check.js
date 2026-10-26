@@ -13,7 +13,7 @@
 const TXID_HEX = /^[0-9a-f]{64}$/;
 const SCRIPT_HEX = /^(?:[0-9a-f]{2})*$/;
 
-const RED_CODES = new Set(["payment-changed", "payment-removed", "multiple-decreases"]);
+const RED_CODES = new Set(["payment-changed", "payment-removed", "multiple-decreases", "change-redirected"]);
 // The only codes a green verdict may carry. Everything else is amber and
 // blocks green, so a code added later fails closed until it is listed here.
 const GREEN_OK_CODES = new Set(["change-decreased", "input-added"]);
@@ -202,6 +202,16 @@ export const checkRbfReplacement = ({ original, replacement, ownsScript } = {}) 
   }
 
   if (decreaseCount > 1) items.push({ code: "multiple-decreases" });
+
+  // A session key proves the decreased or removed output was the user's own
+  // change. If the same bump adds an output that key cannot derive, the
+  // "fee" may be the change being redirected to someone else (Electrum
+  // GHSA-6jp4-8v48-cc5v): say so in red. Without a key nothing changes.
+  if (owns !== null
+    && items.some((item) => item.code === "change-decreased" || item.code === "change-removed")
+    && items.some((item) => item.code === "new-output-unverified")) {
+    items.push({ code: "change-redirected" });
+  }
 
   let feeIncrease = null;
   let feeComplete = false;

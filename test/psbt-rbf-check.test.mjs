@@ -90,6 +90,46 @@ test("replacing the recipient with an attacker script is red", () => {
   assert.equal(added.after, 100000n);
 });
 
+test("a change decrease with a new unverified output is a redirected change (red)", () => {
+  const original = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 50000n)]);
+  const replacement = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 40000n), output(ATTACKER, 9000n)]);
+  const result = checkRbfReplacement({ original, replacement, ownsScript: ownsOnly(OURS) });
+  assert.equal(result.verdict, "red");
+  assert.ok(codes(result).includes("change-decreased"));
+  assert.ok(codes(result).includes("new-output-unverified"));
+  assert.ok(codes(result).includes("change-redirected"));
+});
+
+test("a removed change output with a new unverified output is a redirected change (red)", () => {
+  const original = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 50000n)]);
+  const replacement = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(ATTACKER, 49000n)]);
+  const result = checkRbfReplacement({ original, replacement, ownsScript: ownsOnly(OURS) });
+  assert.equal(result.verdict, "red");
+  assert.ok(codes(result).includes("change-removed"));
+  assert.ok(codes(result).includes("new-output-unverified"));
+  assert.ok(codes(result).includes("change-redirected"));
+});
+
+test("a verified-own new output plus a change decrease is still amber", () => {
+  const original = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 50000n)]);
+  const replacement = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 40000n), output(OURS, 9000n)]);
+  const result = checkRbfReplacement({ original, replacement, ownsScript: ownsOnly(OURS) });
+  assert.equal(result.verdict, "amber");
+  assert.ok(codes(result).includes("change-decreased"));
+  assert.ok(codes(result).includes("new-own-output"));
+  assert.ok(!codes(result).includes("change-redirected"));
+});
+
+test("with no key the redirect case does not apply", () => {
+  const original = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 50000n)]);
+  const replacement = transaction([input(TXID_A, 0)], [output(THEIRS, 100000n), output(OURS, 40000n), output(ATTACKER, 9000n)]);
+  const result = checkRbfReplacement({ original, replacement, ownsScript: null });
+  assert.equal(result.verdict, "amber");
+  assert.ok(codes(result).includes("output-decreased-unverified"));
+  assert.ok(codes(result).includes("new-output-unverified"));
+  assert.ok(!codes(result).includes("change-redirected"));
+});
+
 test("two decreased outputs are red", () => {
   const original = transaction([input(TXID_A, 0)], [output(OURS, 50000n), output(THEIRS, 100000n)]);
   const replacement = transaction([input(TXID_A, 0)], [output(OURS, 49000n), output(THEIRS, 99000n)]);
