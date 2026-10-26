@@ -543,10 +543,42 @@ test("a stale wallet.dat read that fails keeps the newer wallet", async () => {
   context.file.onchange();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(loadedName, "B.dat", "the newer pick loads");
+  const resetsAfterPicks = resets;
   rejectA(new Error("NotReadableError"));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(resets, 0, "the stale failure does not reset the newer wallet");
+  assert.equal(resets, resetsAfterPicks, "the stale failure does not reset the newer wallet");
   assert.equal(errors, 0, "the stale failure shows no error");
+});
+
+test("a new wallet.dat pick drops the loaded wallet before its read finishes", async () => {
+  let release, resets = 0;
+  const pending = { size: 3, name: "B.dat", arrayBuffer: () => new Promise((resolve) => { release = () => resolve(new Uint8Array([4, 5, 6]).buffer); }) };
+  const file = { files: [pending], value: "" };
+  const context = vm.createContext({
+    file,
+    hodlCoreMixGeneration: 0,
+    hodlActiveKey: 0,
+    hodlKeys: [{ id: "key-1" }],
+    hodlKeyMode: "corewallet",
+    CORE_WALLET_MAX_BYTES: 64 * 1024 * 1024,
+    hodlT: (text) => text,
+    hodlCoreMixLoadBytes: () => {},
+    hodlCoreMixReset: () => { resets++; },
+    hodlCoreMixShowError: () => {},
+    hodlSyncDeriveButton: () => {},
+  });
+  vm.runInContext(`file.onchange = ${fileHandlerSource()};`, context);
+  context.file.onchange();
+  // Wallet A is gone while B is still being read, so a Derive clicked now
+  // finds no wallet instead of mixing A's secrets under B's name.
+  assert.equal(resets, 1, "the pick resets the holder before the read resolves");
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test("Clear stays available while a core-mix transcript is stored in the key", () => {
+  const source = fnSource("hodlKeyStateNeedsClear");
+  assert.match(source, /"coreMixTranscript"\]\.some\(hasText\)/, "the stored transcript counts as something to clear, whatever the method");
 });
 
 test("Derive follows the loaded wallet and the active tab", () => {
