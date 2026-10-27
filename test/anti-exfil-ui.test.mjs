@@ -55,6 +55,7 @@ vm.runInContext(
   context,
 );
 const hodlReadNonceTranscript = context.hodlReadNonceTranscript;
+const hodlAexbSlotVerdict = new Function(`${loadSlice("hodlAexbSlotVerdict")}; return hodlAexbSlotVerdict;`)();
 
 // From test/psbt-anti-exfil.test.mjs, "parses host nonce and compressed opening as separate hex".
 const jadeHost = "11".repeat(32);
@@ -225,4 +226,82 @@ test("the render passes the Jade/BitBox02 warning to hodlT as a literal and guar
   assert.match(render, /transcriptWarningCode === "jade-or-bitbox02"\)[^\n]*hodlT\("/);
   assert.doesNotMatch(render, /hodlT\(transcriptWarning\b/);
   assert.ok(render.includes("n: aexbResult.slots?.length ?? 0"));
+});
+
+test("preview path refuses a stage-3 reveal without a stage-4 signature message", () => {
+  const result = hodlReadNonceTranscript([stage2.message_hex, stage3.message_hex].join("\n"), true);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.aexb.ok, false);
+  assert.equal(result.aexb.reason, "MISSING_SIGNATURES");
+  assert.equal(result.aexb.slots.length, 0);
+  assert.equal(result.aexbSignatures, null);
+});
+
+test("preview path still reports a missing commitment for a lone stage-3 reveal", () => {
+  const result = hodlReadNonceTranscript(stage3.message_hex, true);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.aexb.ok, false);
+  assert.equal(result.aexb.reason, "MISSING_COMMITMENT");
+  assert.equal(result.aexbSignatures, null);
+});
+
+test("preview path hands the stage-4 message to the render when the verdict passes", () => {
+  const result = hodlReadNonceTranscript([stage2.message_hex, stage3.message_hex, stage4.message_hex].join("\n"), true);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.aexb.ok, true);
+  assert.ok(result.aexbSignatures);
+  assert.equal(result.aexbSignatures.stage, 4);
+  assert.equal(hodlHex.encode(result.aexbSignatures.sessionId), hodlHex.encode(aexbDecode(stage4.message_hex).sessionId));
+});
+
+test("preview path withholds the stage-4 message when the verdict fails", () => {
+  const result = hodlReadNonceTranscript(stage4.message_hex, true);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.aexb.ok, false);
+  assert.equal(result.aexbSignatures, null);
+});
+
+test("the AEXB slot verdict matches a signature against its transcript slot", () => {
+  const decoded = aexbDecode(stage4.message_hex);
+  const slot = decoded.slots[0];
+  const r = slot.signature.slice(0, 32);
+  const s = slot.signature.slice(32);
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, slot.signerPubkey, r, s, slot.messageHash), "match");
+  // A low-s normalised copy of s names the same signature.
+  const n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
+  let value = 0n;
+  for (const byte of s) value = (value << 8n) | BigInt(byte);
+  let rest = n - value;
+  const negated = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    negated[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, slot.signerPubkey, r, negated, slot.messageHash), "match");
+  // A changed r is a different signature.
+  const changedR = r.slice();
+  changedR[0] ^= 1;
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, slot.signerPubkey, changedR, s, slot.messageHash), "mismatch");
+  // A different message hash with a known sighash is a different message.
+  const otherHash = new Uint8Array(32).fill(0x42);
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, slot.signerPubkey, r, s, otherHash), "mismatch");
+  // Without a known sighash the r and s still decide.
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, slot.signerPubkey, r, s, null), "match");
+  // Another input or another key has no slot.
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex + 1, slot.signerPubkey, r, s, slot.messageHash), "no-slot");
+  const otherPubkey = slot.signerPubkey.slice();
+  otherPubkey[0] = otherPubkey[0] === 2 ? 3 : 2;
+  assert.equal(hodlAexbSlotVerdict([slot], slot.inputIndex, otherPubkey, r, s, slot.messageHash), "no-slot");
+});
+
+test("the render compares each signature with the AEXB transcript's slots", () => {
+  const render = loadSlice("hodlRenderPsbt");
+  assert.match(render, /else if \(aexbSignatures\) \{[\s\S]*?hodlAexbSlotVerdict\(aexbSignatures\.slots, index, hodlCompressedPubkey\(signature\.pubkey\), parts\.r, parts\.s, sighash\)/);
+  assert.match(render, /aexbSignatures = read\.aexbSignatures \|\| null;/);
+});
+
+test("the AEXB summary line only turns green when every compared signature matched", () => {
+  const render = loadSlice("hodlRenderPsbt");
+  assert.match(render, /const aexbCovered = aexbCompared > 0 && aexbMatched === aexbCompared && aexbUncovered === 0;/);
+  assert.match(render, /aexbResult\.ok\s*\?\s*aexbCovered/);
 });

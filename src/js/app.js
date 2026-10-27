@@ -11001,6 +11001,34 @@ function hodlCompressedPubkey(pubkey) {
   return pubkey
 }
 
+// The AEXB stage-4 slot that covers one PSBT signature: same input, same
+// compressed signer key, and the same (r, s) the transcript carries. A
+// low-s normalised copy of s names the same signature, so n - s matches too.
+function hodlAexbSlotVerdict(slots, inputIndex, pubkey33, r, s, sighash) {
+  const same = (a, b) => {
+    if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  };
+  if (!Array.isArray(slots) || !(r instanceof Uint8Array) || r.length !== 32 || !(s instanceof Uint8Array) || s.length !== 32) return "no-slot";
+  const slot = slots.find((candidate) => candidate && candidate.inputIndex === inputIndex && same(candidate.signerPubkey, pubkey33));
+  if (!slot) return "no-slot";
+  if (!(slot.signature instanceof Uint8Array) || slot.signature.length !== 64) return "mismatch";
+  if (sighash && !same(slot.messageHash, sighash)) return "mismatch";
+  if (!same(slot.signature.slice(0, 32), r)) return "mismatch";
+  const slotS = slot.signature.slice(32);
+  if (same(slotS, s)) return "match";
+  let value = 0n;
+  for (const byte of s) value = (value << 8n) | BigInt(byte);
+  let rest = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n - value;
+  const negated = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    negated[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return same(slotS, negated) ? "match" : "mismatch";
+}
+
 function hodlDerRLoose(der) {
   if (!der || der.length < 8 || der[0] !== 0x30 || der[1] >= 0x80 || 2 + der[1] > der.length) return null;
   let offset = 2,
@@ -13319,7 +13347,11 @@ function hodlVerifyAexbMessages(messages) {
   const stage3 = messages.find((message) => message.stage === 3);
   const commitment = messages.find((message) => message.stage === 2) || messages.find((message) => message.stage === 1) || null;
   if (stage4) return aexbVerify(stage4, stage3 ?? null, commitment);
-  if (stage3) return aexbVerify(stage3, null, commitment);
+  if (stage3) {
+    const verdict = aexbVerify(stage3, null, commitment);
+    if (!verdict.ok) return verdict;
+    return { ok: false, reason: "MISSING_SIGNATURES", slots: [] };
+  }
   return aexbVerify(messages[0]);
 }
 // Reads the Nonce Inspector's transcript field. Release builds keep the
@@ -13339,7 +13371,9 @@ function hodlReadNonceTranscript(raw, preview) {
     return { transcript: result.transcript, kind: result.kind, warningCode: result.warningCode, warning: result.warning };
   }
   if (result.kind === "aexb") {
-    return { transcript: null, kind: "aexb", aexb: hodlVerifyAexbMessages(result.transcript.messages || [result.transcript.decoded]) };
+    const messages = result.transcript.messages || [result.transcript.decoded];
+    const aexb = hodlVerifyAexbMessages(messages);
+    return { transcript: null, kind: "aexb", aexb, aexbSignatures: aexb.ok ? messages.find((message) => message.stage === 4) || null : null };
   }
   return { error: result.error };
 }
@@ -13662,6 +13696,9 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     tapSignatureCount = 0,
     tapUninspected = 0,
     ecdsaIndex = 0,
+    aexbCompared = 0,
+    aexbMatched = 0,
+    aexbUncovered = 0,
     uninspected = 0,
     policyProblems = 0,
     policyIncomplete = 0,
@@ -13756,7 +13793,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // Release builds (and slices that load this function alone) keep the exact
   // Jade-only call; only a preview build takes the unified reader.
   let preview = typeof PREVIEW !== "undefined" && PREVIEW;
-  let transcriptKind = "jade", transcriptWarningCode = null, aexbResult = null;
+  let transcriptKind = "jade", transcriptWarningCode = null, aexbResult = null, aexbSignatures = null;
   if (view !== "inspect") try {
     let raw = (options?.transcript ?? document.getElementById("psbt-ax-transcript")?.value) || "";
     if (!preview) transcript = hodlParseAntiExfil(raw);
@@ -13766,6 +13803,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
       transcriptKind = read.kind || "jade";
       transcriptWarningCode = read.warningCode || null;
       aexbResult = read.aexb || null;
+      aexbSignatures = read.aexbSignatures || null;
       if (read.error) transcriptError = read.error;
     }
   } catch (exception) {
@@ -14078,6 +14116,33 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
               message = hodlT("Could not verify Jade anti-exfil: {error}", { error: exception.message || String(exception) });
               className = "psbt-warn";
             }
+          } else if (aexbSignatures) {
+            const slotVerdict = hodlAexbSlotVerdict(aexbSignatures.slots, index, hodlCompressedPubkey(signature.pubkey), parts.r, parts.s, sighash);
+            if (slotVerdict === "no-slot") {
+              message = hodlT("No AEXB transcript slot covers this signature.");
+              className = "psbt-warn";
+              aexbUncovered += 1;
+            } else if (slotVerdict === "match") {
+              message = hodlT("Matches the AEXB transcript: this is the signature the transcript checks.");
+              className = "psbt-ok";
+              aexbCompared += 1;
+              aexbMatched += 1;
+            } else {
+              message = hodlT("Does not match the AEXB transcript's signature for this input.");
+              className = "psbt-warn";
+              aexbCompared += 1;
+              if (privateKey && sighash) try {
+                let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
+                rfcChecked += 1;
+                if (!cmp.ok) rfcMismatched += 1;
+                if (cmp.ok) {
+                  message += " " + cmp.message;
+                  className = cmp.className;
+                } else message += " " + hodlT("Also does not match RFC 6979 or low-r grind.");
+              } catch (exception) {
+                message += " " + (exception.message || String(exception));
+              }
+            }
           } else if (privateKey && sighash) try {
             let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
             rfcChecked += 1;
@@ -14221,9 +14286,14 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   if (view !== "nonce") nonceHtml.push("<p class='label'>" + hodlT("ECDSA nonce check") + "</p>");
   if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT(preview ? "Anti-exfil transcript not used:" : "Jade anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
   if (transcriptWarningCode === "jade-or-bitbox02") nonceHtml.push("<p class='edge-note'>" + hodlT("This reads as a Jade host nonce ρ or a BitBox02 host nonce. Both are checked the same way. From a BitBox02, paste the host nonce, not its SHA-256 commitment.") + "</p>");
-  if (aexbResult) nonceHtml.push(aexbResult.ok
-    ? "<p class='psbt-ok'>" + hodlT("AEXB transcript checks out for {n} signature slot(s). This checks the transcript's math only, not that an honest host ran the exchange.", { n: aexbResult.slots?.length ?? 0 }) + "</p>"
-    : "<p class='psbt-warn'>" + hodlT("AEXB transcript does not check out:") + " <code>" + hodlEscapeHtml(aexbResult.reason || aexbResult.slots?.find((slot) => !slot.ok)?.reason || "") + "</code></p>");
+  if (aexbResult) {
+    const aexbCovered = aexbCompared > 0 && aexbMatched === aexbCompared && aexbUncovered === 0;
+    nonceHtml.push(aexbResult.ok
+      ? aexbCovered
+        ? "<p class='psbt-ok'>" + hodlT("AEXB transcript checks out for {n} signature slot(s). This checks the transcript's math only, not that an honest host ran the exchange.", { n: aexbResult.slots?.length ?? 0 }) + "</p>"
+        : "<p class='psbt-warn'>" + hodlT("AEXB transcript checks out, but it does not cover every signature in this PSBT.") + "</p>"
+      : "<p class='psbt-warn'>" + hodlT("AEXB transcript does not check out:") + " <code>" + hodlEscapeHtml(aexbResult.reason || aexbResult.slots?.find((slot) => !slot.ok)?.reason || "") + "</code></p>");
+  }
   let {
     reused,
     possible,
