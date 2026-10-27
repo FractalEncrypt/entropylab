@@ -18,8 +18,7 @@ The offline AEXB verifier validates canonical message fields and slot-set
 constraints on supplied objects, including objects changed after decoding.
 Successful signature verification checks the supplied hashes and transcript;
 it does not derive transaction hashes from a PSBT or establish an honest
-host's randomness, secrecy, or live exchange ordering. This module is not
-connected to the application UI.
+host's randomness, secrecy, or live exchange ordering.
 
 Who EntropyLab defends against, what it checks against each of them, and
 what it leaves to you: [docs/Threat_Model.md](docs/Threat_Model.md).
