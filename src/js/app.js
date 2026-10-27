@@ -15680,6 +15680,13 @@ function hodlWipeActiveKey() {
   // too, and the passphrase bytes are zeroed rather than left to GC.
   hodlReleaseKeyConsumers(state.id);
   hodlZeroKeyPassphrase(state);
+  // Empty the secret fields in place before the form re-renders for the fresh
+  // key: the nodes it drops would otherwise keep their text, and its Undo
+  // history, until garbage collection. Assignment drops that history.
+  ["dice", "hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards"].forEach((id) => {
+    let el = document.getElementById(id);
+    if (el) el.value = "";
+  });
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
   // Restoring the fresh state re-renders the form; dropping the still-filled

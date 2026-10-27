@@ -8395,10 +8395,15 @@
       field.dispatchEvent(new Event("input", { bubbles: true }));
       await until(() => !clear.hidden && !clear.disabled, `${clearId} enabled for #${fieldId}`);
       clear.click();
-      assert(field.value === "", `#${fieldId} was not emptied by #${clearId} (${field.value.length} characters left)`);
-      field.focus();
+      // A Clear may re-render its form (the Key Station does): the node it
+      // drops must be emptied too, or it keeps the text until garbage collection.
+      assert(field.value === "", `#${fieldId} (${field.isConnected ? "in the page" : "the node Clear dropped"}) still holds ${field.value.length} characters after #${clearId}`);
+      const current = document.getElementById(fieldId);
+      if (current && current !== field) assert(current.value === "", `the new #${fieldId} is not empty after #${clearId}`);
+      const target = current || field;
+      target.focus();
       document.execCommand("undo");
-      assert(!field.value.includes("abandon test words"), `#${fieldId} got its text back from Undo after #${clearId}`);
+      assert(!target.value.includes("abandon test words"), `#${fieldId} got its text back from Undo after #${clearId}`);
     }
     // Later tests start on the Key Station.
     document.querySelector('#workspace-tabs [data-workspace="calc"]').click();

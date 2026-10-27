@@ -342,3 +342,16 @@ test("no other module calls document.execCommand except the clipboard's copy fal
     }
   }
 });
+
+// The Key Station's Clear builds a fresh key and re-renders the form, which
+// drops the old field nodes. Measured in CI (Firefox, Chrome): a dropped #seed
+// still held its text. The handler must empty the fields in place first.
+test("the Key Station Clear empties its secret fields in place before the form re-renders", () => {
+  const body = fnBody("hodlWipeActiveKey");
+  const empty = body.indexOf('el.value = ""');
+  const restore = body.indexOf("hodlRestoreKey()");
+  assert.ok(empty >= 0 && restore > empty, 'hodlWipeActiveKey must assign "" to the secret fields before hodlRestoreKey re-renders the form');
+  for (const id of ["dice", "seed", "seed-numbers", "key", "cards", "direct-cards", "hex"]) {
+    assert.ok(body.includes(`"${id}"`), `hodlWipeActiveKey must empty #${id} in place`);
+  }
+});
