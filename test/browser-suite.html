@@ -8361,7 +8361,9 @@
       ["psbt-key", "psbt", "psbt-wipe"],
       ["psbt-pass", "psbt", "psbt-wipe"],
       ["psbt-text", "psbt", "psbt-wipe"],
-      ["core-add-text", "core", "core-wipe"],
+      // Core's add-key field (#core-add-text) appears only after a wallet file
+      // is opened, so it is not reachable here; the module source guard in
+      // test/secret-field-registry.test.mjs pins its Clear instead.
     ];
     const skippedFields = [];
     for (const [fieldId, workspace, clearId, mode] of rows) {
