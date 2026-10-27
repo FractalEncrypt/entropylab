@@ -19,7 +19,8 @@ pub const QR_NOT_FOUND: i32 = -1;
 pub const QR_DECODE_FAILED: i32 = -2;
 /// Two or more different payloads decoded: refuse, never pick one.
 pub const QR_MULTIPLE_CODES: i32 = -3;
-/// The frame left the accepted limits.
+/// The frame, or the frame plus its 16-pixel quiet-zone border, left the
+/// accepted limits.
 pub const QR_TOO_LARGE: i32 = -4;
 /// `out_cap` is smaller than the payload; nothing was written.
 pub const QR_OUT_TOO_SMALL: i32 = -5;
@@ -90,12 +91,17 @@ pub unsafe extern "C" fn qr_decode(
     let Some(pixels) = (width as usize).checked_mul(height as usize) else {
         return QR_BAD_ARGS;
     };
-    if width > MAX_DIM || height > MAX_DIM || pixels > MAX_PIXELS {
-        return QR_TOO_LARGE;
-    }
-
+    // Every accepted frame must get every pass, so the padded frame has to fit
+    // the same limits: a frame too large to pad is refused up front rather
+    // than scanned by the first pass alone, where a mirrored second code
+    // would go unseen and one payload could be returned.
     let w = width as usize;
     let h = height as usize;
+    let pad_w = w + QUIET as usize * 2;
+    let pad_h = h + QUIET as usize * 2;
+    if pad_w > MAX_DIM as usize || pad_h > MAX_DIM as usize || pixels > MAX_PIXELS || pad_w * pad_h > MAX_PIXELS {
+        return QR_TOO_LARGE;
+    }
     let input = unsafe { std::slice::from_raw_parts(gray, pixels) };
 
     let mut found = Found { payloads: Vec::new(), located: 0 };
@@ -103,13 +109,10 @@ pub unsafe extern "C" fn qr_decode(
     // (a) the frame as is.
     scan(input, w, h, &mut found);
 
-    // (b)-(d) work on a frame with a 16-pixel white border. The padded frame
-    // must stay inside the same limits; a frame too large to pad simply gets
-    // no padded passes, and the call still fails closed on what (a) found.
-    let pad_w = w + QUIET as usize * 2;
-    let pad_h = h + QUIET as usize * 2;
+    // (b)-(d) work on a frame with a 16-pixel white border; the limits above
+    // guarantee it fits.
     let Some(mut padded) = Frame::light(pad_w, pad_h) else {
-        return decide(found, out, out_cap);
+        return QR_TOO_LARGE;
     };
     for y in 0..h {
         let dst = (y + QUIET as usize) * pad_w + QUIET as usize;
@@ -484,6 +487,21 @@ mod tests {
         let pixels = vec![255u8; 5000 * 21];
         let mut out = vec![0u8; 64];
         assert_eq!(decode_into(&pixels, 5000, 21, &mut out), QR_TOO_LARGE);
+    }
+
+    #[test]
+    fn a_frame_too_large_to_pad_is_refused_so_every_pass_runs() {
+        // 2048x2048 is within MAX_PIXELS, but its padded frame (2080x2080) is
+        // not: it is refused instead of being scanned by the first pass alone.
+        let big = vec![255u8; 2048 * 2048];
+        let mut out = vec![0u8; 64];
+        assert_eq!(decode_into(&big, 2048, 2048, &mut out), QR_TOO_LARGE);
+        // A side whose padded width passes MAX_DIM is refused too.
+        let wide = vec![255u8; 4080 * 21];
+        assert_eq!(decode_into(&wide, 4080, 21, &mut out), QR_TOO_LARGE);
+        // 2000x2000 pads to 2032x2032, inside the limits: accepted and scanned.
+        let fits = vec![255u8; 2000 * 2000];
+        assert_eq!(decode_into(&fits, 2000, 2000, &mut out), QR_NOT_FOUND);
     }
 
     #[test]
