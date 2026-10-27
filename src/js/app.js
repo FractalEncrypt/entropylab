@@ -16666,6 +16666,12 @@ function hodlWipeActiveMsig() {
   hodlInvalidateDerivation();
   if (hodlActiveMsig < 0 || !hodlMsigs[hodlActiveMsig]) return;
   let state = hodlMsigs[hodlActiveMsig];
+  // Empty the cosigner key fields in place before the station re-renders: the
+  // nodes it drops would otherwise keep their text, and its Undo history,
+  // until garbage collection (measured in CI's browser run).
+  document.querySelectorAll('[id^="msig-x-"]').forEach((el) => {
+    if ("value" in el) el.value = "";
+  });
   hodlMsigs[hodlActiveMsig] = state.isLab ? hodlNewMsigLabState() : hodlNewMsigState(state.name, state.id, state.number);
   hodlRestoreMsig();
   hodlJournalLog("clear", `multisig-${state.number}`, "msig");

@@ -355,3 +355,14 @@ test("the Key Station Clear empties its secret fields in place before the form r
     assert.ok(body.includes(`"${id}"`), `hodlWipeActiveKey must empty #${id} in place`);
   }
 });
+
+// MultiSig's Clear re-renders the station the same way (measured in CI: a
+// dropped #msig-x-0 still held its text), so it empties the cosigner fields
+// in place first.
+test("the MultiSig Clear empties its cosigner fields in place before the station re-renders", () => {
+  const body = fnBody("hodlWipeActiveMsig");
+  const empty = body.indexOf('[id^="msig-x-"]');
+  const restore = body.indexOf("hodlRestoreMsig()");
+  assert.ok(empty >= 0 && restore > empty, "hodlWipeActiveMsig must empty the msig-x-* fields before hodlRestoreMsig re-renders the station");
+  assert.ok(body.includes('el.value = ""'), "hodlWipeActiveMsig must empty the cosigner fields by assignment");
+});
