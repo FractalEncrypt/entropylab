@@ -16,14 +16,40 @@ export const nextDialogFocus = (focusables, active, shiftKey) => {
   return focusables[(index + (shiftKey ? -1 : 1) + focusables.length) % focusables.length];
 };
 
+// True for an element a keyboard user can reach: still in the document, not
+// disabled, and not hidden by itself or an ancestor up to the overlay.
+export const isUsableFocusable = (element, overlay) => {
+  if (!element || element.isConnected === false || element.disabled) return false;
+  for (let node = element; node; node = node.parentElement) {
+    if (node.hidden) return false;
+    if (node === overlay) return true;
+  }
+  return true;
+};
+
+// Focuses the card root (the overlay's first element child), giving it a
+// tabindex of -1 when it has none so a plain div can take focus.
+export const focusCardRoot = (overlay) => {
+  const card = overlay?.firstElementChild;
+  if (!card) return null;
+  if (!card.hasAttribute?.("tabindex")) card.setAttribute?.("tabindex", "-1");
+  card.focus?.();
+  return card;
+};
+
 // Binds the cycle to an overlay. `getFocusables` is called per keypress so a
-// card whose controls change between openings stays correct.
+// card whose controls change between openings stays correct. Tab is always
+// prevented: with no usable control focus goes to the card root, never to the
+// inert page behind.
 export const trapModalFocus = (overlay, getFocusables) => {
   overlay.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") return;
-    const focusables = getFocusables().filter(Boolean);
-    if (!focusables.length) return;
+    const focusables = getFocusables().filter((element) => isUsableFocusable(element, overlay));
     event.preventDefault();
+    if (!focusables.length) {
+      focusCardRoot(overlay);
+      return;
+    }
     nextDialogFocus(focusables, document.activeElement, event.shiftKey)?.focus();
   });
 };
