@@ -8382,13 +8382,23 @@
         skippedFields.push(fieldId);
         continue;
       }
+      // Positive control: Undo must actually work on this field here, or the
+      // check after Clear would pass without proving anything.
+      document.execCommand("undo");
+      if (field.value !== before) {
+        skippedFields.push(fieldId);
+        continue;
+      }
+      field.focus();
+      document.execCommand("insertText", false, "abandon test words");
+      assert(field.value.includes("abandon test words"), `#${fieldId}: the text did not go back in after the Undo control`);
       field.dispatchEvent(new Event("input", { bubbles: true }));
       await until(() => !clear.hidden && !clear.disabled, `${clearId} enabled for #${fieldId}`);
       clear.click();
-      equal(field.value, "", `#${fieldId} was not cleared`);
+      assert(field.value === "", `#${fieldId} was not emptied by #${clearId} (${field.value.length} characters left)`);
       field.focus();
       document.execCommand("undo");
-      equal(field.value, "", `#${fieldId} kept its text in Undo after Clear`);
+      assert(!field.value.includes("abandon test words"), `#${fieldId} got its text back from Undo after #${clearId}`);
     }
     // Later tests start on the Key Station.
     document.querySelector('#workspace-tabs [data-workspace="calc"]').click();
