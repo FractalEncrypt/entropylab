@@ -37,6 +37,57 @@ const assertLive = (entry, kind) => {
   if (entry.wiped) fail("WIPED", "This secure entry has been wiped.");
 };
 
+const isPlainObject = (value) => {
+  if (!value || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+// One canonical key id: a non-negative safe integer or a non-empty string,
+// always carried as a string so 1 and "1" name the same key.
+const normalizeKeyId = (keyId) => {
+  if (typeof keyId === "number" && Number.isSafeInteger(keyId) && keyId >= 0) return String(keyId);
+  if (typeof keyId === "string" && keyId.length > 0) return keyId;
+  return fail("BAD_KEY", "A key id must be a non-negative integer or a non-empty string.");
+};
+
+const bumpRev = (entry) => { entry.rev = (isInteger(entry.rev) ? entry.rev : 0) + 1; };
+
+// P1b calls this when the key vault mutates internally, so a turn-off plan
+// taken before the edit is refused instead of serializing stale bytes.
+export const touchEntry = (entry) => {
+  if (!entry || typeof entry !== "object") fail("BAD_ENTRY", "Not a secure entry.");
+  bumpRev(entry);
+};
+
+// The one shared shape check: a session, a plan and a commit all refuse an
+// entry whose kind, buffers or counts do not match the method it claims.
+const assertEntry = (entry, method) => {
+  if (!entry || typeof entry !== "object" || entry.kind !== method) fail("BAD_ENTRY", `Not a ${method} entry.`);
+  if (entry.wiped === true) fail("BAD_ENTRY", "This secure entry has been wiped.");
+  switch (method) {
+    case "seed":
+      if (!(entry.indices instanceof Uint16Array)) fail("BAD_ENTRY", "A seed entry needs Uint16 word indices.");
+      if (!SEED_LENGTHS.has(entry.length)) fail("BAD_ENTRY", "A seed entry needs 12, 15, 18, 21 or 24 words.");
+      if (entry.indices.length !== entry.length) fail("BAD_ENTRY", "The seed buffer does not match its length.");
+      if (!isInteger(entry.count) || entry.count < 0 || entry.count > entry.length) fail("BAD_ENTRY", "The seed count is outside the buffer.");
+      break;
+    case "rolls":
+      if (!(entry.rolls instanceof Uint8Array)) fail("BAD_ENTRY", "A rolls entry needs a Uint8 face buffer.");
+      if (!isInteger(entry.count) || entry.count < 0 || entry.count > entry.rolls.length) fail("BAD_ENTRY", "The rolls count is outside the buffer.");
+      break;
+    case "cards":
+      if (!(entry.cards instanceof Uint8Array)) fail("BAD_ENTRY", "A cards entry needs a Uint8 card buffer.");
+      if (!isInteger(entry.count) || entry.count < 0 || entry.count > entry.cards.length) fail("BAD_ENTRY", "The cards count is outside the buffer.");
+      break;
+    case "key":
+      if (!(entry.vault instanceof PassphraseVault)) fail("BAD_ENTRY", "A key entry needs a PassphraseVault.");
+      break;
+    default:
+      fail("BAD_ENTRY", "Not a secure entry.");
+  }
+};
+
 // The four entry kinds the module can hold. The boolean is the UI gate that
 // P1b reads through isSupported(); it is false for every kind in this round,
 // so the Key Station does not yet offer secure entry. Planning recognises the
@@ -53,7 +104,7 @@ const isKnownMethod = (method) => typeof method === "string"
 
 export const seedEntry = (length) => {
   if (!SEED_LENGTHS.has(length)) fail("BAD_LENGTH", "A seed entry needs 12, 15, 18, 21 or 24 words.");
-  return { kind: "seed", length, indices: new Uint16Array(length), count: 0, wiped: false };
+  return { kind: "seed", length, indices: new Uint16Array(length), count: 0, wiped: false, rev: 0 };
 };
 
 export const seedSet = (entry, position, index) => {
@@ -63,6 +114,7 @@ export const seedSet = (entry, position, index) => {
   if (position > entry.count) fail("BAD_POSITION", "Words fill in order; this position is past the end.");
   entry.indices[position] = index;
   if (position === entry.count) entry.count += 1;
+  bumpRev(entry);
 };
 
 export const seedUndo = (entry) => {
@@ -70,6 +122,7 @@ export const seedUndo = (entry) => {
   if (entry.count === 0) fail("EMPTY", "There is no word to undo.");
   entry.count -= 1;
   entry.indices[entry.count] = 0;
+  bumpRev(entry);
 };
 
 export const seedIndices = (entry) => {
@@ -77,12 +130,12 @@ export const seedIndices = (entry) => {
   return entry.indices.slice(0, entry.count);
 };
 
-export const keyEntry = () => ({ kind: "key", vault: new PassphraseVault(), wiped: false });
+export const keyEntry = () => ({ kind: "key", vault: new PassphraseVault(), wiped: false, rev: 0 });
 
 export const rollsEntry = (method, capacity) => {
   if (typeof method !== "string" || method.length === 0) fail("BAD_METHOD", "A rolls entry needs a method tag.");
   if (!isInteger(capacity) || capacity < 1 || capacity > MAX_CAPACITY) fail("BAD_CAPACITY", "Capacity is 1..400.");
-  return { kind: "rolls", method, rolls: new Uint8Array(capacity), count: 0, wiped: false };
+  return { kind: "rolls", method, rolls: new Uint8Array(capacity), count: 0, wiped: false, rev: 0 };
 };
 
 export const rollsPush = (entry, face) => {
@@ -91,6 +144,7 @@ export const rollsPush = (entry, face) => {
   if (entry.count === entry.rolls.length) fail("FULL", "The rolls buffer is full.");
   entry.rolls[entry.count] = face;
   entry.count += 1;
+  bumpRev(entry);
 };
 
 export const rollsUndo = (entry) => {
@@ -98,6 +152,7 @@ export const rollsUndo = (entry) => {
   if (entry.count === 0) fail("EMPTY", "There is no roll to undo.");
   entry.count -= 1;
   entry.rolls[entry.count] = 0;
+  bumpRev(entry);
 };
 
 export const rollAt = (entry, i) => {
@@ -114,7 +169,7 @@ export const rollsCopy = (entry) => {
 export const cardsEntry = (method, capacity) => {
   if (typeof method !== "string" || method.length === 0) fail("BAD_METHOD", "A cards entry needs a method tag.");
   if (!isInteger(capacity) || capacity < 1 || capacity > MAX_CAPACITY) fail("BAD_CAPACITY", "Capacity is 1..400.");
-  return { kind: "cards", method, cards: new Uint8Array(capacity), count: 0, wiped: false };
+  return { kind: "cards", method, cards: new Uint8Array(capacity), count: 0, wiped: false, rev: 0 };
 };
 
 export const cardsPush = (entry, value) => {
@@ -123,6 +178,7 @@ export const cardsPush = (entry, value) => {
   if (entry.count === entry.cards.length) fail("FULL", "The cards buffer is full.");
   entry.cards[entry.count] = value;
   entry.count += 1;
+  bumpRev(entry);
 };
 
 export const cardsUndo = (entry) => {
@@ -130,6 +186,7 @@ export const cardsUndo = (entry) => {
   if (entry.count === 0) fail("EMPTY", "There is no card to undo.");
   entry.count -= 1;
   entry.cards[entry.count] = 0;
+  bumpRev(entry);
 };
 
 export const cardAt = (entry, i) => {
@@ -158,9 +215,34 @@ export const wipeEntry = (entry) => {
   }
   if ("count" in entry) entry.count = 0;
   entry.wiped = true;
+  // A direct wipe must invalidate any guard captured before it, so the owning
+  // session's generation moves even when the wipe did not go through the map.
+  if (entry.owner && typeof entry.owner === "object" && isInteger(entry.owner.generation)) entry.owner.generation += 1;
 };
 
-const entryId = (keyId, method) => `${keyId}:${method}`;
+// Best-effort wipe: if wipeEntry throws on a malformed entry, still zero every
+// typed array it holds and clear any vault, so nothing survives the cleanup.
+const scrub = (entry) => {
+  try {
+    wipeEntry(entry);
+    return true;
+  } catch {
+    try {
+      if (entry && typeof entry === "object") {
+        for (const field of ["indices", "rolls", "cards"]) {
+          const buffer = entry[field];
+          if (buffer && typeof buffer.fill === "function") buffer.fill(0);
+        }
+        if (entry.vault && typeof entry.vault.clear === "function") entry.vault.clear();
+        if ("count" in entry) entry.count = 0;
+        entry.wiped = true;
+      }
+    } catch { /* nothing more can be done */ }
+    return false;
+  }
+};
+
+const entryId = (keyId, method) => `${normalizeKeyId(keyId)}:${method}`;
 
 const metaOf = (session) => {
   if (!session.meta) Object.defineProperty(session, "meta", { value: new Map(), enumerable: false, writable: true, configurable: true });
@@ -182,35 +264,46 @@ export const sessionGet = (session, keyId, method) => session.entries.get(entryI
 
 export const sessionSet = (session, keyId, method, entry) => {
   if (typeof method !== "string" || method.length === 0) fail("BAD_METHOD", "A session method must be a non-empty string.");
-  if (!entry || typeof entry !== "object") fail("BAD_ENTRY", "Not a secure entry.");
-  const id = entryId(keyId, method);
+  const canonical = normalizeKeyId(keyId);
+  assertEntry(entry, method);
+  const id = `${canonical}:${method}`;
+  Object.defineProperty(entry, "owner", { value: session, writable: true, configurable: true });
   const previous = session.entries.get(id);
   if (previous && previous !== entry) wipeEntry(previous);
   session.entries.set(id, entry);
-  metaOf(session).set(id, { keyId, method });
+  metaOf(session).set(id, { keyId: canonical, method });
   session.generation += 1;
 };
 
 export const sessionDeleteKey = (session, keyId) => {
+  const wanted = normalizeKeyId(keyId);
   const meta = metaOf(session);
-  let removed = 0;
+  const doomed = [];
   for (const [id, entry] of session.entries) {
     const info = meta.get(id) ?? splitId(id);
-    if (info.keyId !== keyId) continue;
-    wipeEntry(entry);
+    if (info.keyId !== wanted) continue;
+    doomed.push([id, entry]);
+  }
+  let failed = false;
+  for (const [id, entry] of doomed) {
+    if (!scrub(entry)) failed = true;
     session.entries.delete(id);
     meta.delete(id);
-    removed += 1;
   }
-  if (removed > 0) session.generation += 1;
+  if (doomed.length > 0) session.generation += 1;
+  if (failed) fail("WIPE_PARTIAL", "Some secure entries could not be wiped cleanly.");
 };
 
 export const sessionWipe = (session) => {
-  for (const entry of session.entries.values()) wipeEntry(entry);
+  let failed = false;
+  for (const entry of session.entries.values()) {
+    if (!scrub(entry)) failed = true;
+  }
   session.entries.clear();
   metaOf(session).clear();
   session.on = false;
   session.generation += 1;
+  if (failed) fail("WIPE_PARTIAL", "Some secure entries could not be wiped cleanly.");
 };
 
 export const sessionGuard = (session) => {
@@ -219,36 +312,49 @@ export const sessionGuard = (session) => {
 };
 
 export const planTurnOn = (session, keys, converters) => {
+  if (!Array.isArray(keys)) fail("BAD_INPUT", "keys must be an array.");
   const staged = [], blockers = [];
-  for (const key of Array.isArray(keys) ? keys : []) {
-    const keyId = key?.keyId;
-    const methods = key?.methods && typeof key.methods === "object" ? key.methods : {};
-    for (const method of Object.keys(methods)) {
-      const text = methods[method];
-      if (text === undefined || text === null || text === "") continue;
-      if (!isKnownMethod(method)) { blockers.push({ keyId, method, reason: "unsupported" }); continue; }
-      const convert = converters && Object.prototype.hasOwnProperty.call(converters, method) ? converters[method] : undefined;
-      if (typeof convert !== "function") { blockers.push({ keyId, method, reason: "no-converter" }); continue; }
-      let entry;
-      try { entry = convert(text); }
-      catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
-      if (!entry || typeof entry !== "object" || entry.kind !== method || entry.wiped) {
-        try { wipeEntry(entry); } catch { /* not an entry */ }
-        blockers.push({ keyId, method, reason: "invalid" });
-        continue;
+  try {
+    for (const key of keys) {
+      const keyId = normalizeKeyId(key?.keyId);
+      const methods = key?.methods;
+      if (!isPlainObject(methods)) fail("BAD_INPUT", "A key's methods must be a plain object.");
+      for (const method of Object.keys(methods)) {
+        const text = methods[method];
+        if (text === undefined || text === null || text === "") continue;
+        if (!isKnownMethod(method)) { blockers.push({ keyId, method, reason: "unsupported" }); continue; }
+        const convert = converters && Object.prototype.hasOwnProperty.call(converters, method) ? converters[method] : undefined;
+        if (typeof convert !== "function") { blockers.push({ keyId, method, reason: "no-converter" }); continue; }
+        let entry;
+        try { entry = convert(text); }
+        catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
+        try { assertEntry(entry, method); }
+        catch {
+          scrub(entry);
+          blockers.push({ keyId, method, reason: "invalid" });
+          continue;
+        }
+        staged.push({ keyId, method, entry });
       }
-      staged.push({ keyId, method, entry });
     }
+  } catch (error) {
+    // A malformed key id or methods object is a programming error, not a
+    // blocker: refuse the whole plan and wipe whatever was already staged.
+    for (const item of staged) scrub(item.entry);
+    throw error;
   }
-  return { ok: blockers.length === 0, staged, blockers };
+  return { kind: "on", ok: blockers.length === 0, staged, blockers, generation: session.generation };
 };
 
 export const commitTurnOn = (session, plan) => {
   if (!plan || plan.ok !== true || !Array.isArray(plan.staged)) fail("PLAN_BLOCKED", "The plan has blockers; nothing was changed.");
+  if (plan.generation !== session.generation) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+  // Validate every item and every key id up front, so the install loop below
+  // cannot throw and the commit is all-or-nothing.
   for (const item of plan.staged) {
-    if (!item || typeof item !== "object" || !item.entry || item.entry.kind !== item.method || item.entry.wiped) {
-      fail("PLAN_BLOCKED", "The plan is not valid; nothing was changed.");
-    }
+    if (!item || typeof item !== "object") fail("PLAN_BLOCKED", "The plan is not valid; nothing was changed.");
+    assertEntry(item.entry, item.method);
+    normalizeKeyId(item.keyId);
   }
   for (const { keyId, method, entry } of plan.staged) sessionSet(session, keyId, method, entry);
   plan.staged = [];
@@ -258,8 +364,12 @@ export const commitTurnOn = (session, plan) => {
 
 export const discardPlan = (plan) => {
   if (!plan || !Array.isArray(plan.staged)) return;
-  for (const item of plan.staged) {
-    if (item && item.entry) { try { wipeEntry(item.entry); } catch { /* not an entry */ } }
+  // Only a turn-on plan owns its staged entries. A turn-off plan points at the
+  // live entries, so discarding it must never wipe them.
+  if (plan.kind === "on") {
+    for (const item of plan.staged) {
+      if (item && item.entry) scrub(item.entry);
+    }
   }
   plan.staged = [];
 };
@@ -278,27 +388,33 @@ export const planTurnOff = (session, serializers) => {
     if (typeof text !== "string") { blockers.push({ keyId, method, reason: "invalid" }); continue; }
     const item = { keyId, method, text };
     Object.defineProperty(item, "entry", { value: entry, enumerable: false });
+    Object.defineProperty(item, "rev", { value: entry.rev, enumerable: false });
     staged.push(item);
   }
-  return { ok: blockers.length === 0, staged, blockers };
+  return { kind: "off", ok: blockers.length === 0, staged, blockers, generation: session.generation };
 };
 
 export const commitTurnOff = (session, plan, mode) => {
   if (mode === "convert") {
     if (!plan || plan.ok !== true || !Array.isArray(plan.staged)) fail("PLAN_BLOCKED", "The plan has blockers; nothing was changed.");
+    if (plan.generation !== session.generation) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+    for (const item of plan.staged) {
+      if (!item || typeof item !== "object" || !item.entry) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+      if (item.entry.rev !== item.rev) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+    }
     if (plan.staged.length !== session.entries.size) fail("PLAN_BLOCKED", "The plan is stale; nothing was changed.");
     for (const item of plan.staged) {
-      if (!item || sessionGet(session, item.keyId, item.method) !== item.entry) fail("PLAN_BLOCKED", "The plan is stale; nothing was changed.");
+      if (sessionGet(session, item.keyId, item.method) !== item.entry) fail("PLAN_BLOCKED", "The plan is stale; nothing was changed.");
     }
     // Each text keeps its key and method, so the caller puts it back in the right field.
     const texts = plan.staged.map(({ keyId, method, text }) => ({ keyId, method, text }));
-    sessionWipe(session);
     plan.staged = [];
+    sessionWipe(session);
     return texts;
   }
   if (mode === "clear") {
-    sessionWipe(session);
     if (plan) plan.staged = [];
+    sessionWipe(session);
     return [];
   }
   fail("BAD_MODE", "Unknown turn-off mode.");

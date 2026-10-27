@@ -32,6 +32,7 @@ import {
   cardAt,
   cardsCopy,
   wipeEntry,
+  touchEntry,
   createSecureSession,
   sessionGet,
   sessionSet,
@@ -333,7 +334,7 @@ test("planTurnOn stages every supported conversion without touching the session"
   assert.equal(plan.ok, true);
   assert.equal(plan.blockers.length, 0);
   assert.equal(plan.staged.length, 1);
-  assert.equal(plan.staged[0].keyId, 1);
+  assert.equal(plan.staged[0].keyId, "1");
   assert.equal(plan.staged[0].method, "seed");
   assert.equal(plan.staged[0].entry.kind, "seed");
   assert.equal(session.entries.size, 0);
@@ -347,7 +348,7 @@ test("an unsupported method blocks the plan and never echoes the text", () => {
   const plan = planTurnOn(session, [{ keyId: 7, methods: { hex: sentinel } }], {});
   assert.equal(plan.ok, false);
   assert.equal(plan.staged.length, 0);
-  assert.deepEqual(plan.blockers, [{ keyId: 7, method: "hex", reason: "unsupported" }]);
+  assert.deepEqual(plan.blockers, [{ keyId: "7", method: "hex", reason: "unsupported" }]);
   assert.equal(JSON.stringify(plan.blockers).includes(sentinel), false);
   assert.equal(JSON.stringify(plan).includes(sentinel), false);
 });
@@ -359,7 +360,7 @@ test("a converter that throws is an invalid blocker, not a crash", () => {
     seed: () => { throw new Error("bad words"); },
   });
   assert.equal(plan.ok, false);
-  assert.deepEqual(plan.blockers, [{ keyId: 2, method: "seed", reason: "invalid" }]);
+  assert.deepEqual(plan.blockers, [{ keyId: "2", method: "seed", reason: "invalid" }]);
   assert.equal(JSON.stringify(plan.blockers).includes(sentinel), false);
 });
 
@@ -367,7 +368,7 @@ test("a known method with no converter is a no-converter blocker", () => {
   const session = createSecureSession();
   const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], {});
   assert.equal(plan.ok, false);
-  assert.deepEqual(plan.blockers, [{ keyId: 1, method: "seed", reason: "no-converter" }]);
+  assert.deepEqual(plan.blockers, [{ keyId: "1", method: "seed", reason: "no-converter" }]);
 });
 
 test("planTurnOn ignores empty text and never stages it", () => {
@@ -465,9 +466,9 @@ test("commitTurnOff in convert mode returns the texts and wipes the entries", ()
   const buffer = entry.indices;
   const plan = planTurnOff(session, { seed: (e) => `words:${seedIndices(e).length}` });
   assert.equal(plan.ok, true);
-  assert.deepEqual(plan.staged, [{ keyId: 1, method: "seed", text: "words:1" }]);
+  assert.deepEqual(plan.staged, [{ keyId: "1", method: "seed", text: "words:1" }]);
   const texts = commitTurnOff(session, plan, "convert");
-  assert.deepEqual(texts, [{ keyId: 1, method: "seed", text: "words:1" }]);
+  assert.deepEqual(texts, [{ keyId: "1", method: "seed", text: "words:1" }]);
   assert.ok(buffer.every((value) => value === 0));
   assert.equal(entry.wiped, true);
   assert.equal(session.entries.size, 0);
@@ -479,7 +480,7 @@ test("planTurnOff blocks when a serializer is missing", () => {
   sessionSet(session, 1, "seed", seedEntry(12));
   const plan = planTurnOff(session, {});
   assert.equal(plan.ok, false);
-  assert.deepEqual(plan.blockers, [{ keyId: 1, method: "seed", reason: "no-serializer" }]);
+  assert.deepEqual(plan.blockers, [{ keyId: "1", method: "seed", reason: "no-serializer" }]);
   assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
   assert.equal(session.entries.size, 1);
 });
@@ -494,8 +495,8 @@ test("planTurnOff serializes every entry", () => {
   });
   assert.equal(plan.ok, true);
   assert.deepEqual(plan.staged, [
-    { keyId: 1, method: "seed", text: "seed-text" },
-    { keyId: 2, method: "rolls", text: "rolls-text" },
+    { keyId: "1", method: "seed", text: "seed-text" },
+    { keyId: "2", method: "rolls", text: "rolls-text" },
   ]);
 });
 
@@ -523,7 +524,7 @@ test("commitTurnOff refuses a stale plan", () => {
   sessionSet(session, 1, "seed", seedEntry(12));
   const plan = planTurnOff(session, { seed: () => "text" });
   sessionSet(session, 1, "seed", seedEntry(12));
-  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
   assert.equal(session.entries.size, 1);
 });
 
@@ -532,7 +533,7 @@ test("commitTurnOff refuses a plan whose entry was deleted", () => {
   sessionSet(session, 1, "seed", seedEntry(12));
   const plan = planTurnOff(session, { seed: () => "text" });
   sessionDeleteKey(session, 1);
-  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
 });
 
 test("commitTurnOff refuses a plan that misses an entry", () => {
@@ -540,7 +541,7 @@ test("commitTurnOff refuses a plan that misses an entry", () => {
   sessionSet(session, 1, "seed", seedEntry(12));
   const plan = planTurnOff(session, { seed: () => "text" });
   sessionSet(session, 2, "seed", seedEntry(12));
-  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
   assert.equal(session.entries.size, 2);
 });
 
@@ -571,4 +572,179 @@ test("SecureEntryError carries a code and a message without the input", () => {
   assert.equal(error.name, "SecureEntryError");
   assert.equal(error.code, "BAD_INDEX");
   assert.equal(error.message, "A BIP39 word index is 0..2047.");
+});
+
+test("discarding a turn-off plan leaves the live entries intact", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 5);
+  seedSet(entry, 1, 6);
+  sessionSet(session, 1, "seed", entry);
+  session.on = true;
+  const buffer = entry.indices;
+  const plan = planTurnOff(session, { seed: () => "words" });
+  assert.equal(plan.kind, "off");
+  assert.equal(plan.ok, true);
+  discardPlan(plan);
+  assert.equal(plan.staged.length, 0);
+  assert.equal(entry.wiped, false);
+  assert.equal(entry.count, 2);
+  assert.deepEqual([...buffer], [5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(sessionGet(session, 1, "seed"), entry);
+  assert.equal(session.entries.size, 1);
+  assert.equal(session.on, true);
+});
+
+test("a turn-on plan goes stale when the session generation moves", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], { seed: () => seedEntry(12) });
+  assert.equal(plan.kind, "on");
+  assert.equal(plan.ok, true);
+  sessionSet(session, 2, "seed", seedEntry(12));
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_STALE"));
+  assert.equal(session.entries.size, 1);
+  assert.equal(session.on, false);
+  discardPlan(plan);
+});
+
+test("a turn-off plan goes stale when the session generation moves", () => {
+  const session = createSecureSession();
+  sessionSet(session, 1, "seed", seedEntry(12));
+  session.on = true;
+  const plan = planTurnOff(session, { seed: () => "text" });
+  sessionSet(session, 2, "seed", seedEntry(12));
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
+  assert.equal(session.entries.size, 2);
+  assert.equal(session.on, true);
+});
+
+test("a turn-off plan goes stale when an entry's rev moves", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  sessionSet(session, 1, "seed", entry);
+  session.on = true;
+  const plan = planTurnOff(session, { seed: () => "text" });
+  seedSet(entry, 0, 5);
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
+  assert.equal(session.entries.size, 1);
+  assert.equal(session.on, true);
+  assert.equal(entry.wiped, false);
+});
+
+test("touchEntry makes a turn-off plan stale", () => {
+  const session = createSecureSession();
+  const entry = keyEntry();
+  sessionSet(session, 1, "key", entry);
+  session.on = true;
+  const plan = planTurnOff(session, { key: () => "xprv" });
+  touchEntry(entry);
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
+  assert.equal(session.entries.size, 1);
+  assert.equal(session.on, true);
+});
+
+test("a direct wipeEntry invalidates the guard", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  sessionSet(session, 1, "seed", entry);
+  const guard = sessionGuard(session);
+  assert.equal(guard.current(), true);
+  wipeEntry(entry);
+  assert.equal(guard.current(), false);
+});
+
+test("key ids are canonical: 1 and \"1\" name the same key", () => {
+  const session = createSecureSession();
+  const first = seedEntry(12);
+  sessionSet(session, 1, "seed", first);
+  assert.equal(sessionGet(session, "1", "seed"), first);
+  assert.equal(sessionGet(session, 1, "seed"), first);
+  const second = seedEntry(12);
+  sessionSet(session, "1", "seed", second);
+  assert.equal(session.entries.size, 1);
+  assert.equal(first.wiped, true);
+  assert.equal(sessionGet(session, 1, "seed"), second);
+  sessionDeleteKey(session, "1");
+  assert.equal(sessionGet(session, 1, "seed"), null);
+  assert.equal(second.wiped, true);
+  assert.equal(session.entries.size, 0);
+});
+
+test("a bad key id is refused with BAD_KEY", () => {
+  const session = createSecureSession();
+  for (const bad of [Symbol("k"), {}, [], "", -1, 1.5, NaN, null, undefined, true]) {
+    assert.throws(() => sessionGet(session, bad, "seed"), code("BAD_KEY"));
+    assert.throws(() => sessionSet(session, bad, "seed", seedEntry(12)), code("BAD_KEY"));
+    assert.throws(() => sessionDeleteKey(session, bad), code("BAD_KEY"));
+  }
+  assert.equal(session.entries.size, 0);
+});
+
+test("planTurnOn refuses a bad key id and wipes what it staged", () => {
+  const session = createSecureSession();
+  const staged = [];
+  const converters = {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 5); staged.push(entry); return entry; },
+  };
+  assert.throws(
+    () => planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }, { keyId: Symbol("bad"), methods: { seed: "b" } }], converters),
+    code("BAD_KEY"),
+  );
+  assert.equal(staged.length, 1);
+  assert.equal(staged[0].wiped, true);
+  assert.ok(staged[0].indices.every((value) => value === 0));
+  assert.equal(session.entries.size, 0);
+});
+
+test("sessionSet refuses an entry that does not match its method", () => {
+  const session = createSecureSession();
+  const existing = seedEntry(12);
+  sessionSet(session, 1, "seed", existing);
+  assert.throws(() => sessionSet(session, 1, "seed", rollsEntry("base10", 6)), code("BAD_ENTRY"));
+  assert.throws(() => sessionSet(session, 1, "seed", { kind: "seed", length: 12, indices: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], count: 0, wiped: false }), code("BAD_ENTRY"));
+  assert.throws(() => sessionSet(session, 1, "seed", { kind: "seed", length: 12, indices: new Uint8Array(12), count: 0, wiped: false }), code("BAD_ENTRY"));
+  const wiped = seedEntry(12);
+  wipeEntry(wiped);
+  assert.throws(() => sessionSet(session, 1, "seed", wiped), code("BAD_ENTRY"));
+  assert.equal(existing.wiped, false);
+  assert.equal(sessionGet(session, 1, "seed"), existing);
+  assert.equal(session.entries.size, 1);
+});
+
+test("commitTurnOn refuses an invalid staged item before installing anything", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }], { seed: () => seedEntry(12) });
+  assert.equal(plan.ok, true);
+  plan.staged.push({ keyId: "2", method: "seed", entry: { kind: "seed", length: 12, indices: [0], count: 0, wiped: false } });
+  assert.throws(() => commitTurnOn(session, plan), code("BAD_ENTRY"));
+  assert.equal(session.entries.size, 0);
+  assert.equal(session.on, false);
+  discardPlan(plan);
+});
+
+test("sessionWipe wipes every entry even when one wipe throws", () => {
+  const session = createSecureSession();
+  const broken = { kind: "seed", length: 12, count: 0, wiped: false };
+  session.entries.set("0:seed", broken);
+  session.meta.set("0:seed", { keyId: "0", method: "seed" });
+  const valid = seedEntry(12);
+  seedSet(valid, 0, 7);
+  sessionSet(session, 1, "seed", valid);
+  session.on = true;
+  const buffer = valid.indices;
+  assert.throws(() => sessionWipe(session), code("WIPE_PARTIAL"));
+  assert.ok(buffer.every((value) => value === 0));
+  assert.equal(valid.wiped, true);
+  assert.equal(session.entries.size, 0);
+  assert.equal(session.on, false);
+});
+
+test("planTurnOn refuses malformed keys and methods", () => {
+  const session = createSecureSession();
+  assert.throws(() => planTurnOn(session, null, {}), code("BAD_INPUT"));
+  assert.throws(() => planTurnOn(session, "keys", {}), code("BAD_INPUT"));
+  assert.throws(() => planTurnOn(session, [{ keyId: 1, methods: new Map() }], {}), code("BAD_INPUT"));
+  assert.throws(() => planTurnOn(session, [{ keyId: 1, methods: ["seed"] }], {}), code("BAD_INPUT"));
+  assert.throws(() => planTurnOn(session, [{ keyId: 1, methods: null }], {}), code("BAD_INPUT"));
+  assert.equal(session.entries.size, 0);
 });
