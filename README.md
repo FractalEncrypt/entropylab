@@ -1008,6 +1008,34 @@ modify, publish, use, compile, sell, or distribute, in source or binary form,
 for any purpose and by any means, with no warranty of any kind. Any and all
 copyright interest in the software is dedicated to the public at large.
 
+### Local preview: anti-exfil QR observer
+
+Preview builds include an experimental in-memory camera observer in the Nonce
+Inspector. First allow camera access and choose a camera, then scan
+`ur:x-btc-anti-exfil` stages 2/4 on the signer and stage 3 on Sparrow. It checks
+the AEXB proof and the supplied signatures against the embedded PSBT. It never
+signs or broadcasts. Completion clears captured messages before showing a
+blocking PASS or STOP result; only verdict metadata remains until acknowledgement.
+This does not prove host honesty or randomness secrecy. The user reports successful local SeedSigner and Kern multisig sessions;
+broader compatibility qualification remains pending; see `docs/QR_CAPTURE_PROTOTYPE.md` for limits.
+
+The QR observer supports PSBT v0, SIGHASH_ALL, native P2WPKH, P2SH-P2WPKH,
+native P2WSH standard m-of-n multisig and P2SH-P2WSH standard m-of-n multisig.
+All input contexts are checked. Already-finalized inputs are refused with
+`TRANSACTION_ALREADY_FINALIZED`: a conservative observer scope limit, not a
+tamper finding. Existing partial signatures do not by themselves finalize an input.
+
+In normal and preview builds, conceal on blur, hidden, idle or print now clears
+the pasted anti-exfil host-randomness field and last-inspection cache and closes
+its disclosure. Previously End Session/pagehide already cleared the field/cache;
+the disclosure could remain open but empty. Clearing remains best-effort.
+Coverage counts/indexes retained in the result are transaction metadata, not
+cryptographic secrets; Clear Capture retires that result too.
+
+For the QR observer, scan the signer’s M4 into EntropyLab first. Only after EL
+shows PASS, scan that same M4 into Sparrow. Do not continue after an incomplete
+result or STOP. Sparrow’s own checks and broadcast decision remain necessary.
+
 ### Anti-exfil transcript confidentiality
 
 Host randomness (rho) remains sensitive after signing. A malicious signer using

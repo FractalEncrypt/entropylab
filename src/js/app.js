@@ -11520,7 +11520,9 @@ function hodlSetNonceError(spec) {
 }
 // Ending the session is one act wherever it starts: the shared key goes, and
 // so does everything either card holds.
+var hodlNonceQrCapture = null;
 function hodlEndPsbtSession() {
+  hodlNonceQrCapture?.clear();
   hodlPsbtWipeMem();
   hodlPsbtClearNonceHistory(true);
   hodlPsbtRetireAuditUploads();
@@ -11663,6 +11665,21 @@ function hodlPsbtShowMore(event) {
 // undeclared, so the typeof guard keeps them working.
 var PREVIEW = typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__;
 function hodlInitPsbt() {
+  if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) {
+    import("./nonce-qr-capture.js").then(async ({ initNonceQrCapture }) => {
+      await psbtWasmReady;
+      hodlNonceQrCapture = initNonceQrCapture({
+        translate: hodlTText,
+        onClear: () => {
+          document.getElementById("psbt-ax-transcript").value = "";
+          hodlNonceLast = null;
+          document.getElementById("nonce-out").innerHTML = "";
+          hodlPsbtResetNonceInspection();
+        }
+      });
+    });
+  }
+
   let go = document.getElementById("psbt-go");
   if (!go) return;
   if (PREVIEW) hodlApplyAexbPreviewLabels();
