@@ -808,13 +808,14 @@ words, pick one of the checksum words.</span></span>
       </div>
     </section>
       <div class="tool-intro edge-note is-info" id="ln-tool-intro" hidden>
-        <h2>Derive a Lightning node key</h2>
-        <p class="muted tool-intro-note">LND seed → LND node key. BIP-39 seed → LDK node key. Decode only. Does not create a seed. Nothing leaves this page.</p>
+        <h2>Lightning tools</h2>
+        <p class="muted tool-intro-note">Decode BOLT11 invoices and BOLT12 offers, or derive a node key: LND seed → LND node key, BIP-39 seed → LDK node key. Does not create a seed. Nothing leaves this page.</p>
       </div>
       <div class="card no-print tool-card" id="ln-card" role="tabpanel" hidden>
-  <section id="ln-inv-card" class="card no-print tool-card">
+  <section id="ln-inv-card" class="card no-print tool-card" aria-labelledby="ln-inv-heading">
+    <h2 id="ln-inv-heading">Decode an invoice or offer (BOLT11 / BOLT12)</h2>
     <label class="field" for="ln-inv-input">Invoice or offer</label>
-    <textarea id="ln-inv-input" class="field" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+    <textarea id="ln-inv-input" class="field" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste a BOLT11 invoice or BOLT12 offer"></textarea>
     <div class="row">
       <button type="button" class="btn primary" id="ln-inv-decode">Decode</button>
       <button type="button" class="btn" id="ln-inv-clear">Clear</button>
@@ -822,6 +823,7 @@ words, pick one of the checksum words.</span></span>
     <p id="ln-inv-error" class="err" role="alert"></p>
     <div id="ln-inv-out" aria-live="polite"></div>
   </section>
+  <h2 id="ln-key-heading">Derive a Lightning node key</h2>
           <button class="btn secondary" id="ln-hsm-upload" type="button">Choose hsm_secret</button>
           <input type="file" id="ln-hsm-file" hidden>
         <div class="ln-grid tool-section">
