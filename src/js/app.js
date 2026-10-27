@@ -13642,7 +13642,6 @@ function hodlSelectedKeyNetwork() {
   return hodlSelectedNetwork(document.getElementById("network"));
 }
 function hodlRestoreKey() {
-  hodlSyncWorkspaceCounts();
   let state = hodlKeys[hodlActiveKey];
   if (!state) {
     hodlKeyMode = "dice";
@@ -17343,8 +17342,6 @@ function hodlInitWorkspace() {
     let fullLabel = document.createElement("span"), shortLabel = document.createElement("span");
     fullLabel.className = "workspace-tab-full";
     shortLabel.className = "workspace-tab-short";
-    fullLabel.dataset.workspaceLabel = "full";
-    shortLabel.dataset.workspaceLabel = "short";
     fullLabel.textContent = hodlTText(label);
     shortLabel.textContent = hodlTText(short);
     button.append(fullLabel, shortLabel);
@@ -17886,9 +17883,8 @@ function hodlApplyLocale() {
     let entry = hodlWorkspaceTabs.find(([id]) => id === button.dataset.workspace);
     if (!entry) return;
     let [, label, short] = entry;
-    let fullLabel = button.querySelector('[data-workspace-label="full"]'), shortLabel = button.querySelector('[data-workspace-label="short"]');
-    if (fullLabel) fullLabel.textContent = hodlTText(label);
-    if (shortLabel) shortLabel.textContent = hodlTText(short);
+    if (button.firstChild) button.firstChild.textContent = hodlTText(label);
+    if (button.lastChild) button.lastChild.textContent = hodlTText(short);
     button.setAttribute("aria-label", hodlTText(label));
   });
   [...hodlKeyModeSelectEl.options].forEach((option) => {
