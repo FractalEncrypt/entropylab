@@ -73,13 +73,18 @@ Use pinned Node 22.23.4/npm 11.17.0 and npm ci. Preview command:
 `node scripts/build.mjs --preview --out ../preview`.
 Serve on loopback or another secure local browser context. No runtime downloads.
 Pinned jsQR 1.4.0 was user-authorized for this local prototype; upstream review
-remains necessary. Apache-2.0 jsQR and BSD-2-Clause-Patent UR2 notices live under
+remains necessary. Fresh upstream qr-eval selects quircs 0.10.3 for planned
+general Scan QR import, but does not yet integrate it into the app. This prototype
+predates that selection; accepting jsQR temporarily or adapting to a shared decoder
+is an explicit upstream integration decision. Apache-2.0 jsQR and BSD-2-Clause-Patent UR2 notices live under
 src/licenses and are included only in preview artifacts. Normal builds exclude
 camera decoding.
 
-Public fixture hardware scans passed earlier revisions. The newest automatic
-clear/result-dialog behavior needs the requested human pass. No actual
-Sparrow/SeedSigner/Kern session has yet been qualified with this observer.
+Public fixture hardware scans and the automatic-clear/result-dialog behavior
+were tested by the user, who also reports successful real Sparrow multisig
+sessions with Kern and SeedSigner using Firefox and Brave. Exact versions and
+browser/device pairings were not recorded. This is limited user-reported testing,
+not broad compatibility or protocol qualification.
 
 The review packet beside this prototype contains source, patch, baseline,
 public fixtures, exact test evidence, issue draft and review prompt. Its current
