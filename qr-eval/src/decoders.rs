@@ -97,10 +97,12 @@ pub fn classify(run: &Run, expected: Option<&[u8]>) -> Outcome {
     let decoded = run.decoded();
     match expected {
         Some(expected) => {
-            if decoded.iter().any(|bytes| *bytes == expected) {
-                Outcome::Exact
-            } else if decoded.is_empty() {
+            // Exact only when every decoded code is the expected payload: the
+            // right code next to a wrong one is a wrong-bytes result.
+            if decoded.is_empty() {
                 Outcome::Error
+            } else if decoded.iter().all(|bytes| *bytes == expected) {
+                Outcome::Exact
             } else {
                 Outcome::Wrong
             }
@@ -227,5 +229,12 @@ mod tests {
         assert_eq!(classify(&decoded(b"abc"), None), Outcome::FalsePositive);
         assert_eq!(classify(&errored(), None), Outcome::Error);
         assert_eq!(classify(&empty(), None), Outcome::NotFound);
+        let right = || CodeOutcome::Decoded { bytes: b"abc".to_vec(), info: Info::default() };
+        let wrong = || CodeOutcome::Decoded { bytes: b"evil".to_vec(), info: Info::default() };
+        let codes = |outcomes| Run { result: RunResult::Codes(outcomes), ms: 0.0 };
+        assert_eq!(classify(&codes(vec![right(), wrong()]), Some(b"abc")), Outcome::Wrong, "a wrong code beside the right one is Wrong");
+        assert_eq!(classify(&codes(vec![wrong(), right()]), Some(b"abc")), Outcome::Wrong);
+        assert_eq!(classify(&codes(vec![right(), CodeOutcome::Error("x".to_string())]), Some(b"abc")), Outcome::Exact);
+        assert_eq!(classify(&codes(vec![right(), right()]), Some(b"abc")), Outcome::Exact);
     }
 }

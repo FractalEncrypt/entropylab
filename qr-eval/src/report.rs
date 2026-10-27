@@ -282,6 +282,11 @@ fn two_codes(out: &mut String, cases: &[TwoCodeResult]) {
                     if found { "found" } else { "missing" }
                 ));
             }
+            let unexpected = decoded
+                .iter()
+                .filter(|bytes| !case.expected.iter().any(|expected| **bytes == expected.as_slice()))
+                .count();
+            out.push_str(&format!("; unexpected payloads {unexpected}"));
             out.push('\n');
         }
         out.push('\n');

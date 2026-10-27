@@ -211,6 +211,19 @@ mod tests {
                     "{}: expected_hex is {bytes} bytes",
                     fixture.file
                 );
+                // A Standard SeedQR payload is 12 or 24 four-digit BIP39 word
+                // indexes in ASCII; checked here independently of any decoder.
+                if fixture.format == "standard-seedqr" {
+                    let raw: Vec<u8> = (0..bytes)
+                        .map(|i| u8::from_str_radix(&fixture.expected_hex[2 * i..2 * i + 2], 16).unwrap())
+                        .collect();
+                    assert!([48, 96].contains(&raw.len()), "{}: not 12 or 24 indexes", fixture.file);
+                    assert!(raw.iter().all(u8::is_ascii_digit), "{}: not ASCII digits", fixture.file);
+                    for index in raw.chunks(4) {
+                        let n: u32 = std::str::from_utf8(index).unwrap().parse().unwrap();
+                        assert!(n < 2048, "{}: word index {n} out of range", fixture.file);
+                    }
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 # SeedSigner SeedQR spec fixtures: https://github.com/SeedSigner/seedsigner/tree/830a6889378df28bab165b67266af2c05010e9f1/docs/seed_qr
 # License: MIT, see seedsigner/LICENSE. expected_hex is the exact byte payload a decoder must return (Standard SeedQR is numeric mode, so ASCII digits); - means the spec does not print it.
+# expected_hex was computed from the spec's published digit streams and CompactSeedQR bitstreams (test vectors 1-9 and the walkthrough example), never from a decoder.
 # file	image	format	expected_hex	note
 seedsigner/vector1_standard_24word.png	png	standard-seedqr	303131353133323531313534303132373131393030373731303431353037343231323839313930363230303830383730303236363133343331343230323031363137393230363134303839363139323930333030313532343038303130363433	SeedSigner test vector 1
 seedsigner/vector1_compact_24word.png	png	compact-seedqr	0e74b64107f94cc0ccfae6a13dcbec3662154fec67e0e00999c07892597d190a	SeedSigner test vector 1

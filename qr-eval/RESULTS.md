@@ -5,7 +5,7 @@
 - **Code:** the harness at the commit that adds this file.
 
 ## Why quircs
-- **Neither decoder ever returned wrong bytes.** Both had 0 Wrong across 783 synthetic cases and 150 flipped-module cases, 0 panics, and 0 false positives on noise, checkerboards, fake finder patterns and random grids.
+- **Neither decoder ever returned wrong bytes.** A frame counts as exact only if every code decoded from it is the expected payload. Both had 0 Wrong across 783 synthetic cases and 150 flipped-module cases, 0 panics, and 0 false positives on noise, checkerboards, fake finder patterns and random grids.
 - **Both preserve bytes exactly:** NUL, CR/LF, 0x80–0x9F, numeric leading zeros, mixed modes, ECI and Kanji, at D1.
 - **quircs is far better on camera-like images:**
 
@@ -18,7 +18,7 @@
   | strong blur (D9) | 4/29 | 12/29 |
   | occlusion (D25) | 1/29 | 5/29 |
 
-- **quircs is about 3× faster:** median 2.1 ms against 6.3 ms; worst synthetic case 17.6 ms against 50.9 ms; a blank 4096×4096 frame 61 ms against 295 ms.
+- **quircs is about 3× faster:** median 2.0 ms against 6.1 ms; worst synthetic case 14.4 ms against 50.0 ms; a blank 4096×4096 frame 58 ms against 283 ms.
 - **SeedSigner's known-payload images:** quircs 19/19 exact, rqrr 18/19. rqrr missed the phone-screenshot CompactSeedQR as-is.
 
 ## Where quircs is weaker, and the mitigation
@@ -29,12 +29,11 @@
 
 ## Notes on reading the report
 - **"FalsePositive" on `standard_24word.png` / `compact_24word.png`** means a payload was decoded where the manifest lists none (`-`). Both decoders agree on both images, and the Standard SeedQR's 24 indices carry a valid BIP39 checksum, so these are correct reads, not false detections.
+- **Two codes in one frame:** both decoders return both codes and no unexpected payload.
 - **Flipped modules:** at 5% damage both decoders refuse every code (Error). At 1% both decode every code exactly. Damage beyond the error-correction capacity never produced wrong bytes.
 
 ## Full report
 
-
-added 10 packages in 3s
 # QR decoder evaluation
 rqrr 0.11.0 · quircs 0.10.3 · encoder qrcode 0.14.1
 
@@ -51,9 +50,9 @@ rqrr 0.11.0 · quircs 0.10.3 · encoder qrcode 0.14.1
 | known-payload fixtures Exact | 18/19 | 19/19 |
 | robustness Panic | 0 | 0 |
 | robustness FalsePositive | 0 | 0 |
-| robustness max ms | 295.2 | 60.6 |
-| synthetic median ms | 6.3 | 2.1 |
-| synthetic max ms | 50.9 | 17.6 |
+| robustness max ms | 282.8 | 57.8 |
+| synthetic median ms | 6.1 | 2.0 |
+| synthetic max ms | 50.0 | 14.4 |
 
 ## Byte fidelity (D1, EC M)
 
@@ -148,13 +147,13 @@ rqrr 0.11.0 · quircs 0.10.3 · encoder qrcode 0.14.1
 
 ### P8 + P9
 
-- rqrr: 2 code(s) returned; expected 1 found; expected 2 found
-- quircs: 2 code(s) returned; expected 1 found; expected 2 found
+- rqrr: 2 code(s) returned; expected 1 found; expected 2 found; unexpected payloads 0
+- quircs: 2 code(s) returned; expected 1 found; expected 2 found; unexpected payloads 0
 
 ### P5 + P6
 
-- rqrr: 2 code(s) returned; expected 1 found; expected 2 found
-- quircs: 2 code(s) returned; expected 1 found; expected 2 found
+- rqrr: 2 code(s) returned; expected 1 found; expected 2 found; unexpected payloads 0
+- quircs: 2 code(s) returned; expected 1 found; expected 2 found; unexpected payloads 0
 
 ## Flipped modules
 
@@ -168,67 +167,67 @@ rqrr 0.11.0 · quircs 0.10.3 · encoder qrcode 0.14.1
 
 | case | rqrr | rqrr ms | quircs | quircs ms |
 |---|---|---|---|---|
-| uniform white 640x480 | NotFound | 4.7 | NotFound | 0.7 |
-| uniform black 640x480 | NotFound | 4.6 | NotFound | 0.7 |
+| uniform white 640x480 | NotFound | 5.2 | NotFound | 0.9 |
+| uniform black 640x480 | NotFound | 5.6 | NotFound | 0.7 |
 | degenerate 1x1 | NotFound | 0.0 | NotFound | 0.0 |
 | degenerate 2x2 | NotFound | 0.0 | NotFound | 0.0 |
 | degenerate 4000x1 | NotFound | 0.1 | NotFound | 0.0 |
 | degenerate 1x4000 | NotFound | 0.1 | NotFound | 0.0 |
-| uniform noise 640x480 | NotFound | 7.9 | NotFound | 4.6 |
-| checkerboard 1px | NotFound | 5.5 | NotFound | 2.4 |
-| checkerboard 8px | NotFound | 4.7 | NotFound | 0.7 |
-| 64 fake finders | Error | 95.9 | Error | 11.6 |
-| random grid 0 | Error | 5.9 | Error | 1.9 |
-| random grid 1 | Error | 5.7 | Error | 2.0 |
-| random grid 2 | Error | 6.2 | Error | 2.0 |
-| random grid 3 | Error | 5.6 | Error | 1.9 |
-| random grid 4 | Error | 6.5 | Error | 1.8 |
-| random grid 5 | Error | 5.7 | Error | 1.9 |
-| random grid 6 | Error | 6.1 | Error | 1.9 |
-| random grid 7 | Error | 5.9 | Error | 2.0 |
-| random grid 8 | Error | 6.2 | Error | 2.0 |
-| random grid 9 | Error | 5.8 | Error | 1.9 |
-| random grid 10 | Error | 6.4 | Error | 2.0 |
-| random grid 11 | Error | 5.9 | Error | 1.9 |
-| random grid 12 | Error | 6.6 | Error | 2.0 |
-| random grid 13 | Error | 6.0 | Error | 1.9 |
-| random grid 14 | Error | 6.8 | Error | 1.9 |
-| random grid 15 | Error | 6.4 | Error | 2.1 |
-| random grid 16 | Error | 6.4 | Error | 2.1 |
-| random grid 17 | Error | 6.7 | Error | 2.0 |
-| random grid 18 | Error | 6.2 | Error | 1.9 |
-| random grid 19 | Error | 6.4 | Error | 2.1 |
-| random grid 20 | Error | 6.6 | Error | 2.1 |
-| random grid 21 | Error | 6.5 | Error | 2.0 |
-| random grid 22 | Error | 6.1 | Error | 1.9 |
-| random grid 23 | Error | 6.2 | Error | 2.0 |
-| random grid 24 | Error | 6.2 | Error | 2.0 |
-| random grid 25 | Error | 6.3 | Error | 2.0 |
-| random grid 26 | Error | 6.0 | Error | 1.9 |
-| random grid 27 | Error | 6.1 | Error | 1.9 |
-| random grid 28 | Error | 6.1 | Error | 1.9 |
-| random grid 29 | Error | 6.8 | Error | 2.0 |
-| random grid 30 | Error | 5.9 | Error | 2.2 |
-| random grid 31 | Error | 6.6 | Error | 2.0 |
-| random grid 32 | Error | 5.9 | Error | 2.5 |
-| random grid 33 | NotFound | 0.4 | Error | 1.8 |
-| random grid 34 | Error | 6.1 | Error | 1.9 |
-| random grid 35 | Error | 6.6 | Error | 2.1 |
-| random grid 36 | Error | 6.2 | Error | 2.0 |
-| random grid 37 | Error | 6.6 | Error | 1.9 |
-| random grid 38 | Error | 5.9 | Error | 1.8 |
-| random grid 39 | Error | 6.5 | Error | 1.9 |
-| random grid 40 | Error | 5.7 | Error | 1.8 |
-| random grid 41 | Error | 6.7 | Error | 1.9 |
-| random grid 42 | Error | 6.1 | Error | 2.0 |
-| random grid 43 | Error | 6.0 | Error | 1.9 |
-| random grid 44 | Error | 6.2 | Error | 2.0 |
-| random grid 45 | Error | 6.1 | Error | 1.9 |
-| random grid 46 | Error | 5.9 | Error | 2.2 |
-| random grid 47 | Error | 6.1 | Error | 1.9 |
-| random grid 48 | Error | 6.0 | Error | 2.7 |
-| random grid 49 | Error | 7.2 | Error | 2.1 |
-| large blank 4096x4096 | NotFound | 295.2 | NotFound | 60.6 |
+| uniform noise 640x480 | NotFound | 9.0 | NotFound | 4.8 |
+| checkerboard 1px | NotFound | 5.9 | NotFound | 2.7 |
+| checkerboard 8px | NotFound | 5.4 | NotFound | 0.8 |
+| 64 fake finders | Error | 106.1 | Error | 14.6 |
+| random grid 0 | Error | 6.4 | Error | 2.1 |
+| random grid 1 | Error | 6.8 | Error | 2.1 |
+| random grid 2 | Error | 6.8 | Error | 2.5 |
+| random grid 3 | Error | 9.8 | Error | 2.0 |
+| random grid 4 | Error | 6.5 | Error | 2.0 |
+| random grid 5 | Error | 6.2 | Error | 2.1 |
+| random grid 6 | Error | 6.8 | Error | 2.0 |
+| random grid 7 | Error | 6.4 | Error | 2.2 |
+| random grid 8 | Error | 7.0 | Error | 2.2 |
+| random grid 9 | Error | 6.5 | Error | 2.4 |
+| random grid 10 | Error | 6.6 | Error | 2.2 |
+| random grid 11 | Error | 6.6 | Error | 2.0 |
+| random grid 12 | Error | 6.7 | Error | 2.2 |
+| random grid 13 | Error | 7.2 | Error | 2.1 |
+| random grid 14 | Error | 6.6 | Error | 2.2 |
+| random grid 15 | Error | 6.8 | Error | 2.1 |
+| random grid 16 | Error | 6.7 | Error | 2.2 |
+| random grid 17 | Error | 6.7 | Error | 2.1 |
+| random grid 18 | Error | 6.5 | Error | 2.1 |
+| random grid 19 | Error | 7.0 | Error | 2.1 |
+| random grid 20 | Error | 6.5 | Error | 2.2 |
+| random grid 21 | Error | 6.2 | Error | 2.0 |
+| random grid 22 | Error | 6.8 | Error | 2.4 |
+| random grid 23 | Error | 7.7 | Error | 2.3 |
+| random grid 24 | Error | 6.9 | Error | 2.2 |
+| random grid 25 | Error | 7.7 | Error | 2.5 |
+| random grid 26 | Error | 7.6 | Error | 2.5 |
+| random grid 27 | Error | 6.9 | Error | 2.2 |
+| random grid 28 | Error | 7.4 | Error | 2.1 |
+| random grid 29 | Error | 6.6 | Error | 2.1 |
+| random grid 30 | Error | 6.5 | Error | 2.1 |
+| random grid 31 | Error | 6.7 | Error | 2.2 |
+| random grid 32 | Error | 6.4 | Error | 2.1 |
+| random grid 33 | NotFound | 0.4 | Error | 1.9 |
+| random grid 34 | Error | 7.2 | Error | 2.2 |
+| random grid 35 | Error | 7.0 | Error | 2.1 |
+| random grid 36 | Error | 6.6 | Error | 2.0 |
+| random grid 37 | Error | 6.8 | Error | 2.3 |
+| random grid 38 | Error | 6.4 | Error | 2.0 |
+| random grid 39 | Error | 7.7 | Error | 3.8 |
+| random grid 40 | Error | 8.8 | Error | 2.9 |
+| random grid 41 | Error | 9.7 | Error | 3.5 |
+| random grid 42 | Error | 7.2 | Error | 2.2 |
+| random grid 43 | Error | 6.6 | Error | 2.0 |
+| random grid 44 | Error | 6.8 | Error | 2.2 |
+| random grid 45 | Error | 6.8 | Error | 2.3 |
+| random grid 46 | Error | 6.6 | Error | 2.3 |
+| random grid 47 | Error | 6.3 | Error | 2.0 |
+| random grid 48 | Error | 6.9 | Error | 2.2 |
+| random grid 49 | Error | 6.8 | Error | 2.2 |
+| large blank 4096x4096 | NotFound | 282.8 | NotFound | 57.8 |
 | striped P8 | NotFound | 0.6 | NotFound | 0.1 |
 
 ## Findings
