@@ -1,7 +1,7 @@
 # Local Nonce Inspector QR prototype
 
-Local only; not pushed or proposed upstream. AI implementation: OpenAI Codex.
-Upstream base: b7f566b8e424e949ea0d0286a3acea6889823384.
+Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
+Upstream base checked 2026-10-27: 6025a84c007c7ce598fc91c4d82689580306f2a8.
 
 ## Current flow
 
