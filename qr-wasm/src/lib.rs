@@ -3,11 +3,13 @@
 //!
 //! The decoder is quircs 0.10.3. Its measured gaps (qr-eval/RESULTS.md,
 //! #1244) are covered by pre-passes: a quiet zone, a 2x upscale for
-//! one-pixel modules, and a left-right mirror.
+//! one-pixel modules, and a left-right mirror. Every applicable pass runs and
+//! the call refuses when two different payloads appear anywhere in the frame.
 //!
 //! A decoded payload is a seed: a Standard SeedQR is the mnemonic's numeric
-//! form and a CompactSeedQR is the raw entropy. Every buffer this module owns
-//! is volatile-zeroed before it is released.
+//! form and a CompactSeedQR is the raw entropy. Every decoded payload this
+//! module receives is volatile-zeroed; quircs's own internal buffers are not
+//! reachable.
 
 use quircs::Quirc;
 
@@ -96,20 +98,18 @@ pub unsafe extern "C" fn qr_decode(
     let h = height as usize;
     let input = unsafe { std::slice::from_raw_parts(gray, pixels) };
 
-    let mut failed = false;
+    let mut found = Found { payloads: Vec::new(), located: 0 };
 
     // (a) the frame as is.
-    if let Some(code) = step(input, w, h, out, out_cap, &mut failed) {
-        return code;
-    }
+    scan(input, w, h, &mut found);
 
     // (b)-(d) work on a frame with a 16-pixel white border. The padded frame
     // must stay inside the same limits; a frame too large to pad simply gets
-    // no padded passes, and the call still fails closed.
+    // no padded passes, and the call still fails closed on what (a) found.
     let pad_w = w + QUIET as usize * 2;
     let pad_h = h + QUIET as usize * 2;
     let Some(mut padded) = Frame::light(pad_w, pad_h) else {
-        return if failed { QR_DECODE_FAILED } else { QR_NOT_FOUND };
+        return decide(found, out, out_cap);
     };
     for y in 0..h {
         let dst = (y + QUIET as usize) * pad_w + QUIET as usize;
@@ -117,56 +117,21 @@ pub unsafe extern "C" fn qr_decode(
     }
 
     // (b) the padded frame.
-    if let Some(code) = step(&padded.pixels, pad_w, pad_h, out, out_cap, &mut failed) {
-        return code;
-    }
+    scan(&padded.pixels, pad_w, pad_h, &mut found);
 
     // (c) 2x nearest-neighbour upscale, for one-pixel modules.
     if w.max(h) <= UPSCALE_MAX_DIM as usize {
         if let Some(up) = upscale(&padded) {
-            if let Some(code) = step(&up.pixels, up.width, up.height, out, out_cap, &mut failed) {
-                return code;
-            }
+            scan(&up.pixels, up.width, up.height, &mut found);
         }
     }
 
     // (d) mirrored left-right.
     if let Some(flipped) = mirror(&padded) {
-        if let Some(code) = step(&flipped.pixels, flipped.width, flipped.height, out, out_cap, &mut failed) {
-            return code;
-        }
+        scan(&flipped.pixels, flipped.width, flipped.height, &mut found);
     }
 
-    if failed {
-        QR_DECODE_FAILED
-    } else {
-        QR_NOT_FOUND
-    }
-}
-
-/// Runs one pass and folds its outcome into the running state. Returns
-/// `Some(code)` when the pass settles the call.
-///
-/// A pass that located codes but decoded none is remembered rather than
-/// returned: a missing quiet zone or one-pixel modules is exactly what the
-/// next pass fixes, and a later success is the same code read correctly.
-fn step(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    out: *mut u8,
-    out_cap: usize,
-    failed: &mut bool,
-) -> Option<i32> {
-    match decide(scan(pixels, width, height)) {
-        Decision::Payload(secret) => Some(emit(out, out_cap, &secret)),
-        Decision::Multiple => Some(QR_MULTIPLE_CODES),
-        Decision::Failed => {
-            *failed = true;
-            None
-        }
-        Decision::NotFound => None,
-    }
+    decide(found, out, out_cap)
 }
 
 /// Copies the payload into `out`. Writes nothing when `out_cap` is too small.
@@ -180,24 +145,26 @@ fn emit(out: *mut u8, out_cap: usize, secret: &Secret) -> i32 {
     secret.0.len() as i32
 }
 
-/// Runs quircs over one frame and collects the distinct payloads it decodes.
-fn scan(pixels: &[u8], width: usize, height: usize) -> Found {
+/// Runs quircs over one frame and adds the distinct payloads it decodes to
+/// `found`, deduplicating against everything collected so far.
+fn scan(pixels: &[u8], width: usize, height: usize, found: &mut Found) {
     let mut quirc = Quirc::new();
-    let mut found = Found { payloads: Vec::new(), located: 0 };
     for code in quirc.identify(width, height, pixels) {
         found.located += 1;
         let Ok(code) = code else { continue };
-        let Ok(data) = code.decode() else { continue };
-        if !found.payloads.iter().any(|seen| seen == &data.payload) {
-            found.payloads.push(data.payload);
+        let Ok(mut data) = code.decode() else { continue };
+        if found.payloads.iter().any(|seen| seen == &data.payload) {
+            // A duplicate is dropped here, so wipe it before it goes.
+            wipe(data.payload.as_mut_slice());
+            continue;
         }
+        found.payloads.push(data.payload);
     }
-    found
 }
 
-/// What one pass over one frame found.
+/// What the passes over the frame found.
 struct Found {
-    /// Distinct payloads, in the order they were decoded.
+    /// Distinct payloads across all passes, in the order they were decoded.
     payloads: Vec<Vec<u8>>,
     /// Codes located, decodable or not.
     located: usize,
@@ -211,29 +178,21 @@ impl Drop for Found {
     }
 }
 
-/// What a pass settles.
-enum Decision {
-    /// Exactly one distinct payload.
-    Payload(Secret),
-    /// Two or more distinct payloads: refuse, never pick one.
-    Multiple,
-    /// Codes were located but none decoded.
-    Failed,
-    /// No code located at all.
-    NotFound,
-}
-
-fn decide(mut found: Found) -> Decision {
+/// Settles the call on everything the passes collected: two or more distinct
+/// payloads are refused, exactly one is emitted, and a frame where codes were
+/// located but none decoded is a decode failure.
+fn decide(mut found: Found, out: *mut u8, out_cap: usize) -> i32 {
     if found.payloads.len() > 1 {
-        return Decision::Multiple;
+        return QR_MULTIPLE_CODES;
     }
     if found.payloads.len() == 1 {
-        return Decision::Payload(Secret(std::mem::take(&mut found.payloads[0])));
+        let secret = Secret(std::mem::take(&mut found.payloads[0]));
+        return emit(out, out_cap, &secret);
     }
     if found.located > 0 {
-        Decision::Failed
+        QR_DECODE_FAILED
     } else {
-        Decision::NotFound
+        QR_NOT_FOUND
     }
 }
 
@@ -473,6 +432,42 @@ mod tests {
     }
 
     #[test]
+    fn cross_pass_codes_are_refused() {
+        // A decodes as is; B only decodes once the frame is mirrored. The two
+        // payloads appear in different passes, so the call must still refuse.
+        let a = encode_byte(&hex("f55cf587f2543d01090d0ae710bd3b6d"));
+        let b = encode_byte(&hex("0e59dde276009317f1275f1389888078c99368d1e82489b5f629531fc5b6a56e"));
+        let (pa, wa, ha) = render(&a, 4, 4);
+        let (pb, wb, hb) = render(&b, 4, 4);
+        let pb = mirror_pixels(&pb, wb, hb);
+        let width = wa + wb;
+        let height = ha.max(hb);
+        let mut canvas = vec![255u8; width * height];
+        blit(&mut canvas, width, &pa, wa, ha, 0, 0);
+        blit(&mut canvas, width, &pb, wb, hb, wa, 0);
+        let (len, _) = decode(&canvas, width as u32, height as u32);
+        assert_eq!(len, QR_MULTIPLE_CODES);
+    }
+
+    #[test]
+    fn cross_pass_quiet_zone_codes_are_refused() {
+        // A carries its own quiet zone; B is flush against the right edge and
+        // only decodes once the padded pass adds a border. The two payloads
+        // appear in different passes, so the call must still refuse.
+        let a = encode_byte(&hex("f55cf587f2543d01090d0ae710bd3b6d"));
+        let b = encode_byte(&hex("0e59dde276009317f1275f1389888078c99368d1e82489b5f629531fc5b6a56e"));
+        let (pa, wa, ha) = render(&a, 4, 4);
+        let (pb, wb, hb) = render(&b, 4, 0);
+        let width = wa + wb;
+        let height = ha.max(hb);
+        let mut canvas = vec![255u8; width * height];
+        blit(&mut canvas, width, &pa, wa, ha, 0, 0);
+        blit(&mut canvas, width, &pb, wb, hb, wa, 0);
+        let (len, _) = decode(&canvas, width as u32, height as u32);
+        assert_eq!(len, QR_MULTIPLE_CODES);
+    }
+
+    #[test]
     fn duplicate_codes_count_once() {
         let payload = hex("f55cf587f2543d01090d0ae710bd3b6d");
         let code = encode_byte(&payload);
@@ -507,6 +502,22 @@ mod tests {
     }
 
     #[test]
+    fn alloc_free_round_trip() {
+        let ptr = qr_alloc(1000);
+        assert!(!ptr.is_null(), "qr_alloc returns memory");
+        // Soundness: `qr_alloc(1000)` owns 1000 writable bytes.
+        let buf = unsafe { std::slice::from_raw_parts_mut(ptr, 1000) };
+        assert!(buf.iter().all(|&b| b == 0), "qr_alloc zero-fills");
+        for byte in buf.iter_mut() {
+            *byte = 0xaa;
+        }
+        // Soundness: `ptr` came from `qr_alloc(1000)`.
+        unsafe { qr_free(ptr, 1000) };
+        // A null pointer with a zero length is a no-op, not a crash.
+        unsafe { qr_free(std::ptr::null_mut(), 0) };
+    }
+
+    #[test]
     fn small_output_is_refused_and_untouched() {
         let payload = vec![0u8; 16];
         let code = encode_byte(&payload);
@@ -528,7 +539,10 @@ mod tests {
                 *byte = (state >> 24) as u8;
             }
             let (len, _) = decode(&pixels, 64, 64);
-            assert!(len < 0, "a noise frame decoded: {len}");
+            assert!(
+                len == QR_NOT_FOUND || len == QR_DECODE_FAILED,
+                "a noise frame returned {len}"
+            );
         }
     }
 
