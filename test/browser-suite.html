@@ -35,6 +35,11 @@
   const equal = (actual, expected) => {
     if (actual !== expected) throw new Error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   };
+  const workspaceCount = (id) => {
+    const badge = document.querySelector(`[data-workspace-count="${id}"]`);
+    assert(badge, `missing ${id} count badge`);
+    return badge.hidden ? 0 : Number(badge.textContent);
+  };
   const assertJournalControlsVisible = (expected) => {
     for (const id of ["journal-manager", "journal-tool-tabs", "journal-global-actions", "journal-global-download", "journal-global-clear", "journal-status", "journal-status-title", "journal-status-note"]) {
       const control = document.getElementById(id);
