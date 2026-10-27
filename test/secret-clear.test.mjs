@@ -2144,3 +2144,11 @@ test("Journal keep-existing and exact-reuse zero fresh seed material through the
     assert.equal(context.hodlKeys.filter(state => !state.isLab).length, 1);
   }
 });
+
+test("conceal retires pasted anti-exfil transcript, cache and disclosure",()=>{
+ const field={value:'public-rho-marker'},section={open:true};
+ const context=createContext({hodlKeys:[],hodlBip85Children:[],hodlSpAddresses:[],hodlSpVerifyMatches:null,hodlNonceLast:{transcript:'public-rho-marker'},
+ document:{getElementById:id=>id==='psbt-ax-transcript'?field:id==='nonce-jade-options'?section:null,querySelectorAll:()=>[],dispatchEvent:()=>{}},Event:class{}});
+ vm.runInContext(functionSource('hodlConcealPrivateValues'),context);
+ context.hodlConcealPrivateValues();assert.equal(field.value,'');assert.equal(section.open,false);assert.equal(context.hodlNonceLast,null);
+});

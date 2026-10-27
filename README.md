@@ -1007,3 +1007,18 @@ to the public domain, with the same meaning as The Unlicense: free to copy,
 modify, publish, use, compile, sell, or distribute, in source or binary form,
 for any purpose and by any means, with no warranty of any kind. Any and all
 copyright interest in the software is dedicated to the public at large.
+
+### Anti-exfil transcript confidentiality
+
+Host randomness (rho) remains sensitive after signing. A malicious signer using
+an operator-known base nonce can expose the signing key if its operator later
+obtains rho and the signature. With the corresponding account xpub and a
+non-hardened derivation path, compromise can extend to the account private key.
+Do not save, share or record real transcripts or paste them on a shared/recorded
+screen. Clipboard copies can persist outside this page.
+
+In normal and preview builds, conceal on blur, tab hide, idle or print clears the
+pasted transcript and last-inspection cache and closes its disclosure. End Session
+and pagehide already cleared field/cache (the disclosure could remain open but
+empty). Clearing is best-effort; browser/OS copies are outside reliable erasure.
+A successful transcript check does not establish that host randomness stayed secret.
