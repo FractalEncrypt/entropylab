@@ -18,7 +18,46 @@
 // `focusables` is called per keypress, so a card whose controls change between
 // openings stays correct. The beta gate cannot use this: it is inlined through
 // its own build token rather than the app bundle (see modal-focus.js).
-import { trapModalFocus, isUsableFocusable, focusCardRoot } from "./modal-focus.js";
+import { trapModalFocus, isUsableFocusable, isUsableOpener, focusCardRoot } from "./modal-focus.js";
+
+// Every modal shares one stack of what is open (top last) and one record of
+// what the shell changed on the page, so closing an outer modal while an inner
+// one is still open leaves the page inert and the inner modal reachable.
+const openStack = [];
+const changed = new Map();
+
+// Makes the page behind the top modal inert and everything else, including any
+// modal below it, unreachable; with nothing open it puts every element back
+// exactly as it was found.
+const applyInert = () => {
+  if (!openStack.length) {
+    for (const [element, original] of changed) {
+      element.inert = original.inert;
+      if (original.ariaHidden === null) element.removeAttribute?.("aria-hidden");
+      else element.setAttribute?.("aria-hidden", original.ariaHidden);
+    }
+    changed.clear();
+    return;
+  }
+  const top = openStack.at(-1).overlay;
+  for (const element of document.body.children ?? []) {
+    if (element === top) {
+      element.inert = false;
+      const original = changed.get(element);
+      if (original && original.ariaHidden !== null) element.setAttribute?.("aria-hidden", original.ariaHidden);
+      else element.removeAttribute?.("aria-hidden");
+      continue;
+    }
+    if (!changed.has(element)) {
+      changed.set(element, {
+        inert: element.inert === true,
+        ariaHidden: element.hasAttribute?.("aria-hidden") ? element.getAttribute("aria-hidden") : null,
+      });
+    }
+    element.inert = true;
+    element.setAttribute?.("aria-hidden", "true");
+  }
+};
 
 export const createModal = ({ id, className, card, focusables, onDismiss }) => {
   const overlay = document.createElement("div");
@@ -35,48 +74,34 @@ export const createModal = ({ id, className, card, focusables, onDismiss }) => {
     if (!cardRoot.hasAttribute?.("aria-modal")) cardRoot.setAttribute?.("aria-modal", "true");
   }
   let opener = null;
-  // Exactly what this modal changed on the page behind it, so hide() puts back
-  // only that and leaves anything already inert or aria-hidden alone.
-  const inerted = new Set(), hiddened = new Set();
-  const setBackgroundInert = () => {
-    for (const element of document.body.children ?? []) {
-      if (element === overlay) continue;
-      if (!element.inert) {
-        element.inert = true;
-        inerted.add(element);
-      }
-      if (!element.hasAttribute?.("aria-hidden")) {
-        element.setAttribute?.("aria-hidden", "true");
-        hiddened.add(element);
-      }
-    }
-  };
-  const restoreBackground = () => {
-    for (const element of inerted) element.inert = false;
-    for (const element of hiddened) element.removeAttribute?.("aria-hidden");
-    inerted.clear();
-    hiddened.clear();
-  };
   const canFocus = (element) => isUsableFocusable(element, overlay) && typeof element?.focus === "function";
   const show = (focus, from = document.activeElement) => {
-    opener = from;
+    const index = openStack.findIndex((item) => item.overlay === overlay);
+    if (index === -1) {
+      opener = from;
+      openStack.push({ overlay });
+    } else {
+      // Already open: it moves to the top but keeps the opener it remembered.
+      openStack.push(openStack.splice(index, 1)[0]);
+    }
     overlay.hidden = false;
-    // An outer modal made this overlay inert when it opened; this modal is the
-    // one on top now, so it must be reachable.
-    overlay.inert = false;
-    overlay.removeAttribute?.("aria-hidden");
-    setBackgroundInert();
+    applyInert();
     const target = canFocus(focus) ? focus : focusables().find(canFocus);
     if (target) target.focus();
     else focusCardRoot(overlay);
   };
   const hide = ({ restoreFocus = true } = {}) => {
-    if (overlay.hidden) return;
+    const index = openStack.findIndex((item) => item.overlay === overlay);
+    if (index === -1) return;
+    // Only the modal that was on top hands focus back; hiding one underneath
+    // leaves focus inside the modal the user is still looking at.
+    const wasTop = index === openStack.length - 1;
+    openStack.splice(index, 1);
     overlay.hidden = true;
-    restoreBackground();
+    applyInert();
     const target = opener;
     opener = null;
-    if (restoreFocus && canFocus(target)) target.focus({ preventScroll: true });
+    if (wasTop && restoreFocus && isUsableOpener(target)) target.focus({ preventScroll: true });
   };
   trapModalFocus(overlay, focusables);
   overlay.addEventListener("click", (event) => {
