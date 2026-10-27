@@ -1,4 +1,5 @@
 import { sha256 as hodlSha256, hash160 as hodlHash160 } from "./hashes.js";
+import { workspaceItemCounts, syncWorkspaceCounts } from "./workspace-counts.js";
 // secp256k1 operations run in the libsecp256k1 WebAssembly module; the facade
 // is a drop-in for the noble/curves surface this file uses (see
 // src/js/secp256k1.js). App boot waits for the module to be ready.
@@ -48,7 +49,7 @@ import { hex as hodlHex } from "./coders.js";
 import { addressFor, addressFromScript, descriptorDerive, p2pkhScript, p2shP2wpkhScript, p2shScript, p2trKeyScript, p2wpkhScript, p2wshScript } from "./addresses.js";
 import { base58checkDecode, base58checkEncode } from "./base58.js";
 import { HDKey as hodlHDKey } from "./hdkey.js";
-import { entropyToMnemonic as hodlEntropyToMnemonic, mnemonicToEntropy as hodlMnemonicToEntropy, mnemonicToSeedSync as hodlMnemonicToSeed, seedFromEntropy as hodlSeedFromEntropy, seedFromIndices as hodlSeedFromIndices, validateMnemonic as hodlIsValidMnemonic } from "./bip39.js";
+import { entropyToMnemonic as hodlEntropyToMnemonic, mnemonicToEntropy as hodlMnemonicToEntropy, mnemonicToSeedSync as hodlMnemonicToSeed, seedFromEntropy as hodlSeedFromEntropy, seedFromIndices as hodlSeedFromIndices, entropyFromWordIndices as hodlEntropyFromWordIndices, validateMnemonic as hodlIsValidMnemonic } from "./bip39.js";
 import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
 // bindings in psbt-wasm.js; heavy lifting lives in psbt-editor.js.
@@ -623,6 +624,7 @@ function hodlDisposeDroppedWallets() {
   // The stations offer only the keys the Key Station still has (#546 B3).
   hodlRefreshStationKeyPickers();
   hodlRefreshMsigSessionPickers();
+  hodlSyncWorkspaceCounts();
 }
 // Wipes the private keys a derivation made that no station shows (its row
 // keys, its result's secret bytes, and the root and account nodes its result
@@ -1449,16 +1451,15 @@ async function hodlMnemonicWalletWithProgress(value, passphrase, network, count,
   // never as text (#546 B2).
   // The derivation records them with its row keys, so one that never commits
   // zeroes them.
-  // The seed comes from the word indices as bytes, never a joined phrase
-  // string. The phrase text is still built once for hodlMnemonicToEntropy,
-  // which has no byte-based counterpart yet.
+  // Both the seed and the entropy come from the word indices as bytes, never
+  // a joined phrase string.
   let indices = hodlWordIndices(validation.words), seed, entropy, root;
   try {
     seed = hodlSeedFromIndices(indices, passphrase);
+    entropy = hodlEntropyFromWordIndices(indices);
   } finally {
     indices.fill(0);
   }
-  entropy = hodlMnemonicToEntropy(validation.words.join(" "), hodlBip39Wordlist);
   for (let bytes of [entropy, seed]) hodlActiveDerivation?.rowKeys?.push(bytes);
   try {
     root = hodlHDKey.fromMasterSeed(seed);
@@ -7640,7 +7641,7 @@ function hodlSyncDeriveButton() {
   }
 }
 var hodlMasterFingerprintTimer = 0, hodlMasterFingerprintRevision = 0;
-function hodlFingerprintMnemonic() {
+function hodlFingerprintSource() {
   try {
     if (hodlKeyMode === "dice") {
       let input = document.getElementById("dice");
@@ -7650,47 +7651,71 @@ function hodlFingerprintMnemonic() {
           parsed = hodlDPlusRolls(input.value, hodlTargetWordCount),
           finalWord = rollsFinalWord ? parsed.finalWord : hodlPickedLastWord;
         if (!parsed.allRolledValid || parsed.invalidRequiredCount || (rollsFinalWord ? !parsed.complete : parsed.waiting !== "last-word" || !parsed.candidates.includes(finalWord))) return null;
-        let validation = hodlValidateTargetMnemonic([...parsed.wordSlots, finalWord].join(" "), hodlTargetWordCount);
-        return validation.ok ? validation.words.join(" ") : null;
+        let words = [...parsed.wordSlots, finalWord];
+        if (words.length !== hodlTargetWordCount) return null;
+        let indices;
+        try {
+          indices = hodlWordIndices(words);
+          hodlEntropyFromWordIndices(indices).fill(0);
+        } catch {
+          indices?.fill(0);
+          return null;
+        }
+        return { indices };
       }
       if (hodlDiceMethod === "bitbox") {
         let parsed = hodlBitBoxRolls(input.value, hodlTargetWordCount);
         if (parsed.leftover || parsed.waiting !== "last-word" || !hodlPickedLastWord) return null;
-        let possible = hodlTargetLastWords(parsed.words.join(" "), hodlTargetWordCount);
-        if (!possible?.candidates.includes(hodlPickedLastWord)) return null;
-        let validation = hodlValidateTargetMnemonic([...parsed.words, hodlPickedLastWord].join(" "), hodlTargetWordCount);
-        return validation.ok ? validation.words.join(" ") : null;
+        let words = [...parsed.words, hodlPickedLastWord];
+        if (words.length !== hodlTargetWordCount) return null;
+        let indices;
+        try {
+          indices = hodlWordIndices(words);
+          hodlEntropyFromWordIndices(indices).fill(0);
+        } catch {
+          indices?.fill(0);
+          return null;
+        }
+        return { indices };
       }
       if (hodlAnalyzeDiceInput(input.value, hodlDiceMethod, hodlTargetWordCount).coinDerivedCount) return null;
       let entropy = hodlDiceEntropy(input.value, hodlDiceMethod, hodlTargetWordCount);
-      return entropy.ok ? hodlEntropyToMnemonic(entropy.bytes, hodlBip39Wordlist) : null;
+      return entropy.ok ? { entropy: entropy.bytes } : null;
     }
     if (hodlKeyMode === "cards") {
       let entropy = hodlSelectedCardsEntropy(hodlTargetWordCount);
-      return entropy.ok ? hodlEntropyToMnemonic(entropy.bytes, hodlBip39Wordlist) : null;
+      return entropy.ok ? { entropy: entropy.bytes } : null;
     }
     if (hodlKeyMode === "hex") {
       let entropy = hodlSelectedEntropy();
-      return entropy.ok ? hodlEntropyToMnemonic(entropy.bytes, hodlBip39Wordlist) : null;
+      return entropy.ok ? { entropy: entropy.bytes } : null;
     }
     if (hodlKeyMode === "seed") {
       let selected = hodlSelectedSeedInput(hodlTargetWordCount), value = selected.value;
       if (!value || selected.extended) return null;
       let validation = hodlValidateTargetMnemonic(value, hodlTargetWordCount);
-      return validation.ok ? validation.words.join(" ") : null;
+      return validation.ok ? { indices: hodlWordIndices(validation.words) } : null;
     }
   } catch {
   }
   return null;
 }
-// Still text: its only source, hodlFingerprintMnemonic, builds the phrase
-// from the live inputs as a string; the byte-based preview is a later phase.
-function hodlMasterFingerprint(mnemonic, passphrase = "") {
-  let seed = hodlMnemonicToSeed(mnemonic, passphrase);
+// Derives from hodlFingerprintSource's bytes ({ entropy } or { indices }),
+// never a phrase string; the caller zeroes the source.
+// The root node holds the master private key, so it is wiped as well as the
+// seed: the preview runs on every edit and must not leave the key for the GC.
+function hodlMasterFingerprint(source, passphrase = "") {
+  let seed = source.entropy ? hodlSeedFromEntropy(source.entropy, passphrase) : hodlSeedFromIndices(source.indices, passphrase);
+  let root;
   try {
-    return hodlFingerprintHex(hodlHDKey.fromMasterSeed(seed).fingerprint);
+    root = hodlHDKey.fromMasterSeed(seed);
+    return hodlFingerprintHex(root.fingerprint);
   } finally {
-    seed.fill(0);
+    try {
+      root?.wipePrivateData();
+    } finally {
+      seed.fill(0);
+    }
   }
 }
 function hodlSetMasterFingerprintCard(card, valueNode, value, imageNode) {
@@ -7733,30 +7758,35 @@ function hodlRenderMasterFingerprintPreview(revision = hodlMasterFingerprintRevi
     arrow.hidden = true;
     arrow.classList.add("is-disabled");
   };
-  let mnemonic = hodlFingerprintMnemonic();
-  if (!mnemonic) {
+  let source = hodlFingerprintSource();
+  if (!source) {
     clear();
     return;
   }
   try {
-    hodlSetMasterFingerprintCard(baseCard, base, hodlMasterFingerprint(mnemonic), baseImage);
-  } catch {
-    clear();
-    return;
-  }
-  let value = "", passphrase = hodlPassphraseFieldBytes();
-  if (passphrase.length > 0) try {
-    value = hodlMasterFingerprint(mnemonic, passphrase);
-  } catch {
+    try {
+      hodlSetMasterFingerprintCard(baseCard, base, hodlMasterFingerprint(source), baseImage);
+    } catch {
+      clear();
+      return;
+    }
+    let value = "", passphrase = hodlPassphraseFieldBytes();
+    if (passphrase.length > 0) try {
+      value = hodlMasterFingerprint(source, passphrase);
+    } catch {
+    } finally {
+      passphrase.fill(0);
+    }
+    let available = hodlSetMasterFingerprintCard(passphraseCard, passphraseValue, value, passphraseImage);
+    // The passphrase card appears only once it has a fingerprint to show: until
+    // then the row is the base seed alone, not a pair with half of it empty.
+    passphraseCard.hidden = !available;
+    arrow.hidden = !available;
+    arrow.classList.toggle("is-disabled", !available);
   } finally {
-    passphrase.fill(0);
+    source.entropy?.fill(0);
+    source.indices?.fill(0);
   }
-  let available = hodlSetMasterFingerprintCard(passphraseCard, passphraseValue, value, passphraseImage);
-  // The passphrase card appears only once it has a fingerprint to show: until
-  // then the row is the base seed alone, not a pair with half of it empty.
-  passphraseCard.hidden = !available;
-  arrow.hidden = !available;
-  arrow.classList.toggle("is-disabled", !available);
 }
 function hodlQueueMasterFingerprintPreview(delay = 90) {
   let revision = ++hodlMasterFingerprintRevision;
@@ -12036,6 +12066,7 @@ function hodlSyncStationDeleteButton(config) {
   button.setAttribute("aria-disabled", String(button.disabled));
 }
 function hodlRenderStationTabs(config) {
+  hodlSyncWorkspaceCounts();
   let box = document.getElementById(config.tabs), panel = document.getElementById(config.panel);
   if (!box || !panel) return;
   box.innerHTML = "";
@@ -15738,6 +15769,7 @@ function hodlSelectedKeyNetwork() {
 }
 function hodlRestoreKey() {
   hodlKeyManagerSyncReviewedContext();
+  hodlSyncWorkspaceCounts();
   let state = hodlKeys[hodlActiveKey];
 
   if (!state) {
@@ -16135,6 +16167,7 @@ function hodlSyncKeyAddButton() {
   button.setAttribute("aria-disabled", String(button.disabled));
 }
 function hodlRenderKeyTabs() {
+  hodlSyncWorkspaceCounts();
   let box = hodlElement("#key-tabs"), panel = hodlElement("#calc-card");
   box.innerHTML = "";
   panel.removeAttribute("aria-labelledby");
@@ -16559,6 +16592,7 @@ function hodlCaptureMsig() {
   state.error = hodlFormatErrorSpec(hodlMsigErrorSpec);
 }
 function hodlRestoreMsig() {
+  hodlSyncWorkspaceCounts();
   let state = hodlMsigs[hodlActiveMsig], panel = document.getElementById("msig-card");
   if (!state) {
     hodlWalletResult = null;
@@ -16769,6 +16803,7 @@ function hodlSyncMsigAddButton() {
   button.setAttribute("aria-disabled", String(button.disabled));
 }
 function hodlRenderMsigTabs() {
+  hodlSyncWorkspaceCounts();
   let box = hodlElement("#msig-tabs"), panel = hodlElement("#msig-card");
   box.innerHTML = "";
   panel.removeAttribute("aria-labelledby");
@@ -16879,6 +16914,11 @@ function hodlShowWorkspace(id) {
     hodlQueueSegmentedControlSync();
     hodlWorkspaceScrollFrame = 0;
   });
+}
+function hodlSyncWorkspaceCounts() {
+  const counts = workspaceItemCounts({ keys: hodlKeys, multisigs: hodlMsigs, children: hodlBip85Children, addresses: hodlSpAddresses, matches: hodlVanityMatches });
+  syncWorkspaceCounts(document.getElementById("workspace-tabs"), counts, (count) => hodlTText(count === 1 ? "{count} generated item" : "{count} generated items", { count }));
+  hodlSyncWorkspaceOverflow();
 }
 function hodlInitTabDrag(box) {
   let pointerId = null, startX = 0, startScroll = 0, moved = false, suppressClick = false;
@@ -19766,6 +19806,7 @@ function hodlVanityKeyMarkup(fingerprint) {
   return `<span class="vanity-key"><img class="key-tab-lifehash" width="22" height="22" alt="" hidden data-vanity-lifehash="${hodlEscapeHtml(fingerprint)}">${hodlPublicInlineHtml(fingerprint)}</span>`;
 }
 function hodlRenderVanityOut() {
+  hodlSyncWorkspaceCounts();
   let box = document.getElementById("vanity-out"), heading = document.getElementById("vanity-matches-heading");
   if (!box) return;
   let method = hodlVanityRun?.method || hodlVanityMethod();
@@ -20273,6 +20314,8 @@ function hodlInitWorkspace() {
     let fullLabel = document.createElement("span"), shortLabel = document.createElement("span");
     fullLabel.className = "workspace-tab-full";
     shortLabel.className = "workspace-tab-short";
+    fullLabel.dataset.workspaceLabel = "full";
+    shortLabel.dataset.workspaceLabel = "short";
     fullLabel.textContent = hodlTText(wide);
     shortLabel.textContent = hodlTText(short);
     button.append(fullLabel, shortLabel);
@@ -20286,6 +20329,7 @@ function hodlInitWorkspace() {
     strip.appendChild(button);
   });
   box.append(hint, strip);
+  hodlSyncWorkspaceCounts();
   hodlInitTabDrag(strip);
   // The hint points at tools that are off the right edge, so it answers "is
   // there more that way": it goes once the end is reached, and one click
@@ -20828,6 +20872,7 @@ function hodlInitSecretFieldAutoClear() {
     } catch {} finally {
       delete psbtEditorWipe.dataset.journalSilent;
     }
+    hodlSyncWorkspaceCounts();
   };
   addEventListener("pagehide", clearSecretFields);
   addEventListener("pageshow", (event) => {
@@ -20862,8 +20907,9 @@ function hodlApplyLocale() {
     let entry = hodlWorkspaceTabs.find(([id]) => id === button.dataset.workspace);
     if (!entry) return;
     let [, label, short, wide = label] = entry;
-    if (button.firstChild) button.firstChild.textContent = hodlTText(wide);
-    if (button.lastChild) button.lastChild.textContent = hodlTText(short);
+    let fullLabel = button.querySelector('[data-workspace-label="full"]'), shortLabel = button.querySelector('[data-workspace-label="short"]');
+    if (fullLabel) fullLabel.textContent = hodlTText(wide);
+    if (shortLabel) shortLabel.textContent = hodlTText(short);
     button.setAttribute("aria-label", hodlTText(label));
     if (wide !== label) button.title = hodlTText(label);
   });
