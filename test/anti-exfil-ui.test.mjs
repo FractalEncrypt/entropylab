@@ -1,0 +1,151 @@
+// Nonce Inspector transcript reader: release path vs preview path.
+// Run with: npm run test:ci
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+
+import { readAntiExfil } from "../src/js/anti-exfil.js";
+import { aexbVerify } from "../src/js/aexb.js";
+import { secp256k1Ready } from "../src/js/secp256k1.js";
+import { hashesReady } from "../src/js/hashes.js";
+
+await secp256k1Ready;
+await hashesReady;
+
+const root = dirname(fileURLToPath(import.meta.url));
+const app = readFileSync(join(root, "..", "src/js/app.js"), "utf8");
+
+function loadSlice(name) {
+  const start = app.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, name);
+  let depth = 0;
+  let end = -1;
+  for (let i = app.indexOf("{", start); i < app.length; i++) {
+    if (app[i] === "{") depth++;
+    else if (app[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+  assert.ok(end > start, name);
+  return app.slice(start, end);
+}
+
+const hodlHex = {
+  encode: (bytes) => Buffer.from(bytes).toString("hex"),
+  decode: (hex) => Uint8Array.from(Buffer.from(hex, "hex")),
+};
+const hodlParseAntiExfil = new Function(
+  "hodlHex",
+  `${loadSlice("hodlParseAntiExfil")}; return hodlParseAntiExfil;`,
+)(hodlHex);
+
+// The helper runs in its own realm with the real modules, so a missing import
+// or a stray global fails here rather than in the page.
+const context = vm.createContext({ readAntiExfil, aexbVerify, hodlParseAntiExfil });
+vm.runInContext(
+  `${loadSlice("hodlReadNonceTranscript")}; globalThis.hodlReadNonceTranscript = hodlReadNonceTranscript;`,
+  context,
+);
+const hodlReadNonceTranscript = context.hodlReadNonceTranscript;
+
+// From test/psbt-anti-exfil.test.mjs, "parses host nonce and compressed opening as separate hex".
+const jadeHost = "11".repeat(32);
+const jadeOpening = "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27";
+// From test/psbt-bitbox-s2c.test.mjs, "one 32-byte field is the revealed host nonce, not the SHA256 commitment".
+const bitboxHost = "11".repeat(32);
+const bitboxOpening = "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27";
+const bitboxCommitment = hodlHex.encode(
+  new Uint8Array(createHash("sha256").update(Buffer.from(bitboxHost, "hex")).digest()),
+);
+
+const positive = JSON.parse(
+  readFileSync(join(root, "fixtures", "aexb", "protocol-v1-multislot-vectors.json"), "utf8"),
+);
+const stage3 = positive.messages.find((vector) => vector.stage === 3);
+const stage4 = positive.messages.find((vector) => vector.stage === 4);
+
+test("release path is exactly hodlParseAntiExfil", () => {
+  const raw = `${jadeHost}\n${jadeOpening}`;
+  const expected = hodlParseAntiExfil(raw);
+  const release = hodlReadNonceTranscript(raw, false);
+  assert.equal(release.kind, "jade");
+  assert.equal(release.warningCode, null);
+  assert.equal(release.aexb, null);
+  assert.equal(hodlHex.encode(release.transcript.host), hodlHex.encode(expected.host));
+  assert.equal(release.transcript.openings.length, expected.openings.length);
+  assert.equal(hodlHex.encode(release.transcript.openings[0]), hodlHex.encode(expected.openings[0]));
+});
+
+test("release path reports a parse error instead of throwing", () => {
+  const release = hodlReadNonceTranscript("aa".repeat(40), false);
+  assert.ok(release.error);
+  assert.equal(release.transcript, undefined);
+});
+
+test("preview path detects a two-value BitBox02 transcript", () => {
+  const bitbox = hodlReadNonceTranscript(`${bitboxHost} ${bitboxCommitment} ${bitboxOpening}`, true);
+  assert.equal(bitbox.kind, "bitbox02");
+  assert.equal(bitbox.warningCode, null);
+  assert.equal(hodlHex.encode(bitbox.transcript.host), bitboxHost);
+  assert.equal(hodlHex.encode(bitbox.transcript.openings[0]), bitboxOpening);
+});
+
+test("preview path keeps the Jade/BitBox02 warning code for a single host nonce", () => {
+  const jade = hodlReadNonceTranscript(`${jadeHost} ${jadeOpening}`, true);
+  assert.equal(jade.kind, "jade");
+  assert.equal(jade.warningCode, "jade-or-bitbox02");
+  assert.equal(hodlHex.encode(jade.transcript.host), jadeHost);
+});
+
+test("preview path returns an AEXB verdict for an AEXB fixture", () => {
+  // A single AEXB/AEXT message carries no earlier stage, so aexbVerify can
+  // only refuse it: stage 4 has no reveal, stage 3 has no stage-2 commitment.
+  const signatures = hodlReadNonceTranscript(stage4.message_hex, true);
+  assert.equal(signatures.kind, "aexb");
+  assert.equal(signatures.transcript, null);
+  assert.equal(signatures.aexb.ok, false);
+  assert.equal(signatures.aexb.reason, "MISSING_REVEAL");
+
+  const reveal = hodlReadNonceTranscript(stage3.message_hex, true);
+  assert.equal(reveal.kind, "aexb");
+  assert.equal(reveal.aexb.ok, false);
+  assert.equal(reveal.aexb.reason, "MISSING_COMMITMENT");
+});
+
+test("preview path returns an error for malformed input and nothing for empty input", () => {
+  const bad = hodlReadNonceTranscript("not hex at all", true);
+  assert.ok(bad.error);
+  assert.deepEqual({ ...hodlReadNonceTranscript("", true) }, { transcript: null });
+});
+
+test("the render reads the transcript through the helper, behind the preview flag", () => {
+  const render = loadSlice("hodlRenderPsbt");
+  // The flag is read through a typeof guard, and a release build (or a slice
+  // loaded alone) keeps the exact Jade-only call.
+  assert.match(render, /let preview = typeof PREVIEW !== "undefined" && PREVIEW;/);
+  assert.match(render, /let raw = \(options\?\.transcript \?\? document\.getElementById\("psbt-ax-transcript"\)\?\.value\) \|\| "";\s*if \(!preview\) transcript = hodlParseAntiExfil\(raw\);\s*else \{\s*const read = hodlReadNonceTranscript\(raw, true\);/);
+  assert.match(app, /transcript: hodlParseAntiExfil\(raw\)/);
+  assert.match(app, /if \(PREVIEW\) \{[\s\S]*?Anti-exfil transcript \(Jade, BitBox02 or AEXB, optional\)/);
+});
+
+test("the preview flag is defined behind a typeof guard, so release builds still boot", () => {
+  // Release builds leave __ENTROPYLAB_PREVIEW__ undeclared: a bare reference
+  // would throw at boot in hodlInitPsbt and break the PSBT tools.
+  assert.match(app, /^var PREVIEW = typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__;$/m);
+  assert.ok(app.indexOf("var PREVIEW =") < app.indexOf("function hodlInitPsbt()"), "PREVIEW is declared before hodlInitPsbt");
+  // The imports sit with the module's others, not mid-file.
+  assert.ok(app.indexOf('import { readAntiExfil } from "./anti-exfil.js";') < app.indexOf("function "), "anti-exfil import is at the top");
+});
+
+test("a failing AEXB verdict names the failing slot's reason, escaped outside hodlT", () => {
+  const render = loadSlice("hodlRenderPsbt");
+  assert.match(render, /hodlT\("AEXB transcript does not check out:"\) \+ " <code>" \+ hodlEscapeHtml\(aexbResult\.reason \|\| aexbResult\.slots\?\.find\(\(slot\) => !slot\.ok\)\?\.reason \|\| ""\) \+ "<\/code><\/p>"/);
+});

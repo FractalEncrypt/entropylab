@@ -48,6 +48,9 @@ import { hex as hodlHex } from "./coders.js";
 import { addressFor, addressFromScript, descriptorDerive, p2pkhScript, p2shP2wpkhScript, p2shScript, p2trKeyScript, p2wpkhScript, p2wshScript } from "./addresses.js";
 import { base58checkDecode, base58checkEncode } from "./base58.js";
 import { HDKey as hodlHDKey } from "./hdkey.js";
+// The unified anti-exfil reader (preview builds) and the AEXB-v1 verifier.
+import { readAntiExfil } from "./anti-exfil.js";
+import { aexbVerify } from "./aexb.js";
 import { entropyToMnemonic as hodlEntropyToMnemonic, mnemonicToEntropy as hodlMnemonicToEntropy, mnemonicToSeedSync as hodlMnemonicToSeed, seedFromEntropy as hodlSeedFromEntropy, seedFromIndices as hodlSeedFromIndices, validateMnemonic as hodlIsValidMnemonic } from "./bip39.js";
 import { wordlist as bip39English } from "./bip39-english.js";
 // The PSBT editor (its own workspace tab) drives the rust-bitcoin WASM
@@ -11570,9 +11573,23 @@ function hodlPsbtShowMore(event) {
     output.focus();
   }
 }
+// Preview builds define __ENTROPYLAB_PREVIEW__; release builds leave it
+// undeclared, so the typeof guard keeps them working.
+var PREVIEW = typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__;
 function hodlInitPsbt() {
   let go = document.getElementById("psbt-go");
   if (!go) return;
+  if (PREVIEW) {
+    const summary = document.querySelector("#nonce-jade-options > summary");
+    if (summary) summary.textContent = hodlTText("Anti-exfil transcript (Jade, BitBox02 or AEXB, optional)");
+    const help = document.getElementById("psbt-ax-transcript-help");
+    if (help) help.textContent = hodlTText("Paste a Jade or BitBox02 host nonce and opening, or an AEXB/AEXT message as hex. The format is detected automatically.");
+    const field = document.getElementById("psbt-ax-transcript");
+    if (field) {
+      field.setAttribute("aria-label", hodlTText("Anti-exfil transcript"));
+      field.setAttribute("placeholder", hodlTText("Host nonce and opening, or an AEXB message, as hex"));
+    }
+  }
   go.onclick = () => {
     hodlRunPsbt();
     hodlRefreshStationKeyPickers();
@@ -13289,6 +13306,28 @@ function hodlParseAntiExfil(raw) {
   if (!host || !openings.length) throw new Error("Jade anti-exfil needs both the host nonce \u03C1 and the signer opening R.");
   return { host, openings };
 }
+// Reads the Nonce Inspector's transcript field. Release builds keep the
+// Jade-only parser and its exact behaviour; preview builds detect the format
+// (Jade, BitBox02 or AEXB/AEXT) and verify an AEXB transcript's math.
+function hodlReadNonceTranscript(raw, preview) {
+  if (!preview) {
+    try {
+      return { transcript: hodlParseAntiExfil(raw), kind: "jade", warningCode: null, aexb: null };
+    } catch (exception) {
+      return { error: exception.message || String(exception) };
+    }
+  }
+  const result = readAntiExfil(raw);
+  if (!result) return { transcript: null };
+  if (result.kind === "jade" || result.kind === "bitbox02") {
+    return { transcript: result.transcript, kind: result.kind, warningCode: result.warningCode, warning: result.warning };
+  }
+  if (result.kind === "aexb") {
+    return { transcript: null, kind: "aexb", aexb: aexbVerify(result.transcript.decoded) };
+  }
+  return { error: result.error };
+}
+
 function hodlAntiExfilCommitOk(r, opening, host) {
   // The relation (tweak = TaggedHash("s2c/ecdsa/point", opening, host),
   // committed = opening + tweak*G, r mod n == x(committed) mod n) lives in
@@ -13698,8 +13737,22 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // neither shows it nor verifies anti-exfil, so it must not read it: the
   // transcript steers signatures away from the unsupported-check count, and a
   // field on another tab would otherwise lift the Inspector's nonce verdict.
+  // Release builds (and slices that load this function alone) keep the exact
+  // Jade-only call; only a preview build takes the unified reader.
+  let preview = typeof PREVIEW !== "undefined" && PREVIEW;
+  let transcriptKind = "jade", transcriptWarningCode = null, transcriptWarning = "", aexbResult = null;
   if (view !== "inspect") try {
-    transcript = hodlParseAntiExfil((options?.transcript ?? document.getElementById("psbt-ax-transcript")?.value) || "");
+    let raw = (options?.transcript ?? document.getElementById("psbt-ax-transcript")?.value) || "";
+    if (!preview) transcript = hodlParseAntiExfil(raw);
+    else {
+      const read = hodlReadNonceTranscript(raw, true);
+      transcript = read.transcript;
+      transcriptKind = read.kind || "jade";
+      transcriptWarningCode = read.warningCode || null;
+      transcriptWarning = read.warning || "";
+      aexbResult = read.aexb || null;
+      if (read.error) transcriptError = read.error;
+    }
   } catch (exception) {
     transcriptError = exception.message || String(exception);
   }
@@ -13982,16 +14035,17 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             message = hodlT("This signature does not verify against the reconstructed input digest.");
             className = "psbt-warn";
           } else if (transcript) {
+            let bitbox = transcriptKind === "bitbox02";
             let opening = transcript.openings.length === 1 ? transcript.openings[0] : transcript.openings[ecdsaIndex];
             if (!opening) {
-              message = hodlT("No Jade opening R was provided for this signature.");
+              message = bitbox ? hodlT("No BitBox02 opening R was provided for this signature.") : hodlT("No Jade opening R was provided for this signature.");
               className = "psbt-warn";
             } else try {
               if (hodlAntiExfilCommitOk(parts.r, opening, transcript.host)) {
-                message = hodlT("Matches Jade anti-exfil (sign-to-contract). Host entropy mixed into the nonce. Not a leak.");
+                message = bitbox ? hodlT("Matches BitBox02 anti-klepto (sign-to-contract). Host entropy mixed into the nonce. Not a leak.") : hodlT("Matches Jade anti-exfil (sign-to-contract). Host entropy mixed into the nonce. Not a leak.");
                 className = "psbt-ok";
               } else {
-                message = hodlT("Does not match this Jade anti-exfil transcript. Signature r is not R + H(R||ρ)G.");
+                message = bitbox ? hodlT("Does not match this BitBox02 anti-klepto transcript.") : hodlT("Does not match this Jade anti-exfil transcript. Signature r is not R + H(R||ρ)G.");
                 className = "psbt-warn";
                 if (privateKey && sighash) try {
                   let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
@@ -14150,7 +14204,11 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   let nonceHtml = [];
   if (view !== "nonce") nonceHtml.push("<p class='label'>" + hodlT("ECDSA nonce check") + "</p>");
-  if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT("Jade anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
+  if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT(preview ? "Anti-exfil transcript not used:" : "Jade anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
+  if (transcriptWarningCode === "jade-or-bitbox02" && transcriptWarning) nonceHtml.push("<p class='edge-note'>" + hodlT(transcriptWarning) + "</p>");
+  if (aexbResult) nonceHtml.push(aexbResult.ok
+    ? "<p class='psbt-ok'>" + hodlT("AEXB transcript checks out for {n} signature slot(s). This checks the transcript's math only, not that an honest host ran the exchange.", { n: aexbResult.slots.length }) + "</p>"
+    : "<p class='psbt-warn'>" + hodlT("AEXB transcript does not check out:") + " <code>" + hodlEscapeHtml(aexbResult.reason || aexbResult.slots?.find((slot) => !slot.ok)?.reason || "") + "</code></p>");
   let {
     reused,
     possible,

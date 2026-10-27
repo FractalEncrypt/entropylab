@@ -20,6 +20,25 @@ function isHexText(input) {
   return /^[0-9a-fA-F\s\-_,;:.]+$/.test(text);
 }
 
+// True when the input, or its hex-decoded bytes, starts with the AEXB or AEXT
+// magic. Mirrors aexb.js's toBytes() so a truncated AEXB/AEXT message is
+// reported with its own decode error instead of the Jade parser's.
+function aexbMagic(input) {
+  const text = String(input).trim();
+  if (!text) return false;
+  const hex = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
+  let bytes;
+  if (hex.length > 0 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
+    bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  } else {
+    bytes = new TextEncoder().encode(text);
+  }
+  if (bytes.length < 4) return false;
+  const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+  return magic === "AEXB" || magic === "AEXT";
+}
+
 function bitboxTranscript(normalized) {
   return {
     host: normalized.host,
@@ -50,6 +69,7 @@ export function readAntiExfil(input) {
         transcript: { kind: "aexb", decoded: normalized.decoded },
         candidates: ["aexb"],
         warning: null,
+        warningCode: null,
       };
     } catch (error) {
       errors.aexb = error.message || String(error);
@@ -69,6 +89,7 @@ export function readAntiExfil(input) {
         transcript: bitboxTranscript(normalized),
         candidates: ["bitbox02"],
         warning: null,
+        warningCode: null,
       };
     } catch (error) {
       errors.bitbox02 = error.message || String(error);
@@ -83,6 +104,7 @@ export function readAntiExfil(input) {
         transcript: { host: normalized.host, openings: normalized.openings },
         candidates: ["jade", "bitbox02"],
         warning: JADE_BITBOX_WARNING,
+        warningCode: "jade-or-bitbox02",
       };
     } catch (error) {
       errors.jade = error.message || String(error);
@@ -97,6 +119,7 @@ export function readAntiExfil(input) {
         transcript: bitboxTranscript(normalized),
         candidates: ["bitbox02"],
         warning: null,
+        warningCode: null,
       };
     } catch (error) {
       errors.bitbox02 = error.message || String(error);
@@ -112,11 +135,16 @@ export function readAntiExfil(input) {
     }
   }
 
-  const error = isHexText(input) && errors.jade
-    ? errors.jade
-    : errors.jade || errors.bitbox02 || errors.aexb || "Unrecognized anti-exfil transcript.";
+  // An AEXB/AEXT message that failed to decode is reported with its own
+  // adapter's error: the Jade parser's message names the wrong format and
+  // hides the real decode failure.
+  const error = aexbMagic(input) && errors.aexb
+    ? errors.aexb
+    : isHexText(input) && errors.jade
+      ? errors.jade
+      : errors.jade || errors.bitbox02 || errors.aexb || "Unrecognized anti-exfil transcript.";
 
-  return { kind: null, transcript: null, candidates: [], warning: null, error };
+  return { kind: null, transcript: null, candidates: [], warning: null, warningCode: null, error };
 }
 
 export function checkAntiExfilSignature(r32, transcript) {
