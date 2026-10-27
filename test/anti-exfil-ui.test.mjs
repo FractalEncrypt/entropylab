@@ -220,12 +220,11 @@ test("a failing AEXB verdict names the failing slot's reason, escaped outside ho
   assert.match(render, /hodlT\("AEXB transcript does not check out:"\) \+ " <code>" \+ hodlEscapeHtml\(aexbResult\.reason \|\| aexbResult\.slots\?\.find\(\(slot\) => !slot\.ok\)\?\.reason \|\| ""\) \+ "<\/code><\/p>"/);
 });
 
-test("the render passes the Jade/BitBox02 warning to hodlT as a literal and guards the slot count", () => {
+test("the render passes the Jade/BitBox02 warning to hodlT as a literal", () => {
   const render = loadSlice("hodlRenderPsbt");
   // A literal, so the string catalog can find it; never a runtime string.
   assert.match(render, /transcriptWarningCode === "jade-or-bitbox02"\)[^\n]*hodlT\("/);
   assert.doesNotMatch(render, /hodlT\(transcriptWarning\b/);
-  assert.ok(render.includes("n: aexbResult.slots?.length ?? 0"));
 });
 
 test("preview path refuses a stage-3 reveal without a stage-4 signature message", () => {
@@ -300,8 +299,13 @@ test("the render compares each signature with the AEXB transcript's slots", () =
   assert.match(render, /aexbSignatures = read\.aexbSignatures \|\| null;/);
 });
 
-test("the AEXB summary line only turns green when every compared signature matched", () => {
+test("the AEXB summary line only turns green when every ECDSA signature in the PSBT matched", () => {
   const render = loadSlice("hodlRenderPsbt");
-  assert.match(render, /const aexbCovered = aexbCompared > 0 && aexbMatched === aexbCompared && aexbUncovered === 0;/);
+  // rfcTotal counts every ECDSA signature, including ones stopped before the
+  // slot comparison, so any of those keeps the line from turning green.
+  assert.match(render, /const aexbCovered = rfcTotal > 0 && aexbMatched === rfcTotal;/);
   assert.match(render, /aexbResult\.ok\s*\?\s*aexbCovered/);
+  // Only the match branch counts, and the green line reports that count.
+  assert.equal(render.match(/aexbMatched \+= 1;/g)?.length, 1);
+  assert.match(render, /\{ n: aexbMatched \}/);
 });

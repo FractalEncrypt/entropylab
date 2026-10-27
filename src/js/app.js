@@ -13696,9 +13696,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     tapSignatureCount = 0,
     tapUninspected = 0,
     ecdsaIndex = 0,
-    aexbCompared = 0,
     aexbMatched = 0,
-    aexbUncovered = 0,
     uninspected = 0,
     policyProblems = 0,
     policyIncomplete = 0,
@@ -14121,16 +14119,13 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
             if (slotVerdict === "no-slot") {
               message = hodlT("No AEXB transcript slot covers this signature.");
               className = "psbt-warn";
-              aexbUncovered += 1;
             } else if (slotVerdict === "match") {
               message = hodlT("Matches the AEXB transcript: this is the signature the transcript checks.");
               className = "psbt-ok";
-              aexbCompared += 1;
               aexbMatched += 1;
             } else {
               message = hodlT("Does not match the AEXB transcript's signature for this input.");
               className = "psbt-warn";
-              aexbCompared += 1;
               if (privateKey && sighash) try {
                 let cmp = hodlRfc6979Compare(sighash, privateKey.key, parts.r);
                 rfcChecked += 1;
@@ -14287,10 +14282,13 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT(preview ? "Anti-exfil transcript not used:" : "Jade anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
   if (transcriptWarningCode === "jade-or-bitbox02") nonceHtml.push("<p class='edge-note'>" + hodlT("This reads as a Jade host nonce ρ or a BitBox02 host nonce. Both are checked the same way. From a BitBox02, paste the host nonce, not its SHA-256 commitment.") + "</p>");
   if (aexbResult) {
-    const aexbCovered = aexbCompared > 0 && aexbMatched === aexbCompared && aexbUncovered === 0;
+    // Green only when every ECDSA signature in this PSBT reached the slot
+    // comparison and matched: one stopped earlier (policy, DER, digest,
+    // finalized material) counts against it, and the count is the PSBT's.
+    const aexbCovered = rfcTotal > 0 && aexbMatched === rfcTotal;
     nonceHtml.push(aexbResult.ok
       ? aexbCovered
-        ? "<p class='psbt-ok'>" + hodlT("AEXB transcript checks out for {n} signature slot(s). This checks the transcript's math only, not that an honest host ran the exchange.", { n: aexbResult.slots?.length ?? 0 }) + "</p>"
+        ? "<p class='psbt-ok'>" + hodlT("AEXB transcript checks out for {n} signature slot(s). This checks the transcript's math only, not that an honest host ran the exchange.", { n: aexbMatched }) + "</p>"
         : "<p class='psbt-warn'>" + hodlT("AEXB transcript checks out, but it does not cover every signature in this PSBT.") + "</p>"
       : "<p class='psbt-warn'>" + hodlT("AEXB transcript does not check out:") + " <code>" + hodlEscapeHtml(aexbResult.reason || aexbResult.slots?.find((slot) => !slot.ok)?.reason || "") + "</code></p>");
   }
