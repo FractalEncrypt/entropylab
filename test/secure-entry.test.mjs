@@ -748,3 +748,256 @@ test("planTurnOn refuses malformed keys and methods", () => {
   assert.throws(() => planTurnOn(session, [{ keyId: 1, methods: null }], {}), code("BAD_INPUT"));
   assert.equal(session.entries.size, 0);
 });
+
+// §1: values, not just shapes.
+
+test("sessionSet refuses out-of-range seed, roll and card values", () => {
+  const session = createSecureSession();
+  const seed = seedEntry(12);
+  seed.indices[0] = 2048;
+  seed.count = 1;
+  assert.throws(() => sessionSet(session, 1, "seed", seed), code("BAD_ENTRY"));
+
+  const rolls = rollsEntry("base10", 6);
+  rolls.rolls[0] = 7;
+  rolls.count = 1;
+  assert.throws(() => sessionSet(session, 1, "rolls", rolls), code("BAD_ENTRY"));
+
+  const cards = cardsEntry("shuffle", 6);
+  cards.cards[0] = 52;
+  cards.count = 1;
+  assert.throws(() => sessionSet(session, 1, "cards", cards), code("BAD_ENTRY"));
+
+  assert.equal(session.entries.size, 0);
+});
+
+test("sessionSet refuses a frozen entry", () => {
+  const session = createSecureSession();
+  const frozen = Object.freeze(seedEntry(12));
+  assert.throws(() => sessionSet(session, 1, "seed", frozen), code("BAD_ENTRY"));
+  assert.equal(session.entries.size, 0);
+});
+
+test("planTurnOn turns out-of-range values and frozen entries into invalid blockers", () => {
+  const session = createSecureSession();
+  const seed = seedEntry(12);
+  seed.indices[0] = 2048;
+  seed.count = 1;
+  const rolls = rollsEntry("base10", 6);
+  rolls.rolls[0] = 7;
+  rolls.count = 1;
+  const cards = cardsEntry("shuffle", 6);
+  cards.cards[0] = 52;
+  cards.count = 1;
+  const frozen = Object.freeze(seedEntry(12));
+  const plan = planTurnOn(session, [
+    { keyId: 1, methods: { seed: "a" } },
+    { keyId: 2, methods: { rolls: "b" } },
+    { keyId: 3, methods: { cards: "c" } },
+    { keyId: 4, methods: { seed: "d" } },
+  ], {
+    seed: (text) => (text === "a" ? seed : frozen),
+    rolls: () => rolls,
+    cards: () => cards,
+  });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [
+    { keyId: "1", method: "seed", reason: "invalid" },
+    { keyId: "2", method: "rolls", reason: "invalid" },
+    { keyId: "3", method: "cards", reason: "invalid" },
+    { keyId: "4", method: "seed", reason: "invalid" },
+  ]);
+  assert.equal(plan.staged.length, 0);
+  assert.equal(session.entries.size, 0);
+});
+
+// §2: one entry, one place.
+
+test("sessionSet refuses to install the same object under two keys", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  sessionSet(session, 1, "seed", entry);
+  assert.throws(() => sessionSet(session, 2, "seed", entry), code("BAD_ENTRY"));
+  assert.equal(session.entries.size, 1);
+  assert.equal(sessionGet(session, 1, "seed"), entry);
+  assert.equal(sessionGet(session, 2, "seed"), null);
+});
+
+test("planTurnOn blocks a converter that returns one shared object for two keys", () => {
+  const session = createSecureSession();
+  const shared = seedEntry(12);
+  const plan = planTurnOn(session, [
+    { keyId: 1, methods: { seed: "a" } },
+    { keyId: 2, methods: { seed: "b" } },
+  ], { seed: () => shared });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [{ keyId: "2", method: "seed", reason: "invalid" }]);
+  assert.equal(plan.staged.length, 1);
+  assert.equal(plan.staged[0].entry, shared);
+  discardPlan(plan);
+  assert.equal(shared.wiped, true);
+});
+
+test("planTurnOn blocks a converter that returns an installed entry", () => {
+  const session = createSecureSession();
+  const installed = seedEntry(12);
+  sessionSet(session, 1, "seed", installed);
+  const plan = planTurnOn(session, [{ keyId: 2, methods: { seed: "b" } }], { seed: () => installed });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [{ keyId: "2", method: "seed", reason: "invalid" }]);
+  assert.equal(plan.staged.length, 0);
+  assert.equal(installed.wiped, false);
+  assert.equal(sessionGet(session, 1, "seed"), installed);
+});
+
+test("planTurnOn gives a duplicate blocker for the same canonical pair", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [
+    { keyId: 1, methods: { seed: "a" } },
+    { keyId: "1", methods: { seed: "b" } },
+  ], { seed: () => seedEntry(12) });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [{ keyId: "1", method: "seed", reason: "duplicate" }]);
+  assert.equal(plan.staged.length, 1);
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_BLOCKED"));
+  assert.equal(session.entries.size, 0);
+  discardPlan(plan);
+});
+
+// §3: edits invalidate late results.
+
+test("seedSet on an installed entry makes a guard stale", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  sessionSet(session, 1, "seed", entry);
+  const guard = sessionGuard(session);
+  assert.equal(guard.current(), true);
+  seedSet(entry, 0, 5);
+  assert.equal(guard.current(), false);
+});
+
+test("rollsPush on an installed entry makes a guard stale", () => {
+  const session = createSecureSession();
+  const entry = rollsEntry("base10", 6);
+  sessionSet(session, 1, "rolls", entry);
+  const guard = sessionGuard(session);
+  assert.equal(guard.current(), true);
+  rollsPush(entry, 3);
+  assert.equal(guard.current(), false);
+});
+
+test("touchEntry on an installed entry makes a guard stale", () => {
+  const session = createSecureSession();
+  const entry = keyEntry();
+  sessionSet(session, 1, "key", entry);
+  const guard = sessionGuard(session);
+  assert.equal(guard.current(), true);
+  touchEntry(entry);
+  assert.equal(guard.current(), false);
+});
+
+// §4: turn-off plans refuse what cannot be restored faithfully.
+
+test("planTurnOff blocks a wiped entry and never serializes it", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 5);
+  sessionSet(session, 1, "seed", entry);
+  session.on = true;
+  wipeEntry(entry);
+  let serialized = false;
+  const plan = planTurnOff(session, { seed: () => { serialized = true; return "text"; } });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [{ keyId: "1", method: "seed", reason: "invalid" }]);
+  assert.equal(serialized, false);
+  assert.equal(plan.staged.length, 0);
+});
+
+test("commitTurnOff convert attaches the texts to a WIPE_PARTIAL error", () => {
+  const session = createSecureSession();
+  const entry = keyEntry();
+  entry.vault.setText("secret");
+  sessionSet(session, 1, "key", entry);
+  session.on = true;
+  const plan = planTurnOff(session, { key: () => "xprv-text" });
+  assert.equal(plan.ok, true);
+  Object.freeze(entry);
+  let caught;
+  try { commitTurnOff(session, plan, "convert"); } catch (error) { caught = error; }
+  assert.ok(caught instanceof SecureEntryError);
+  assert.equal(caught.code, "WIPE_PARTIAL");
+  assert.deepEqual(caught.texts, [{ keyId: "1", method: "key", text: "xprv-text" }]);
+  assert.equal(Object.keys(caught).includes("texts"), false);
+  assert.equal(session.entries.size, 0);
+  assert.equal(session.on, false);
+});
+
+// §5: plan kinds are enforced.
+
+test("commitTurnOn refuses an off-plan", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  sessionSet(session, 1, "seed", entry);
+  session.on = true;
+  const plan = planTurnOff(session, { seed: () => "text" });
+  assert.equal(plan.kind, "off");
+  const before = session.generation;
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_BLOCKED"));
+  assert.equal(session.entries.size, 1);
+  assert.equal(session.on, true);
+  assert.equal(session.generation, before);
+  assert.equal(entry.wiped, false);
+});
+
+test("commitTurnOff convert refuses an on-plan", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }], { seed: () => seedEntry(12) });
+  assert.equal(plan.kind, "on");
+  const before = session.generation;
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
+  assert.equal(session.entries.size, 0);
+  assert.equal(session.on, false);
+  assert.equal(session.generation, before);
+  discardPlan(plan);
+});
+
+// §6: coded errors only.
+
+test("wipeEntry on a malformed entry throws BAD_ENTRY, not a TypeError", () => {
+  assert.throws(() => wipeEntry({ kind: "seed" }), code("BAD_ENTRY"));
+  assert.throws(() => wipeEntry({ kind: "seed", indices: [0, 0, 0] }), code("BAD_ENTRY"));
+  assert.throws(() => wipeEntry({ kind: "rolls" }), code("BAD_ENTRY"));
+  assert.throws(() => wipeEntry({ kind: "cards" }), code("BAD_ENTRY"));
+  assert.throws(() => wipeEntry({ kind: "key" }), code("BAD_ENTRY"));
+  assert.throws(() => wipeEntry({ kind: "key", vault: {} }), code("BAD_ENTRY"));
+});
+
+// Claude's round-3 check (Muse's review): an entry owned by another session
+// is refused before any install, and wiping a frozen entry is a coded refusal.
+test("an entry installed in another session is blocked at planning and refused at commit before any install", () => {
+  const sessionA = createSecureSession();
+  const sessionB = createSecureSession();
+  const shared = seedEntry(12);
+  seedSet(shared, 0, 5);
+  sessionSet(sessionA, 1, "seed", shared);
+  const plan = planTurnOn(sessionB, [{ keyId: 2, methods: { seed: "x" } }], { seed: () => shared });
+  assert.equal(plan.ok, false);
+  assert.ok(plan.blockers.some((b) => b.reason === "invalid"));
+  const fresh = seedEntry(12);
+  const forged = { kind: "on", ok: true, generation: sessionB.generation, blockers: [], staged: [
+    { keyId: "3", method: "seed", entry: fresh },
+    { keyId: "4", method: "seed", entry: shared },
+  ] };
+  assert.throws(() => commitTurnOn(sessionB, forged), (error) => error instanceof SecureEntryError && error.code === "PLAN_BLOCKED");
+  assert.equal(sessionB.entries.size, 0, "nothing was installed in session B");
+  assert.equal(sessionA.entries.size, 1, "session A is untouched");
+});
+
+test("wiping a frozen entry zeroes its buffer and throws a coded BAD_ENTRY", () => {
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 7);
+  const buffer = entry.indices;
+  Object.freeze(entry);
+  assert.throws(() => wipeEntry(entry), (error) => error instanceof SecureEntryError && error.code === "BAD_ENTRY");
+  assert.ok(buffer.every((value) => value === 0), "the word buffer is zeroed even though the entry is frozen");
+});
