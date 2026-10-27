@@ -9,7 +9,7 @@
 // Run with `npm test` (part of the default and CI suites).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -324,7 +324,21 @@ test("no Clear handler uses an editing command that keeps text in Undo", () => {
 
 test("app.js calls document.execCommand only in the Journal notes field", () => {
   const journal = fnBody("hodlJournalCommitNoteClock");
+  assert.ok(journal.length < app.length / 4, "hodlJournalCommitNoteClock's body must be a bounded slice of app.js");
   const total = app.split("execCommand(").length - 1;
   const inside = journal.split("execCommand(").length - 1;
   assert.equal(total, inside, "app.js calls execCommand outside hodlJournalCommitNoteClock: editing commands keep text in Undo, so Clear must assign .value = \"\"");
+});
+
+test("no other module calls document.execCommand except the clipboard's copy fallback", () => {
+  const dir = join(root, "src/js");
+  for (const name of readdirSync(dir).filter((file) => file.endsWith(".js") && file !== "app.js")) {
+    const source = readFileSync(join(dir, name), "utf8");
+    const calls = source.match(/execCommand\([^)]*\)/g) || [];
+    if (name === "clipboard.js") {
+      for (const call of calls) assert.equal(call, 'execCommand("copy")', `clipboard.js may only call execCommand("copy"), found ${call}`);
+    } else {
+      assert.equal(calls.length, 0, `${name} calls execCommand: editing commands keep text in Undo, so a Clear must assign .value = ""`);
+    }
+  }
 });
