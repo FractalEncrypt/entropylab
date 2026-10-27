@@ -72,11 +72,13 @@ not real capture exports.
 Use pinned Node 22.23.4/npm 11.17.0 and npm ci. Preview command:
 `node scripts/build.mjs --preview --out ../preview`.
 Serve on loopback or another secure local browser context. No runtime downloads.
-Pinned jsQR 1.4.0 was user-authorized for this local prototype; upstream review
-remains necessary. Fresh upstream qr-eval selects quircs 0.10.3 for planned
-general Scan QR import, but does not yet integrate it into the app. This prototype
-predates that selection; accepting jsQR temporarily or adapting to a shared decoder
-is an explicit upstream integration decision. Apache-2.0 jsQR and BSD-2-Clause-Patent UR2 notices live under
+The maintainer has requested the shared quircs decoder rather than jsQR (PR #1262).
+PR #1247 supplies the WASM crate; its follow-up will publish the decoder worker
+and preview JavaScript interface. The current draft still contains the working
+jsQR 1.4.0 proof of concept and must not be marked ready until that dependency is
+removed and capture uses the shared interface. No competing wrapper is planned.
+The camera/session cancellation and RAM-only clearing guarantees must be checked
+against that worker lifecycle before another real-device test. Apache-2.0 jsQR and BSD-2-Clause-Patent UR2 notices live under
 src/licenses and are included only in preview artifacts. Normal builds exclude
 camera decoding.
 
