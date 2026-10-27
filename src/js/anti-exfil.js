@@ -20,13 +20,31 @@ function isHexText(input) {
   return /^[0-9a-fA-F\s\-_,;:.]+$/.test(text);
 }
 
+function aexbMessageList(input) {
+  const text = String(input).trim();
+  if (!text) return null;
+  const withoutPrefix = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
+  const magic = /^(41455842|41455854)/i;
+  if (!magic.test(withoutPrefix)) return null;
+  const messages = [];
+  for (const token of text.split(/\s+/)) {
+    if (!token) continue;
+    const clean = token.startsWith("0x") || token.startsWith("0X") ? token.slice(2) : token;
+    if (magic.test(clean)) messages.push(clean);
+    else if (messages.length) messages[messages.length - 1] += clean;
+    else return null;
+  }
+  return messages.length ? messages : null;
+}
+
 // True when the input, or its hex-decoded bytes, starts with the AEXB or AEXT
 // magic. Mirrors aexb.js's toBytes() so a truncated AEXB/AEXT message is
 // reported with its own decode error instead of the Jade parser's.
 function aexbMagic(input) {
   const text = String(input).trim();
   if (!text) return false;
-  const hex = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
+  const compact = text.replace(/\s+/g, "");
+  const hex = compact.startsWith("0x") || compact.startsWith("0X") ? compact.slice(2) : compact;
   let bytes;
   if (hex.length > 0 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
     bytes = new Uint8Array(hex.length / 2);
@@ -50,6 +68,33 @@ function bitboxTranscript(normalized) {
 
 export function readAntiExfil(input) {
   if (!input || !String(input).trim()) return null;
+
+  const messages = aexbMessageList(input);
+  if (messages) {
+    const decoded = [];
+    for (let index = 0; index < messages.length; index++) {
+      try {
+        decoded.push(aexb.normalize(messages[index]).decoded);
+      } catch (error) {
+        const message = error.message || String(error);
+        return {
+          kind: null,
+          transcript: null,
+          candidates: [],
+          warning: null,
+          warningCode: null,
+          error: messages.length === 1 ? message : `Message ${index + 1}: ${message}`,
+        };
+      }
+    }
+    return {
+      kind: "aexb",
+      transcript: { kind: "aexb", decoded: decoded[0], messages: decoded },
+      candidates: ["aexb"],
+      warning: null,
+      warningCode: null,
+    };
+  }
 
   const errors = {};
   const detected = {};

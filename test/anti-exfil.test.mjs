@@ -144,6 +144,46 @@ test("AEXB vectors decode and verify", () => {
   assert.equal(signatureResult.verdict, "ok");
 });
 
+test("AEXB messages split on whitespace and keep paste order", () => {
+  const stage2 = positive.messages.find((vector) => vector.stage === 2);
+  const stage3 = positive.messages.find((vector) => vector.stage === 3);
+  const result = readAntiExfil(`${stage2.message_hex}\n${stage3.message_hex}`);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.transcript.messages.length, 2);
+  assert.equal(result.transcript.messages[0].stage, 2);
+  assert.equal(result.transcript.messages[1].stage, 3);
+  assert.equal(result.transcript.decoded.stage, 2);
+});
+
+test("a line-wrapped AEXB message decodes as one message", () => {
+  const stage4 = positive.messages.find((vector) => vector.stage === 4);
+  const wrapped = stage4.message_hex.match(/.{1,64}/g).join("\n");
+  const result = readAntiExfil(wrapped);
+  assert.equal(result.kind, "aexb");
+  assert.equal(result.transcript.messages.length, 1);
+  assert.equal(result.transcript.decoded.stage, 4);
+});
+
+test("a bad second AEXB message reports its position", () => {
+  const stage2 = positive.messages.find((vector) => vector.stage === 2);
+  const result = readAntiExfil(`${stage2.message_hex}\n41455842`);
+  assert.equal(result.kind, null);
+  assert.match(result.error, /^Message 2: /);
+});
+
+test("a single truncated AEXB message keeps today's error text", () => {
+  const result = readAntiExfil("41455842" + "00".repeat(10));
+  assert.equal(result.kind, null);
+  assert.equal(result.error, "message is shorter than the AEXB header");
+});
+
+test("a line-wrapped truncated AEXB message reports the AEXB error", () => {
+  const result = readAntiExfil("41455842\n" + "00".repeat(10));
+  assert.equal(result.kind, null);
+  assert.match(result.error, /AEXB/);
+  assert.doesNotMatch(result.error, /Jade/);
+});
+
 test("a BitBox commitment pasted as rho reads as Jade with the warning and fails the check", () => {
   const host = hexDecode(jadeHost);
   const opening = hexDecode(jadeOpening);
