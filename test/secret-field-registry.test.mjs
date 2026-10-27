@@ -48,6 +48,25 @@ const around = (source, marker, span = 500) => {
   return source.slice(at, at + span);
 };
 
+// An inline `element.onclick = () => { ... };` handler, from the assignment
+// to its matching closing brace. Fails loudly if the marker is gone, so a
+// rename cannot silently drop the handler from the Undo sweep.
+const inlineHandler = (marker) => {
+  const at = app.indexOf(marker);
+  assert.ok(at >= 0, `inline handler not found: ${marker}`);
+  const open = app.indexOf("{", at);
+  assert.ok(open >= 0, `inline handler has no body: ${marker}`);
+  let depth = 0;
+  for (let i = open; i < app.length; i += 1) {
+    if (app[i] === "{") depth += 1;
+    else if (app[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return app.slice(at, i + 1);
+    }
+  }
+  assert.fail(`inline handler is not closed: ${marker}`);
+};
+
 // id → probe. Every probe is a regex run against the named source; the row
 // says in one sentence why the field is security-critical.
 const CLEARING_PATHS = [
@@ -275,4 +294,37 @@ test("every shell field is classified as secret (cleared) or public (settings)",
     assert.ok(inShell(id) || ["hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards", "exp-text"].includes(id),
       `#${id} is classified but no longer in the shell`);
   }
+});
+
+// Clear must be an assignment. execCommand("delete") and setRangeText both
+// leave the old text in the field's Undo history, where execCommand("undo")
+// brings it back (measured in Chrome, Edge and Firefox, 2026-10-27). The
+// Journal notes field is the one place Undo is intended. The module Clear
+// handlers are already pinned to `.value = ""` by their probes above.
+const CLEAR_HANDLERS = {
+  hodlInitSecretFieldAutoClear: lifecycle,
+  hodlEndPsbtSession: fnBody("hodlEndPsbtSession"),
+  hodlWipeActiveKey: fnBody("hodlWipeActiveKey"),
+  hodlWipeActiveMsig: fnBody("hodlWipeActiveMsig"),
+  bip85Wipe: inlineHandler('document.getElementById("bip85-wipe").onclick = () => {'),
+  spWipe: inlineHandler('document.getElementById("sp-wipe").onclick = () => {'),
+  hodlJournalClearFields: journalFields,
+  hodlJournalWipeMem: journalWipe,
+  hodlJournalHideEditor: journalEditor,
+  hodlJournalClearReport: fnBody("hodlJournalClearReport"),
+  hodlRestoreMsig: msigRestore,
+};
+
+test("no Clear handler uses an editing command that keeps text in Undo", () => {
+  for (const [name, source] of Object.entries(CLEAR_HANDLERS)) {
+    assert.ok(!source.includes("execCommand"), `${name} clears with execCommand, which keeps the text in Undo`);
+    assert.ok(!source.includes("setRangeText"), `${name} clears with setRangeText, which keeps the text in Undo`);
+  }
+});
+
+test("app.js calls document.execCommand only in the Journal notes field", () => {
+  const journal = fnBody("hodlJournalCommitNoteClock");
+  const total = app.split("execCommand(").length - 1;
+  const inside = journal.split("execCommand(").length - 1;
+  assert.equal(total, inside, "app.js calls execCommand outside hodlJournalCommitNoteClock: editing commands keep text in Undo, so Clear must assign .value = \"\"");
 });

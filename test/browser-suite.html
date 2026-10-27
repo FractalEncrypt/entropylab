@@ -8469,6 +8469,56 @@
     assert(imageRequests.length === 0, "Hosted mode fetched an inlined image: " + imageRequests.join(", "));
   });
 
+  // A station Clear must leave nothing to Undo. execCommand("delete") keeps
+  // the old text in the field's Undo history; assigning .value = "" drops it
+  // (measured in Chrome, Edge and Firefox, 2026-10-27). Each row is a secret
+  // text field and the Clear button of the station that owns it.
+  await test("a station Clear leaves the secret out of Undo", async () => {
+    const rows = [
+      ["seed", "calc", "wipe", "Seed phrase"],
+      ["key", "calc", "wipe", "Private key"],
+      ["msig-x-0", "msig", "msig-wipe"],
+      ["bip85-key", "bip85", "bip85-wipe"],
+      ["sp-key", "sp", "sp-wipe"],
+      ["psbt-key", "psbt", "psbt-wipe"],
+      ["psbt-pass", "psbt", "psbt-wipe"],
+      ["psbt-text", "psbt", "psbt-wipe"],
+      ["core-add-text", "core", "core-wipe"],
+    ];
+    const skippedFields = [];
+    for (const [fieldId, workspace, clearId, mode] of rows) {
+      document.querySelector(`#workspace-tabs [data-workspace="${workspace}"]`).click();
+      if (mode) {
+        await chooseMode(mode);
+        await until(() => document.getElementById(fieldId), `${mode} input`);
+      }
+      const field = document.getElementById(fieldId);
+      const clear = document.getElementById(clearId);
+      assert(field, `#${fieldId} is missing`);
+      assert(clear, `#${clearId} is missing`);
+      await until(() => field.getClientRects().length > 0, `${workspace} workspace for #${fieldId}`);
+      field.focus();
+      const before = field.value;
+      const inserted = document.execCommand("insertText", false, "abandon test words");
+      if (!inserted || field.value === before) {
+        skippedFields.push(fieldId);
+        continue;
+      }
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      await until(() => !clear.hidden && !clear.disabled, `${clearId} enabled for #${fieldId}`);
+      clear.click();
+      equal(field.value, "", `#${fieldId} was not cleared`);
+      field.focus();
+      document.execCommand("undo");
+      equal(field.value, "", `#${fieldId} kept its text in Undo after Clear`);
+    }
+    // Later tests start on the Key Station.
+    document.querySelector('#workspace-tabs [data-workspace="calc"]').click();
+    if (skippedFields.length === rows.length) {
+      skipped("a station Clear leaves the secret out of Undo", "execCommand(\"insertText\") is unsupported in this browser");
+    }
+  });
+
   await test("hosted page threw no uncaught errors", () => {
     assert(state.uncaught.length === 0, `${state.uncaught.length} uncaught page error(s): ${state.uncaught.join(" | ")}`);
   });
