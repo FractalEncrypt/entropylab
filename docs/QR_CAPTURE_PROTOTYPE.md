@@ -132,3 +132,6 @@ incomplete result or STOP is not permission to continue. EL checks the captured
 proof and supplied signatures before coordinator import; Sparrow still applies
 its own transaction/policy checks and broadcast gate. Clearing EL does not require
 a new ceremony: keep the signer’s same M4 displayed for Sparrow.
+This requires firmware that keeps M4 available for rescanning. Firmware that
+cannot redisplay or rescan the same M4 may need a different workflow; do not
+assume every firmware version supports M4-first capture.
