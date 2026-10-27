@@ -40,11 +40,13 @@ function fakeDocument(tools) {
   const buttons = tools.map(fakeButton);
   const cards = Object.fromEntries(tools.map((tool) => [`${tool}-card`, { hidden: true }]));
   const strip = { querySelectorAll: (selector) => (selector === "[data-privacy-tool]" ? buttons : []) };
+  const manager = { hidden: true };
   return {
     buttons,
     cards,
     getElementById(id) {
       if (id === "privacy-tool-tabs") return strip;
+      if (id === "privacy-manager") return manager;
       return cards[id] ?? null;
     },
     querySelector(selector) {
@@ -141,10 +143,12 @@ test("the station tabs answer the arrow, Home and End keys", () => {
 test("the station strip shows only on the Privacy workspace and follows workspace switches", () => {
   const onPrivacy = fakeDocument(["sp"]);
   loadPrivacy(onPrivacy).init();
-  assert.equal(onPrivacy.getElementById("privacy-tool-tabs").hidden, false);
+  assert.equal(onPrivacy.getElementById("privacy-manager").hidden, false);
   const elsewhere = fakeDocument(["sp"]);
   loadPrivacy(elsewhere, { workspace: "calc" }).init();
-  assert.equal(elsewhere.getElementById("privacy-tool-tabs").hidden, true, "the strip sits outside the cards, so it must hide on other workspaces");
+  assert.equal(elsewhere.getElementById("privacy-manager").hidden, true, "the strip sits outside the cards, so its wrapper must hide on other workspaces");
+  const preview = applyPreviewBlocks(shell, true);
+  assert.match(preview, /<div class="key-manager no-print" id="privacy-manager" hidden>\s*<div class="key-tab-strip">\s*<div class="key-tabs" id="privacy-tool-tabs"/, "the strip sits in a wrapper that starts hidden, like #psbt-manager");
   assert.equal(elsewhere.cards["sp-card"].hidden, true);
   const switcher = extractFunction("hodlShowWorkspace");
   assert.match(switcher, /hodlSyncPsbtTool\(\);\s*hodlSyncJournalTool\(\);\s*hodlSyncPrivacyTool\(\);/, "a workspace switch re-syncs the strip");

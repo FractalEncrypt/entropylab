@@ -17104,9 +17104,11 @@ function hodlInitPsbtToolTabs() {
 function hodlSyncPrivacyTool() {
   let tabs = document.getElementById("privacy-tool-tabs");
   if (!tabs) return;
-  let visible = hodlWorkspace === "sp";
-  // The strip sits outside the cards, so it is shown only on its workspace.
-  tabs.hidden = !visible;
+  let visible = hodlWorkspace === "sp",
+      manager = document.getElementById("privacy-manager");
+  // The strip sits outside the cards, so its wrapper (hidden in the markup,
+  // like #psbt-manager) is shown only on its workspace.
+  if (manager) manager.hidden = !visible;
   tabs.querySelectorAll("[data-privacy-tool]").forEach((button) => {
     let active = button.dataset.privacyTool === hodlPrivacyTool;
     button.classList.toggle("active", active);
