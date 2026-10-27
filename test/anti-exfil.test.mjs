@@ -184,6 +184,16 @@ test("a line-wrapped truncated AEXB message reports the AEXB error", () => {
   assert.doesNotMatch(result.error, /Jade/);
 });
 
+test("a Jade host nonce that starts with the AEXB magic still reads as Jade", () => {
+  for (const magic of ["41455842", "41455854"]) {
+    const host = magic + "11".repeat(28);
+    const result = readAntiExfil(`${host}\n${jadeOpening}`);
+    assert.equal(result.kind, "jade");
+    assert.equal(Buffer.from(result.transcript.host).toString("hex"), host);
+    assert.equal(Buffer.from(result.transcript.openings[0]).toString("hex"), jadeOpening);
+  }
+});
+
 test("a BitBox commitment pasted as rho reads as Jade with the warning and fails the check", () => {
   const host = hexDecode(jadeHost);
   const opening = hexDecode(jadeOpening);

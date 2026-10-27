@@ -69,25 +69,22 @@ function bitboxTranscript(normalized) {
 export function readAntiExfil(input) {
   if (!input || !String(input).trim()) return null;
 
+  // Input that starts with the AEXB/AEXT magic is read as the messages of one
+  // session. When they do not decode, the other adapters still get their
+  // turn: a Jade or BitBox02 host nonce can start with the same four bytes.
+  let aexbListError = null;
   const messages = aexbMessageList(input);
   if (messages) {
     const decoded = [];
-    for (let index = 0; index < messages.length; index++) {
+    for (let index = 0; index < messages.length && !aexbListError; index++) {
       try {
         decoded.push(aexb.normalize(messages[index]).decoded);
       } catch (error) {
         const message = error.message || String(error);
-        return {
-          kind: null,
-          transcript: null,
-          candidates: [],
-          warning: null,
-          warningCode: null,
-          error: messages.length === 1 ? message : `Message ${index + 1}: ${message}`,
-        };
+        aexbListError = messages.length === 1 ? message : `Message ${index + 1}: ${message}`;
       }
     }
-    return {
+    if (!aexbListError) return {
       kind: "aexb",
       transcript: { kind: "aexb", decoded: decoded[0], messages: decoded },
       candidates: ["aexb"],
@@ -183,7 +180,9 @@ export function readAntiExfil(input) {
   // An AEXB/AEXT message that failed to decode is reported with its own
   // adapter's error: the Jade parser's message names the wrong format and
   // hides the real decode failure.
-  const error = aexbMagic(input) && errors.aexb
+  const error = aexbListError
+    ? aexbListError
+    : aexbMagic(input) && errors.aexb
     ? errors.aexb
     : isHexText(input) && errors.jade
       ? errors.jade

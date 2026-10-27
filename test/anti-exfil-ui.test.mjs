@@ -219,8 +219,10 @@ test("a failing AEXB verdict names the failing slot's reason, escaped outside ho
   assert.match(render, /hodlT\("AEXB transcript does not check out:"\) \+ " <code>" \+ hodlEscapeHtml\(aexbResult\.reason \|\| aexbResult\.slots\?\.find\(\(slot\) => !slot\.ok\)\?\.reason \|\| ""\) \+ "<\/code><\/p>"/);
 });
 
-test("the render passes the Jade/BitBox02 warning literal to hodlT and guards the slot count", () => {
+test("the render passes the Jade/BitBox02 warning to hodlT as a literal and guards the slot count", () => {
   const render = loadSlice("hodlRenderPsbt");
-  assert.ok(render.includes('hodlT("This reads as a Jade host nonce ρ or a BitBox02 host nonce. Both are checked the same way. From a BitBox02, paste the host nonce, not its SHA-256 commitment.")'));
+  // A literal, so the string catalog can find it; never a runtime string.
+  assert.match(render, /transcriptWarningCode === "jade-or-bitbox02"\)[^\n]*hodlT\("/);
+  assert.doesNotMatch(render, /hodlT\(transcriptWarning\b/);
   assert.ok(render.includes("n: aexbResult.slots?.length ?? 0"));
 });
