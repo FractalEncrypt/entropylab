@@ -351,9 +351,12 @@ test("the Key Station Clear empties its secret fields in place before the form r
   const empty = body.indexOf('el.value = ""');
   const restore = body.indexOf("hodlRestoreKey()");
   assert.ok(empty >= 0 && restore > empty, 'hodlWipeActiveKey must assign "" to the secret fields before hodlRestoreKey re-renders the form');
-  for (const id of ["dice", "seed", "seed-numbers", "key", "cards", "direct-cards", "hex"]) {
+  for (const id of ["dice", "hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards"]) {
     assert.ok(body.includes(`"${id}"`), `hodlWipeActiveKey must empty #${id} in place`);
   }
+  assert.ok(body.includes(".dice-input-highlight"), "hodlWipeActiveKey must empty the highlight mirrors, which repeat the typed text");
+  assert.ok(body.includes("delete el.dataset.previousValue"), "hodlWipeActiveKey must drop the dice field's previous-text copy");
+  assert.ok(body.includes("hodlPassphraseVaultField.clear()") && body.includes("getElementById(\"pass\")"), "hodlWipeActiveKey must empty the BIP39 passphrase field");
 });
 
 // MultiSig's Clear re-renders the station the same way (measured in CI: a

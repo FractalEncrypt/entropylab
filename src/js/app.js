@@ -15685,8 +15685,24 @@ function hodlWipeActiveKey() {
   // history, until garbage collection. Assignment drops that history.
   ["dice", "hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards"].forEach((id) => {
     let el = document.getElementById(id);
-    if (el) el.value = "";
+    if (!el) return;
+    el.value = "";
+    // The dice field keeps its previous text for diffing; drop that copy too.
+    if (el.dataset) delete el.dataset.previousValue;
+    delete el.hodlDiceBeforeInput;
   });
+  // The highlight mirrors drawn behind the dice, card, number, seed and key
+  // fields repeat the typed text.
+  document.querySelectorAll(".dice-input-highlight").forEach((mirror) => {
+    mirror.textContent = "";
+  });
+  // The BIP39 passphrase field holds the text itself in BIP39-word mode; the
+  // vault's own clear() empties it in step with the vault.
+  if (typeof hodlPassphraseVaultField !== "undefined" && hodlPassphraseVaultField) hodlPassphraseVaultField.clear();
+  else {
+    let pass = document.getElementById("pass");
+    if (pass) pass.value = "";
+  }
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
   // Restoring the fresh state re-renders the form; dropping the still-filled
