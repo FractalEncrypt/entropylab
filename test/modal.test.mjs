@@ -435,6 +435,38 @@ test("Escape during an IME composition does not dismiss", () => {
   });
 });
 
+test("an overlay removed from the page without hide() does not keep the page inert", () => {
+  const fake = fakeDocument();
+  withDocument(fake, () => {
+    const main = fake.element("main");
+    fake.document.body.append(main);
+    const gone = createModal({ id: "gone", className: "gone", card: "", focusables: () => [], onDismiss() {} });
+    gone.show();
+    assert.equal(main.inert, true);
+    // A teardown removes the overlay without calling hide().
+    fake.document.body.children.splice(fake.document.body.children.indexOf(gone.overlay), 1);
+    gone.overlay.isConnected = false;
+    const next = createModal({ id: "next", className: "next", card: "", focusables: () => [], onDismiss() {} });
+    next.show();
+    assert.equal(next.overlay.inert, false, "the new modal is live, not stuck under the removed one");
+    next.hide();
+    assert.equal(main.inert, false, "the page is restored once the last live modal closes");
+    assert.equal(main.hasAttribute("aria-hidden"), false);
+  });
+});
+
+test("Escape reported as keyCode 229 (an IME ending a composition) does not dismiss", () => {
+  const fake = fakeDocument();
+  withDocument(fake, () => {
+    let dismissed = 0;
+    const modal = createModal({ id: "ime229", className: "ime229", card: "", focusables: () => [], onDismiss: () => dismissed++ });
+    modal.overlay.fire("keydown", { key: "Escape", isComposing: false, keyCode: 229 });
+    assert.equal(dismissed, 0);
+    modal.overlay.fire("keydown", { key: "Escape", isComposing: false, keyCode: 27 });
+    assert.equal(dismissed, 1);
+  });
+});
+
 test("every bundled caller names its dialog", () => {
   const dir = join(root, "src/js");
   const unnamed = [];

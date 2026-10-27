@@ -30,6 +30,11 @@ const changed = new Map();
 // modal below it, unreachable; with nothing open it puts every element back
 // exactly as it was found.
 const applyInert = () => {
+  // An overlay removed from the page without hide() must not stay on top and
+  // leave everything else inert.
+  for (let i = openStack.length - 1; i >= 0; i--) {
+    if (openStack[i].overlay.isConnected === false) openStack.splice(i, 1);
+  }
   if (!openStack.length) {
     for (const [element, original] of changed) {
       element.inert = original.inert;
@@ -108,7 +113,9 @@ export const createModal = ({ id, className, card, focusables, onDismiss }) => {
     if (event.target === overlay) onDismiss();
   });
   overlay.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !event.isComposing) onDismiss();
+    // Some IMEs report the keydown that ends a composition as keyCode 229
+    // without isComposing; neither may cancel the dialog.
+    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) onDismiss();
   });
   return { overlay, show, hide, isOpen: () => !overlay.hidden };
 };
