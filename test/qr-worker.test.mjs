@@ -371,7 +371,11 @@ test("an error reply retires the worker and the next decode starts a fresh one",
 test("a release build ships neither the QR WASM module nor the QR worker source", () => {
   const out = mkdtempSync(join(tmpdir(), "entropylab-release-"));
   try {
-    execFileSync(process.execPath, [join(root, "scripts/build.mjs"), "--out", out], { cwd: root, stdio: "pipe" });
+    // CI checks the repository out shallow, where build-commit.mjs refuses to
+    // name a commit. The footer stamp is not under test: pointing GIT_DIR at
+    // a missing directory makes the build stamp "unknown" instead.
+    const env = { ...process.env, GIT_DIR: join(out, "no-git") };
+    execFileSync(process.execPath, [join(root, "scripts/build.mjs"), "--out", out], { cwd: root, env, stdio: "pipe" });
     const page = readFileSync(join(out, "entropylab.html"), "utf8");
     // Fingerprints that survive minification: identifiers such as
     // QR_WASM_B64 are renamed, but a slice of the base64 module and the
