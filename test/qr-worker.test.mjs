@@ -381,31 +381,35 @@ test("stop() waits for an idle worker's scrub acknowledgement", async () => {
   const [request] = worker.sent("decode");
   worker.emit({ type: "decoded", run: request.run, code: 0, payload: null });
   await first;
-  worker.scrubDelay = 0;
-  assert.deepEqual(await decoder.stop(), { scrubbed: true });
-  assert.equal(worker.terminated, true, "terminated after the acknowledgement");
+  // Acknowledge by hand, at once: no race between two real timers (a 0 ms
+  // acknowledgement against the 5 ms deadline lost once on a loaded CI runner).
+  const result = decoder.stop();
+  assert.equal(worker.sent("scrub").length, 1, "the worker is asked to scrub");
+  worker.emit({ type: "scrubbed" });
+  assert.deepEqual(await result, { scrubbed: true });
+  assert.equal(worker.terminated, true, "terminated on the acknowledgement");
 });
 
 test("stop() waits past scrubMs for a busy worker's acknowledgement", async () => {
-  const decoder = fakeDecoder({ timeoutMs: 60, scrubMs: 5 });
+  const decoder = fakeDecoder({ timeoutMs: 600, scrubMs: 5 });
   const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
   const worker = FakeWorker.instances[0];
-  worker.scrubDelay = 20;
+  worker.scrubDelay = 200;
   const result = decoder.stop();
   await assert.rejects(pending, { code: "STOPPED" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(worker.terminated, false, "not terminated at scrubMs");
   assert.deepEqual(await result, { scrubbed: true });
   assert.equal(worker.terminated, true, "terminated on the acknowledgement");
 });
 
 test("stop() terminates a hung decode at the timeout and reports scrubbed: false", async () => {
-  const decoder = fakeDecoder({ timeoutMs: 60, scrubMs: 5 });
+  const decoder = fakeDecoder({ timeoutMs: 600, scrubMs: 5 });
   const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
   const worker = FakeWorker.instances[0];
   const result = decoder.stop();
   await assert.rejects(pending, { code: "STOPPED" });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(worker.terminated, false, "not terminated at scrubMs");
   assert.deepEqual(await result, { scrubbed: false });
   assert.equal(worker.terminated, true, "terminated at the timeout");
@@ -436,8 +440,8 @@ test("a second stop() returns the same promise", async () => {
 
 test("retireQrDecoders() reports scrubbed: false when one worker never acknowledges", async () => {
   FakeWorker.instances = [];
-  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 60, scrubMs: 5 });
-  const b = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 60, scrubMs: 5 });
+  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 600, scrubMs: 5 });
+  const b = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 600, scrubMs: 5 });
   const pa = a.decode(new Uint8Array(21 * 21), 21, 21);
   const pb = b.decode(new Uint8Array(21 * 21), 21, 21);
   const wa = FakeWorker.instances[0];
@@ -453,8 +457,8 @@ test("retireQrDecoders() reports scrubbed: false when one worker never acknowled
 
 test("retireQrDecoders() reports scrubbed: true when every worker acknowledges", async () => {
   FakeWorker.instances = [];
-  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 60, scrubMs: 5 });
-  const b = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 60, scrubMs: 5 });
+  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 600, scrubMs: 5 });
+  const b = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 600, scrubMs: 5 });
   const pa = a.decode(new Uint8Array(21 * 21), 21, 21);
   const pb = b.decode(new Uint8Array(21 * 21), 21, 21);
   const wa = FakeWorker.instances[0];
@@ -474,14 +478,15 @@ test("retireQrDecoders() resolves scrubbed: true when there are no decoders", as
 });
 
 test("after a decode times out, the retiring worker gets the long deadline and a late acknowledgement counts", async () => {
-  const decoder = fakeDecoder({ timeoutMs: 60, scrubMs: 5 });
+  const decoder = fakeDecoder({ timeoutMs: 600, scrubMs: 5 });
   const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
   const worker = FakeWorker.instances[0];
-  worker.scrubDelay = 20;
+  worker.scrubDelay = 200;
   await assert.rejects(pending, { code: "TIMEOUT" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(worker.terminated, false, "not terminated at scrubMs");
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  // The acknowledgement comes at 200 ms, well before the 600 ms deadline.
+  await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(worker.terminated, true, "terminated on the late acknowledgement");
   decoder.stop();
 });
@@ -508,7 +513,7 @@ test("a release build ships neither the QR WASM module nor the QR worker source"
 
 test("retireQrDecoders() also waits for a decoder stopped earlier whose worker is still scrubbing", async () => {
   FakeWorker.instances = [];
-  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 60, scrubMs: 5 });
+  const a = createQrDecoder({ source: "x", wasmBytes: new Uint8Array([1]), Worker: FakeWorker, timeoutMs: 600, scrubMs: 5 });
   const pending = a.decode(new Uint8Array(21 * 21), 21, 21);
   const worker = FakeWorker.instances[0];
   const stopped = a.stop();
@@ -526,7 +531,7 @@ test("a decoder's stop() remembers a worker the watchdog cut off unscrubbed", as
   const worker = FakeWorker.instances[0];
   await assert.rejects(pending, { code: "TIMEOUT" });
   // The watchdog gave the busy worker the long deadline; it never answers.
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(worker.terminated, true);
   assert.deepEqual(await decoder.stop(), { scrubbed: false });
 });
@@ -543,15 +548,15 @@ test("retireQrDecoders() reports an earlier failed scrub once, then starts clean
 });
 
 test("a stale reply does not make a busy worker look idle", async () => {
-  const decoder = fakeDecoder({ timeoutMs: 60, scrubMs: 5 });
+  const decoder = fakeDecoder({ timeoutMs: 600, scrubMs: 5 });
   const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
   const worker = FakeWorker.instances[0];
   const [request] = worker.sent("decode");
   worker.emit({ type: "decoded", run: request.run + 100, code: -1, payload: null });
-  worker.scrubDelay = 20;
+  worker.scrubDelay = 200;
   const result = decoder.stop();
   await assert.rejects(pending, { code: "STOPPED" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(worker.terminated, false, "still treated as busy: not terminated at scrubMs");
   assert.deepEqual(await result, { scrubbed: true });
 });
