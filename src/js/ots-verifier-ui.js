@@ -4,14 +4,11 @@
 //   parseHexInput(s)        - hex string → Uint8Array (handles "0x", whitespace)
 //   formatResult(out)       - verifier result → {tone, headline, body}
 //   formatError(err)        - Error → {tone, headline, body}
-//   pathSummaryHtml(path)   - one path → HTML string (escaped)
-//   pathSummaryListHtml(paths) - list of paths → combined HTML string
 //
 // DOM wiring:
-//   initOtsVerifier(rootEl) - fills the mount point with the UI and
-//                             wires the verify button to call verifyOts().
-//                             If rootEl is omitted, looks up
-//                             #ots-verifier-mount via getElementById.
+//   initOtsVerifier(rootEl, { createVerifier }) - wires the fixed ids in the
+//                             Verify card to a verifier worker. If rootEl is
+//                             omitted, looks up the ids via getElementById.
 //
 // Result panel MUST show the issue-required warning for MATCHES:
 //   "Header supplied by user. Bitcoin chain membership and proof-of-work
@@ -20,15 +17,15 @@
 // mistake pending attestations for Bitcoin-anchored timestamps.
 
 import { OTS_LIMITS } from "./ots-parser.js";
-import { verifyOts } from "./ots-verifier.js";
+import { createOtsVerifier } from "./ots-verify-client.js";
 
 // ---- pure helpers --------------------------------------------------------
 
 export function parseHexInput(s) {
   if (typeof s !== "string") throw new TypeError("hex input must be a string");
-  // Strip a single optional "0x"/"0X" prefix and any whitespace (spaces,
-  // tabs, newlines, commas).
-  const trimmed = s.replace(/^0x/i, "").replace(/[\s,]+/g, "").toLowerCase();
+  // Trim, then strip a single optional "0x"/"0X" prefix and any whitespace
+  // (spaces, tabs, newlines, commas).
+  const trimmed = s.trim().replace(/^0x/i, "").replace(/[\s,]+/g, "").toLowerCase();
   if (trimmed.length === 0) throw new RangeError("hex input is empty");
   if (trimmed.length % 2 !== 0) {
     throw new RangeError(`hex input must have an even number of characters; got ${trimmed.length}`);
@@ -139,37 +136,7 @@ export function formatError(err) {
   };
 }
 
-const escapeHtml = (s) =>
-  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-
 const bytesToHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-
-export function pathSummaryHtml(path) {
-  const ops = path.opNames && path.opNames.length ? escapeHtml(path.opNames.join(" → ")) : "(no ops)";
-  let row = `<div class="ots-path-row">`;
-  row += `<span class="ots-outcome ots-outcome-${escapeHtml(path.outcome)}">${escapeHtml(path.outcome)}</span> `;
-  row += `<code class="ots-ops">${ops}</code>`;
-  if (path.attestation) {
-    const uri = path.attestation.uriHex ? ` URI ${escapeHtml(path.attestation.uriHex.slice(0, 16))}…` : "";
-    row += ` <span class="ots-att">${escapeHtml(path.attestation.type)}${uri}</span>`;
-  }
-  if (path.finalDigest) {
-    const hex = bytesToHex(path.finalDigest);
-    const preview = hex.length > 16 ? `${hex.slice(0, 16)}…` : hex;
-    row += ` <code class="ots-digest">${escapeHtml(preview)}</code>`;
-  }
-  if (path.detail) row += ` <span class="ots-detail">${escapeHtml(path.detail)}</span>`;
-  if (path.length !== undefined) row += ` <span class="ots-length">${path.length}/${path.limit} bytes</span>`;
-  row += `</div>`;
-  return row;
-}
-
-export function pathSummaryListHtml(paths) {
-  if (!paths || paths.length === 0) {
-    return '<p class="muted">No attestation paths in this proof.</p>';
-  }
-  return paths.map(pathSummaryHtml).join("\n");
-}
 
 // ---- DOM wiring -----------------------------------------------------------
 
@@ -241,6 +208,17 @@ async function readFileBytes(input, limit, label) {
     throw new RangeError(`${label} is ${file.size} bytes, limit ${limit}`);
   }
   return new Uint8Array(await file.arrayBuffer());
+}
+
+// A pasted proof is refused before parsing when it is longer than the file
+// limit allows, with the same error an oversized proof file gets.
+function parsePastedProof(value) {
+  if (typeof value === "string" && value.length > 4 * OTS_LIMITS.MAX_PROOF_BYTES) {
+    throw new RangeError(
+      `Proof file is ${Math.floor(value.length / 2)} bytes, limit ${OTS_LIMITS.MAX_PROOF_BYTES}`,
+    );
+  }
+  return parseHexInput(value);
 }
 
 // nTime of a Bitcoin block header: uint32 little-endian at byte 68 (#315).
@@ -367,7 +345,10 @@ export function renderOtsResult(doc, resultEl, out, options = {}) {
     resultEl.appendChild(p);
   }
 
-  if (options.originalFileProvided === false) {
+  // A file was supplied but never compared: its hash op is one the verifier
+  // cannot compute, or it is over the verifier's size limit.
+  const originalUnchecked = ["unsupported-hash", "too-large"].includes(out && out.original && out.original.status);
+  if (options.originalFileProvided === false || originalUnchecked) {
     const p = doc.createElement("p");
     p.setAttribute("data-ots-original-file", "not-checked");
     p.textContent = "Original file not checked";
@@ -418,12 +399,13 @@ function clearResult(resultEl) {
   resultEl.removeAttribute("data-ots-limit");
 }
 
-export function initOtsVerifier(root) {
+export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {}) {
   const doc = resolveDocument(root);
   if (!doc) throw new TypeError("initOtsVerifier: document is required");
 
   const els = {};
   for (const id of WIRING_IDS) els[id] = requireElement(doc, id);
+  const verifier = createVerifier();
 
   const proofFile = els["ots-proof-file"];
   const proofHex = els["ots-proof-hex"];
@@ -434,12 +416,21 @@ export function initOtsVerifier(root) {
   const clearBtn = els["ots-clear"];
   const resultEl = els["ots-result"];
 
+  // Each Verify click takes a new run number. An edit or Clear moves the
+  // counter on and stops the verifier, so a stale run renders nothing.
+  let runId = 0;
+  const cancelRun = () => {
+    runId += 1;
+    verifier.stop();
+  };
+
   const proofChoose = doc.getElementById("ots-proof-choose");
   if (proofChoose && typeof proofChoose.addEventListener === "function") {
     proofChoose.addEventListener("click", () => proofFile.click());
   }
 
   clearBtn.addEventListener("click", () => {
+    cancelRun();
     proofHex.value = "";
     headerHex.value = "";
     expectedDigest.value = "";
@@ -449,29 +440,42 @@ export function initOtsVerifier(root) {
   });
 
   for (const el of [proofHex, headerHex, expectedDigest, proofFile, originalFile]) {
-    el.addEventListener("input", () => clearResult(resultEl));
-    el.addEventListener("change", () => clearResult(resultEl));
+    el.addEventListener("input", () => {
+      cancelRun();
+      clearResult(resultEl);
+    });
+    el.addEventListener("change", () => {
+      cancelRun();
+      clearResult(resultEl);
+    });
   }
 
   verifyBtn.addEventListener("click", async () => {
+    const run = ++runId;
     verifyBtn.disabled = true;
     try {
       const fileBytes = await readFileBytes(proofFile, OTS_LIMITS.MAX_PROOF_BYTES, "Proof file");
-      const proofBytes = fileBytes || parseHexInput(proofHex.value);
+      if (run !== runId) return;
+      const proofBytes = fileBytes || parsePastedProof(proofHex.value);
+      const originalFileBytes = await readFileBytes(originalFile, OTS_LIMITS.MAX_ORIGINAL_BYTES, "Original file");
+      if (run !== runId) return;
       const headerBytes = readOptionalHex(headerHex.value, [80], "Bitcoin header");
       const expectedBytes = readOptionalHex(expectedDigest.value, [32, 20], "Expected initial digest");
-      const originalFileBytes = await readFileBytes(originalFile, OTS_LIMITS.MAX_ORIGINAL_BYTES, "Original file");
-      const out = await verifyOts({
+      const out = await verifier.verify({
         proofBytes,
         header: headerBytes,
         expectedDigest: expectedBytes,
         originalFileBytes,
       });
+      if (run !== runId) return;
       renderOtsResult(doc, resultEl, out, {
         headerBytes,
         originalFileProvided: originalFileBytes !== undefined,
       });
     } catch (err) {
+      // A cancelled run was cleared on purpose: render nothing.
+      if (err && err.code === "CANCELLED") return;
+      if (run !== runId) return;
       renderOtsError(doc, resultEl, err);
     } finally {
       verifyBtn.disabled = false;

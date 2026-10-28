@@ -234,6 +234,36 @@ test("renderOtsResult: original file not checked is reflected", () => {
   assert.equal(original[0].getAttribute("data-ots-original-file"), "not-checked");
 });
 
+test("renderOtsResult: an unsupported original-file hash is reported as not checked", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(
+    doc,
+    resultEl,
+    { result: "MATCHES_SUPPLIED_HEADER", paths: [path()], original: { status: "unsupported-hash" } },
+    { originalFileProvided: true },
+  );
+  const unsupported = findAll(resultEl, "data-ots-original-file");
+  assert.equal(unsupported.length, 1);
+  assert.equal(unsupported[0].getAttribute("data-ots-original-file"), "not-checked");
+
+  renderOtsResult(
+    doc,
+    resultEl,
+    { result: "MATCHES_SUPPLIED_HEADER", paths: [path()], original: { status: "too-large" } },
+    { originalFileProvided: true },
+  );
+  assert.equal(findAll(resultEl, "data-ots-original-file").length, 1, "an oversized original is not checked either");
+
+  renderOtsResult(
+    doc,
+    resultEl,
+    { result: "MATCHES_SUPPLIED_HEADER", paths: [path()], original: { status: "matches" } },
+    { originalFileProvided: true },
+  );
+  assert.equal(findAll(resultEl, "data-ots-original-file").length, 0);
+});
+
 // ---- escaping -------------------------------------------------------------
 
 test("renderOtsResult: path detail is rendered as text, not HTML", () => {
@@ -391,6 +421,91 @@ test("initOtsVerifier: an oversized proof or original file is refused unread", a
     assert.equal(read, false, `${id} is not read`);
     assert.equal(resultEl.getAttribute("data-ots-verdict"), "ERROR");
   }
+});
+
+test("initOtsVerifier: an oversized pasted proof is refused before parsing", async () => {
+  const doc = makeDoc();
+  let verified = false;
+  const verifier = {
+    verify: () => {
+      verified = true;
+      return Promise.resolve({ result: "PENDING", paths: [] });
+    },
+    stop: () => {},
+  };
+  initOtsVerifier(doc, { createVerifier: () => verifier });
+  doc._elements.get("ots-proof-hex").value = "00".repeat(2 * 1048576 + 1);
+  const resultEl = await clickVerify(doc);
+  assert.equal(verified, false, "the verifier is never called");
+  assert.equal(resultEl.getAttribute("data-ots-verdict"), "ERROR");
+  assert.ok(resultEl.textContent.includes("1048576"), "the size limit is reported");
+});
+
+test("initOtsVerifier: Clear during a run calls stop() and leaves no result", async () => {
+  const doc = makeDoc();
+  let stopped = 0;
+  let rejectRun;
+  let started;
+  const running = new Promise((resolve) => {
+    started = resolve;
+  });
+  const verifier = {
+    verify: () => {
+      started();
+      return new Promise((_, reject) => {
+        rejectRun = reject;
+      });
+    },
+    stop: () => {
+      stopped += 1;
+    },
+  };
+  initOtsVerifier(doc, { createVerifier: () => verifier });
+  doc._elements.get("ots-proof-hex").value = "00";
+  const [run] = doc._elements.get("ots-verify").listeners.get("click");
+  const pending = run({ type: "click" });
+  await running;
+  doc._elements.get("ots-clear").click();
+  assert.equal(stopped, 1, "Clear stopped the running verifier");
+  rejectRun(Object.assign(new Error("cancelled"), { code: "CANCELLED" }));
+  await pending;
+  const resultEl = doc._elements.get("ots-result");
+  assert.equal(resultEl.getAttribute("data-ots-verdict"), null);
+  assert.equal(resultEl.hidden, true);
+  assert.equal(resultEl.childNodes.length, 0);
+});
+
+test("initOtsVerifier: an edit during a run cancels it and renders nothing", async () => {
+  const doc = makeDoc();
+  let stopped = 0;
+  let resolveRun;
+  let started;
+  const running = new Promise((resolve) => {
+    started = resolve;
+  });
+  const verifier = {
+    verify: () => {
+      started();
+      return new Promise((resolve) => {
+        resolveRun = resolve;
+      });
+    },
+    stop: () => {
+      stopped += 1;
+    },
+  };
+  initOtsVerifier(doc, { createVerifier: () => verifier });
+  doc._elements.get("ots-proof-hex").value = "00";
+  const [run] = doc._elements.get("ots-verify").listeners.get("click");
+  const pending = run({ type: "click" });
+  await running;
+  doc._elements.get("ots-header-hex").dispatchEvent("input");
+  assert.equal(stopped, 1, "the edit stopped the running verifier");
+  resolveRun({ result: "MATCHES_SUPPLIED_HEADER", paths: [] });
+  await pending;
+  const resultEl = doc._elements.get("ots-result");
+  assert.equal(resultEl.getAttribute("data-ots-verdict"), null);
+  assert.equal(resultEl.hidden, true);
 });
 
 // Review on the tests round (Muse): the fake DOM cannot parse HTML, so pin
