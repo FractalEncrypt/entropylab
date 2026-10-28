@@ -3,7 +3,8 @@
 // touches the DOM. P3 wires retireQrDecoders() into End Session and pagehide.
 //
 // Security contract: a frame is decoded only inside the terminable worker;
-// the frame and the worker's WASM buffers are zeroed after every decode; a
+// the frame and the worker's WASM buffers are zeroed after every decode, and
+// a frame refused here or in the worker is zeroed too; a
 // stale or malformed reply never resolves a decode; stop() scrubs the
 // worker's WASM memory before terminating it.
 const MIN_DIM = 21;
@@ -13,6 +14,16 @@ const MAX_PIXELS = 4_194_304;
 const decoders = new Set();
 
 const failure = (code) => Object.assign(new Error(code), { code });
+
+// A frame this wrapper refuses is zeroed here, as the worker zeroes the frames
+// it refuses: it can hold a photographed seed QR.
+const zeroFrame = (gray) => {
+  try {
+    if (ArrayBuffer.isView(gray)) new Uint8Array(gray.buffer, gray.byteOffset, gray.byteLength).fill(0);
+  } catch {
+    // A detached frame holds nothing to zero.
+  }
+};
 
 export function createQrDecoder({
   // The build defines __QR_WORKER_SOURCE__ (preview only); the typeof guard
@@ -81,6 +92,10 @@ export function createQrDecoder({
       pending = null;
       clearTimeout(timer);
       const code = typeof data.error?.code === "string" ? data.error.code : "BAD_MESSAGE";
+      // The wrapper only sends checked frames, so an error reply means the
+      // worker's state is off (after DECODE_FAILED it has dropped its WASM
+      // instance): retire it, and the next decode starts a fresh one.
+      retire();
       return reject(failure(code));
     }
     zeroPayload(data);
@@ -129,17 +144,22 @@ export function createQrDecoder({
   };
 
   const decode = (gray, width, height) => {
-    if (stoppedFlag) return Promise.reject(failure("STOPPED"));
-    if (!(gray instanceof Uint8Array)) return Promise.reject(failure("BAD_ARGS"));
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width < MIN_DIM || height < MIN_DIM) return Promise.reject(failure("BAD_ARGS"));
-    if (width > MAX_DIM || height > MAX_DIM || width * height > MAX_PIXELS) return Promise.reject(failure("TOO_LARGE"));
-    if (gray.byteLength !== width * height) return Promise.reject(failure("BAD_ARGS"));
-    if (gray.byteOffset !== 0 || gray.byteLength !== gray.buffer.byteLength) return Promise.reject(failure("BAD_ARGS"));
-    if (pending) return Promise.reject(failure("BUSY"));
+    const refuse = (code) => {
+      zeroFrame(gray);
+      return Promise.reject(failure(code));
+    };
+    if (stoppedFlag) return refuse("STOPPED");
+    if (!(gray instanceof Uint8Array)) return refuse("BAD_ARGS");
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < MIN_DIM || height < MIN_DIM) return refuse("BAD_ARGS");
+    if (width > MAX_DIM || height > MAX_DIM || width * height > MAX_PIXELS) return refuse("TOO_LARGE");
+    if (gray.byteLength !== width * height) return refuse("BAD_ARGS");
+    if (gray.byteOffset !== 0 || gray.byteLength !== gray.buffer.byteLength) return refuse("BAD_ARGS");
+    if (pending) return refuse("BUSY");
     let entry;
     try {
       entry = spawned ?? spawn();
     } catch (error) {
+      zeroFrame(gray);
       return Promise.reject(error);
     }
     const run = nextRun++;
@@ -154,8 +174,11 @@ export function createQrDecoder({
       try {
         entry.worker.postMessage({ type: "decode", run, width, height, gray: gray.buffer }, [gray.buffer]);
       } catch (error) {
+        // The transfer failed (a SharedArrayBuffer frame, say), so the frame
+        // is still here: zero it.
         clearTimeout(timer);
         pending = null;
+        zeroFrame(gray);
         reject(error);
       }
     });

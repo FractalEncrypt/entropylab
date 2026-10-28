@@ -74,7 +74,7 @@ Use pinned Node 22.23.4/npm 11.17.0 and npm ci. Preview command:
 `node scripts/build.mjs --preview --out ../preview`.
 Serve on loopback or another secure local browser context. No runtime downloads.
 Capture now uses the shared quircs worker and `createQrDecoder` interface from
-PR #1272, pinned locally at f7d2a5d6772af5c39ac1caac1e5df072749f5ccd.
+PR #1272, pinned locally at d08a2d3fd9a0b43844d9bf358f106766d433c1bf.
 That dependency is still under upstream review. The camera adapter only converts
 RGBA to grayscale and consumes/wipes returned UTF-8 payloads; it does not implement
 a competing worker. Camera stop, restart and disconnect retire decoding. Frames
