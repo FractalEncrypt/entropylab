@@ -518,3 +518,40 @@ test("retireQrDecoders() also waits for a decoder stopped earlier whose worker i
   assert.deepEqual(all, { scrubbed: false });
   assert.deepEqual(await stopped, { scrubbed: false });
 });
+
+// Review on 5accf9c3 (Kimi K3, MiniMax, GLM 5.3, DeepSeek V4.1 red team).
+test("a decoder's stop() remembers a worker the watchdog cut off unscrubbed", async () => {
+  const decoder = fakeDecoder({ timeoutMs: 30, scrubMs: 5 });
+  const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+  const worker = FakeWorker.instances[0];
+  await assert.rejects(pending, { code: "TIMEOUT" });
+  // The watchdog gave the busy worker the long deadline; it never answers.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(worker.terminated, true);
+  assert.deepEqual(await decoder.stop(), { scrubbed: false });
+});
+
+test("retireQrDecoders() reports an earlier failed scrub once, then starts clean", async () => {
+  await retireQrDecoders();
+  const decoder = fakeDecoder({ timeoutMs: 30, scrubMs: 5 });
+  const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+  const result = decoder.stop();
+  await assert.rejects(pending, { code: "STOPPED" });
+  assert.deepEqual(await result, { scrubbed: false });
+  assert.deepEqual(await retireQrDecoders(), { scrubbed: false }, "the decoder left the registry, but its failed scrub is reported");
+  assert.deepEqual(await retireQrDecoders(), { scrubbed: true }, "reported once");
+});
+
+test("a stale reply does not make a busy worker look idle", async () => {
+  const decoder = fakeDecoder({ timeoutMs: 60, scrubMs: 5 });
+  const pending = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+  const worker = FakeWorker.instances[0];
+  const [request] = worker.sent("decode");
+  worker.emit({ type: "decoded", run: request.run + 100, code: -1, payload: null });
+  worker.scrubDelay = 20;
+  const result = decoder.stop();
+  await assert.rejects(pending, { code: "STOPPED" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(worker.terminated, false, "still treated as busy: not terminated at scrubMs");
+  assert.deepEqual(await result, { scrubbed: true });
+});

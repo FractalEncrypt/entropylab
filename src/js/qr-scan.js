@@ -10,7 +10,10 @@
 // decode timeout while a decode is running. A worker that does not answer by
 // then (a hung decode) is terminated without the overwrite, and stop()
 // reports scrubbed: false. Termination frees the memory but does not
-// overwrite it.
+// overwrite it. A failed scrub is not forgotten: a decoder's stop() reports
+// false if any of its workers was cut off unscrubbed, including one retired
+// earlier by the watchdog or an error, and retireQrDecoders() reports false
+// if any worker was, since it last reported.
 const MIN_DIM = 21;
 const MAX_DIM = 4096;
 const MAX_PIXELS = 4_194_304;
@@ -19,6 +22,9 @@ const decoders = new Set();
 // Stops whose workers are still scrubbing: a stopped decoder leaves the
 // registry at once, so retireQrDecoders() waits for these too.
 const retiringStops = new Set();
+// A worker terminated without acknowledging its scrub since the last
+// retireQrDecoders() report.
+let unscrubbedSinceReport = false;
 
 const failure = (code) => Object.assign(new Error(code), { code });
 
@@ -50,6 +56,7 @@ export function createQrDecoder({
   let nextRun = 1;
   let stoppedFlag = false;
   let stopPromise = null;
+  let failedScrub = false;
   const stopping = new Set();
 
   const terminate = (entry, scrubbed) => {
@@ -58,6 +65,10 @@ export function createQrDecoder({
     clearTimeout(entry.scrubTimer);
     entry.worker.terminate();
     if (entry.url) URL.revokeObjectURL(entry.url);
+    if (!scrubbed) {
+      failedScrub = true;
+      unscrubbedSinceReport = true;
+    }
     entry.resolve(scrubbed);
   };
 
@@ -87,7 +98,9 @@ export function createQrDecoder({
   };
 
   const settle = (entry, data) => {
-    if (data?.type === "decoded" || data?.type === "error") entry.busy = false;
+    // Only the reply to the decode in flight ends it: a stale reply must not
+    // make a busy worker look idle and shorten its scrub deadline.
+    if ((data?.type === "decoded" || data?.type === "error") && data.run === entry.busyRun) entry.busy = false;
     if (entry !== spawned || !pending || data?.run !== pending.run) {
       zeroPayload(data);
       return;
@@ -191,6 +204,7 @@ export function createQrDecoder({
       try {
         entry.worker.postMessage({ type: "decode", run, width, height, gray: gray.buffer }, [gray.buffer]);
         entry.busy = true;
+        entry.busyRun = run;
       } catch (error) {
         // The transfer failed (a SharedArrayBuffer frame, say), so the frame
         // is still here: zero it.
@@ -216,7 +230,7 @@ export function createQrDecoder({
     const fresh = retire();
     const promises = retiring.map((entry) => entry.retired);
     if (fresh) promises.push(fresh);
-    stopPromise = Promise.all(promises).then((results) => ({ scrubbed: results.every(Boolean) }));
+    stopPromise = Promise.all(promises).then((results) => ({ scrubbed: results.every(Boolean) && !failedScrub }));
     const settled = stopPromise;
     retiringStops.add(settled);
     settled.then(() => retiringStops.delete(settled));
@@ -231,7 +245,9 @@ export function createQrDecoder({
 export function retireQrDecoders() {
   const earlier = [...retiringStops];
   const stops = [...decoders].map((decoder) => decoder.stop());
-  return Promise.all([...earlier, ...stops]).then((results) => ({
-    scrubbed: results.every((result) => result.scrubbed),
-  }));
+  return Promise.all([...earlier, ...stops]).then((results) => {
+    const scrubbed = results.every((result) => result.scrubbed) && !unscrubbedSinceReport;
+    unscrubbedSinceReport = false;
+    return { scrubbed };
+  });
 }
