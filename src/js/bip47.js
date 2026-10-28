@@ -367,26 +367,46 @@ const isPoint33 = (bytes) => {
   if (!bytes || bytes.length !== 33 || (bytes[0] !== 2 && bytes[0] !== 3)) return false;
   try { Point.fromBytes(bytes); return true; } catch { return false; }
 };
+// A public key as found in a legacy scriptSig: 33-byte compressed or 65-byte
+// uncompressed (prefix 0x04). BIP-47 does not require the designated input's
+// key to be compressed; only the key inside a payment code must be.
+const parseLegacyPubkey = (bytes) => {
+  if (!bytes || (bytes.length !== 33 && bytes.length !== 65)) return null;
+  if (bytes.length === 33 && bytes[0] !== 2 && bytes[0] !== 3) return null;
+  if (bytes.length === 65 && bytes[0] !== 4) return null;
+  try {
+    const point = Point.fromBytes(bytes);
+    return { pubkey: bytes, compressedPubkey: point.toBytes(true) };
+  } catch { return null; }
+};
 
 // The designated input is the first input that exposes a public key. BIP-47
-// reads keys from P2PKH scriptSigs; the two witness forms are common
-// practice but not in the BIP text. Unrecognized inputs are skipped, never
-// guessed at. A manually supplied key is labelled manual-unverified.
-export function extractDesignatedPubKey(tx, manualPubkey = null) {
+// reads keys from P2PKH scriptSigs (compressed or uncompressed); the two
+// witness forms are common practice but not in the BIP text and stay
+// compressed-only. Unrecognized inputs are skipped, never guessed at. A
+// manually supplied key must name its input and is labelled manual-unverified.
+export function extractDesignatedPubKey(tx, manualPubkey = null, manualInput = null) {
   if (manualPubkey !== null) {
-    const pubkey = typeof manualPubkey === "string" ? hexToBytes(manualPubkey.trim()) : manualPubkey;
-    if (!isPoint33(pubkey)) return { status: "manual-invalid", pubkey: null, inputIndex: null, kind: "manual-unverified" };
-    return { status: "found", pubkey, inputIndex: null, kind: "manual-unverified" };
+    if (!Number.isInteger(manualInput) || manualInput < 0 || manualInput >= (tx.inputs || []).length) {
+      throw new Bip47Error("BAD_INDEX");
+    }
+    // A malformed hex string is an invalid manual key, not a crash.
+    let pubkey = null;
+    try { pubkey = typeof manualPubkey === "string" ? hexToBytes(manualPubkey.trim()) : manualPubkey; } catch { pubkey = null; }
+    const parsed = parseLegacyPubkey(pubkey);
+    if (!parsed) return { status: "manual-invalid", pubkey: null, inputIndex: null, kind: "manual-unverified" };
+    return { status: "found", pubkey: parsed.pubkey, compressedPubkey: parsed.compressedPubkey, inputIndex: manualInput, kind: "manual-unverified" };
   }
   for (const [inputIndex, input] of (tx.inputs || []).entries()) {
     const scriptSig = input.scriptSig || new Uint8Array();
     const pushes = scriptPushes(scriptSig);
     const witness = input.witness || [];
-    if (pushes.length === 2 && looksLikeDerSig(pushes[0]) && isPoint33(pushes[1])) {
-      return { status: "found", pubkey: pushes[1], inputIndex, kind: "p2pkh" };
+    if (pushes.length === 2 && looksLikeDerSig(pushes[0])) {
+      const parsed = parseLegacyPubkey(pushes[1]);
+      if (parsed) return { status: "found", pubkey: parsed.pubkey, compressedPubkey: parsed.compressedPubkey, inputIndex, kind: "p2pkh" };
     }
     if (scriptSig.length === 0 && witness.length === 2 && isPoint33(witness[1])) {
-      return { status: "found", pubkey: witness[1], inputIndex, kind: "p2wpkh" };
+      return { status: "found", pubkey: witness[1], compressedPubkey: witness[1], inputIndex, kind: "p2wpkh" };
     }
     if (
       pushes.length === 1 && pushes[0].length === 22 && pushes[0][0] === 0x00 && pushes[0][1] === 0x14 &&
@@ -394,26 +414,39 @@ export function extractDesignatedPubKey(tx, manualPubkey = null) {
     ) {
       const program = pushes[0].slice(2);
       if (equalBytes(hash160(witness[1]), program)) {
-        return { status: "found", pubkey: witness[1], inputIndex, kind: "p2sh-p2wpkh" };
+        return { status: "found", pubkey: witness[1], compressedPubkey: witness[1], inputIndex, kind: "p2sh-p2wpkh" };
       }
     }
   }
-  return { status: "manual-needed", pubkey: null, inputIndex: 0, kind: "manual-unverified" };
+  return { status: "manual-needed", pubkey: null, inputIndex: null, kind: "manual-unverified" };
 }
 
 // The notification payload: the OP_RETURN output carrying one 80-byte push.
+// OP_RETURN must be followed by exactly that push and nothing else: an extra
+// push, a stray opcode or a truncated push is refused, not filtered out
+// (scriptPushes skips opcodes and stops at a truncated push, so the push must
+// also account for every byte).
 export function bip47NotificationPayload(tx) {
   const opReturns = (tx.outputs || []).filter((output) => output.script instanceof Uint8Array && output.script[0] === 0x6a);
   if (opReturns.length !== 1) throw new Bip47Error("AMBIGUOUS_PAYLOAD");
-  const pushes = scriptPushes(opReturns[0].script).filter((push) => push.length === PAYMENT_CODE_PAYLOAD_LENGTH);
-  if (pushes.length !== 1) throw new Bip47Error("AMBIGUOUS_PAYLOAD");
+  const rest = opReturns[0].script.subarray(1);
+  const headerLength = rest[0] === 0x4c ? 2 : rest[0] === 0x4d ? 3 : rest[0] === 0x4e ? 5 : 0;
+  const pushes = scriptPushes(rest);
+  if (!headerLength || rest.length !== headerLength + PAYMENT_CODE_PAYLOAD_LENGTH || pushes.length !== 1 || pushes[0].length !== PAYMENT_CODE_PAYLOAD_LENGTH) {
+    throw new Bip47Error("AMBIGUOUS_PAYLOAD");
+  }
   return pushes[0];
 }
 
+// `codeRecovered` means the unblinded bytes form a derivable payment code; it
+// does not show the key was the intended recipient's. Pair it with
+// `hasOutputToNotificationAddress` (the transaction pays this key's
+// notification address), and treat a code with
+// `hasOutputToNotificationAddress: false` as unverified.
 // Decode-only: parse the tx, find the 80-byte OP_RETURN payload, unblind it
 // with our notification key, and validate the recovered payment code. Never
 // builds, signs, or broadcasts anything.
-export function bip47DecodeNotificationTx(txHex, notificationPriv, { designatedPub = null } = {}) {
+export function bip47DecodeNotificationTx(txHex, notificationPriv, { designatedPub = null, designatedInput = null } = {}) {
   const bytes = typeof txHex === "string" ? hexToBytes(txHex.trim()) : txHex;
   const tx = parseRawTx(bytes);
   const payload = bip47NotificationPayload(tx);
@@ -421,11 +454,12 @@ export function bip47DecodeNotificationTx(txHex, notificationPriv, { designatedP
   if (!(notificationPriv instanceof Uint8Array) || notificationPriv.length !== 32) throw new Error("Notification-tx decode needs the 32-byte notification private key.");
   const b = bytesToBig(notificationPriv);
   if (b === 0n || b >= ORDER) throw new Error("Notification private key is out of the secp256k1 range.");
-  const designated = extractDesignatedPubKey(tx, designatedPub);
+  const designated = extractDesignatedPubKey(tx, designatedPub, designatedInput);
   if (designated.status === "manual-invalid") return { status: "manual-invalid", inputIndex: null, kind: "manual-unverified" };
   if (designated.status === "manual-needed") return { status: "manual-needed", inputIndex: designated.inputIndex, kind: "manual-unverified" };
   const publicKey = designated.pubkey;
-  const inputIndex = designated.inputIndex === null ? 0 : designated.inputIndex;
+  const compressedPubkey = designated.compressedPubkey || publicKey;
+  const inputIndex = designated.inputIndex;
   const input = tx.inputs[inputIndex];
   if (!input) throw new Error("Notification transaction has no designated input.");
   const outpoint = bip47InputOutpoint(input);
@@ -433,7 +467,7 @@ export function bip47DecodeNotificationTx(txHex, notificationPriv, { designatedP
   let mask = null;
   let clear = null;
   try {
-    x = sharedSecretX(b, publicKey);
+    x = sharedSecretX(b, compressedPubkey);
     mask = bip47Mask(x, outpoint); // The HMAC key is the outpoint; the message is x(S).
     clear = unblindPayload(payload, mask);
     let decoded = null;
@@ -451,6 +485,7 @@ export function bip47DecodeNotificationTx(txHex, notificationPriv, { designatedP
       designatedVout: input.vout,
       codeRecovered,
       hasOutputToNotificationAddress,
+      recipientCheck: hasOutputToNotificationAddress ? "pays-this-notification-address" : "does-not-pay-this-notification-address",
       code: decoded ? encodePaymentCode(decoded.publicKey, decoded.chainCode, decoded.features, decoded.reservedBytes) : null,
       decoded,
     };

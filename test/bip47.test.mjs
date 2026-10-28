@@ -22,6 +22,7 @@ import {
   bip47AccountPath,
   bip47ChildPublic,
   bip47DecodeNotificationTx,
+  bip47InputOutpoint,
   bip47Mask,
   bip47NotificationAddress,
   bip47OutpointFromDisplay,
@@ -294,7 +295,7 @@ test("5. WIF -> designated pubkey; x(S); the HMAC argument order is settled; bli
   }
 });
 
-test("5. decoding the tx with Bob's root recovers Alice's code and flags the payment; Alice's root learns nothing", () => {
+test("5. decoding the tx with Bob's root recovers Alice's code and flags the payment; a different key does not recover Alice's code and its result does not pay that key's notification address", () => {
   const bobRoot = bobRootFromMnemonic();
   const bobNotifPriv = bobRoot.derive("m/47'/0'/0'/0").privateKey;
   try {
@@ -317,9 +318,31 @@ test("5. decoding the tx with Bob's root recovers Alice's code and flags the pay
     assert.notEqual(wrong.code, ALICE.code, "Alice's root must NOT recover Alice's code");
     assert.equal(wrong.codeRecovered, false);
     assert.equal(wrong.hasOutputToNotificationAddress, false);
+    assert.equal(wrong.recipientCheck, "does-not-pay-this-notification-address");
   } finally {
     aliceNotifPriv.fill(0);
   }
+});
+
+test("5b. a wrong notification key can still yield a derivable code, but it is not Alice's and does not pay that key's notification address", () => {
+  let found = null;
+  for (let i = 1; i <= 64; i++) {
+    const priv = new Uint8Array(32);
+    priv[31] = i;
+    try {
+      const result = bip47DecodeNotificationTx(NOTIFY.tx, priv);
+      if (result.codeRecovered) {
+        found = { i, result };
+        break;
+      }
+    } finally {
+      priv.fill(0);
+    }
+  }
+  assert.ok(found, "a small key produced a structurally derivable code within 64 tries");
+  assert.notEqual(found.result.code, ALICE.code);
+  assert.equal(found.result.hasOutputToNotificationAddress, false);
+  assert.equal(found.result.recipientCheck, "does-not-pay-this-notification-address");
 });
 
 // ── 6. Payment-code parsing ──────────────────────────────────────────────────
@@ -525,12 +548,113 @@ test("11. designated input: input 0 without a key and input 1 P2WPKH uses input 
     const mask0 = bip47Mask(x0, outpoint0);
     const blinded0 = xorPayload(hexToBytes(NOTIFY.plain), mask0);
     const tx3 = serializeTxLocal({ inputs: [manualInput], outputs: [opReturnOutput(blinded0)] });
-    const found3 = extractDesignatedPubKey(parseRawTx(tx3), pub);
+    const found3 = extractDesignatedPubKey(parseRawTx(tx3), pub, 0);
     assert.equal(found3.kind, "manual-unverified");
-    assert.equal(found3.inputIndex, null);
-    const result3 = bip47DecodeNotificationTx(bytesToHex(tx3), priv, { designatedPub: pub });
+    assert.equal(found3.inputIndex, 0);
+    const result3 = bip47DecodeNotificationTx(bytesToHex(tx3), priv, { designatedPub: pub, designatedInput: 0 });
     assert.equal(result3.kind, "manual-unverified");
     assert.equal(result3.code, ALICE.code);
+  } finally {
+    aPriv.fill(0);
+    priv.fill(0);
+  }
+});
+
+test("11b. a manual designated key must name its input; the mask uses that input's outpoint", () => {
+  const aPriv = wifToPriv(NOTIFY.wif);
+  const priv = bobNotifPrivFromMnemonic();
+  // The designated key is the public key of the input the sender spends (the
+  // vector WIF), not the sender's notification key.
+  const aPub = secp256k1.getPublicKey(aPriv, true);
+  try {
+    const sig = parseRawTx(hexToBytes(NOTIFY.tx)).inputs[0].scriptSig.slice(1, 73);
+    const input0 = { txid: hexToBytes("11".repeat(32)), vout: 0, sequence: 0xffffffff, scriptSig: new Uint8Array(), witness: [] };
+    const input1 = { txid: hexToBytes("22".repeat(32)), vout: 1, sequence: 0xffffffff, scriptSig: new Uint8Array(), witness: [sig, aPub] };
+    const outpoint1 = bip47InputOutpoint(input1);
+    const x1 = bip47SharedX(aPriv, hexToBytes(BOB.B[0]));
+    const mask1 = bip47Mask(x1, outpoint1);
+    const blinded1 = xorPayload(hexToBytes(NOTIFY.plain), mask1);
+    const tx = serializeTxLocal({
+      inputs: [input0, input1],
+      outputs: [
+        { amount: 10000n, script: p2pkhScript(hexToBytes(BOB.B[0])) },
+        opReturnOutput(blinded1),
+      ],
+    });
+    const txBytes = bytesToHex(tx);
+    const parsed = parseRawTx(tx);
+    const found = extractDesignatedPubKey(parsed, aPub, 1);
+    assert.equal(found.status, "found");
+    assert.equal(found.inputIndex, 1);
+    assert.equal(found.kind, "manual-unverified");
+    const result = bip47DecodeNotificationTx(txBytes, priv, { designatedPub: aPub, designatedInput: 1 });
+    assert.equal(result.status, "ok");
+    assert.equal(result.code, ALICE.code);
+    assert.equal(result.inputIndex, 1);
+    const wrong = bip47DecodeNotificationTx(txBytes, priv, { designatedPub: aPub, designatedInput: 0 });
+    assert.ok(wrong.status === "undecodable" || wrong.code !== ALICE.code);
+    assert.throws(() => bip47DecodeNotificationTx(txBytes, priv, { designatedPub: aPub }), (e) => e instanceof Bip47Error && e.code === "BAD_INDEX");
+    assert.throws(() => bip47DecodeNotificationTx(txBytes, priv, { designatedPub: aPub, designatedInput: 2 }), (e) => e instanceof Bip47Error && e.code === "BAD_INDEX");
+    const auto = extractDesignatedPubKey(parsed);
+    assert.equal(auto.inputIndex, 1);
+    assert.equal(auto.kind, "p2wpkh");
+    const autoResult = bip47DecodeNotificationTx(txBytes, priv);
+    assert.equal(autoResult.status, "ok");
+    assert.equal(autoResult.code, ALICE.code);
+    assert.equal(autoResult.inputIndex, 1);
+  } finally {
+    aPriv.fill(0);
+    priv.fill(0);
+  }
+});
+
+test("11c. an uncompressed P2PKH key is accepted and normalised for ECDH; a later compressed key is not selected", () => {
+  const aPriv = wifToPriv(NOTIFY.wif);
+  const priv = bobNotifPrivFromMnemonic();
+  try {
+    // The designated input's own key (the vector WIF), uncompressed.
+    const uncompressed = secp256k1.getPublicKey(aPriv, false);
+    assert.equal(uncompressed.length, 65);
+    const sig = parseRawTx(hexToBytes(NOTIFY.tx)).inputs[0].scriptSig.slice(1, 73);
+    const scriptSig = Uint8Array.from([sig.length, ...sig, uncompressed.length, ...uncompressed]);
+    const input0 = { txid: hexToBytes("33".repeat(32)), vout: 0, sequence: 0xffffffff, scriptSig, witness: [] };
+    const outpoint0 = bip47InputOutpoint(input0);
+    const x0 = bip47SharedX(aPriv, hexToBytes(BOB.B[0]));
+    const mask0 = bip47Mask(x0, outpoint0);
+    const blinded0 = xorPayload(hexToBytes(NOTIFY.plain), mask0);
+    const tx = serializeTxLocal({
+      inputs: [input0],
+      outputs: [
+        { amount: 10000n, script: p2pkhScript(hexToBytes(BOB.B[0])) },
+        opReturnOutput(blinded0),
+      ],
+    });
+    const parsed = parseRawTx(tx);
+    const found = extractDesignatedPubKey(parsed);
+    assert.equal(found.status, "found");
+    assert.equal(found.kind, "p2pkh");
+    assert.equal(found.pubkey.length, 65);
+    assert.equal(bytesToHex(found.compressedPubkey), bytesToHex(secp256k1.getPublicKey(aPriv, true)));
+    const result = bip47DecodeNotificationTx(bytesToHex(tx), priv);
+    assert.equal(result.status, "ok");
+    assert.equal(result.code, ALICE.code);
+    assert.equal(result.publicKeyHex, bytesToHex(uncompressed));
+    const input1 = { txid: hexToBytes("44".repeat(32)), vout: 1, sequence: 0xffffffff, scriptSig: new Uint8Array(), witness: [sig, hexToBytes(ALICE.A0)] };
+    const tx2 = serializeTxLocal({
+      inputs: [input0, input1],
+      outputs: [
+        { amount: 10000n, script: p2pkhScript(hexToBytes(BOB.B[0])) },
+        opReturnOutput(blinded0),
+      ],
+    });
+    const found2 = extractDesignatedPubKey(parseRawTx(tx2));
+    assert.equal(found2.inputIndex, 0);
+    assert.equal(found2.kind, "p2pkh");
+    assert.equal(found2.pubkey.length, 65);
+    const result2 = bip47DecodeNotificationTx(bytesToHex(tx2), priv);
+    assert.equal(result2.status, "ok");
+    assert.equal(result2.code, ALICE.code);
+    assert.equal(result2.inputIndex, 0);
   } finally {
     aPriv.fill(0);
     priv.fill(0);
@@ -550,6 +674,33 @@ test("12. payload: two OP_RETURNs, one OP_RETURN with two 80-byte pushes, or zer
     assert.throws(() => bip47DecodeNotificationTx(bytesToHex(oneWithTwo), priv), (e) => e instanceof Bip47Error && e.code === "AMBIGUOUS_PAYLOAD");
     const zeroOpReturns = serializeTxLocal({ inputs: [input], outputs: [{ amount: 1n, script: p2pkhScript(hexToBytes(BOB.B[0])) }] });
     assert.throws(() => bip47DecodeNotificationTx(bytesToHex(zeroOpReturns), priv), (e) => e instanceof Bip47Error && e.code === "AMBIGUOUS_PAYLOAD");
+  } finally {
+    priv.fill(0);
+  }
+});
+
+test("12b. payload: the OP_RETURN holds exactly one 80-byte push and nothing else", () => {
+  const plain = hexToBytes(NOTIFY.plain);
+  const input = { ...vectorInputBase(), scriptSig: new Uint8Array(), witness: [] };
+  const payloadOf = (script) => bip47Module.bip47NotificationPayload(parseRawTx(serializeTxLocal({ inputs: [input], outputs: [{ amount: 0n, script }] })));
+  const ambiguous = (e) => e instanceof Bip47Error && e.code === "AMBIGUOUS_PAYLOAD";
+  assert.deepEqual(payloadOf(Uint8Array.from([0x6a, 0x4c, 0x50, ...plain])), plain, "OP_PUSHDATA1 80 bytes");
+  assert.deepEqual(payloadOf(Uint8Array.from([0x6a, 0x4d, 0x50, 0x00, ...plain])), plain, "OP_PUSHDATA2 80 bytes");
+  assert.throws(() => payloadOf(Uint8Array.from([0x6a, 0x4c, 0x50, ...plain, 0x01, 0xff])), ambiguous, "an extra short push after the payload");
+  assert.throws(() => payloadOf(Uint8Array.from([0x6a, 0x51, 0x4c, 0x50, ...plain])), ambiguous, "a stray opcode before the payload");
+  assert.throws(() => payloadOf(Uint8Array.from([0x6a, 0x4c, 0x50, ...plain, 0x51])), ambiguous, "a stray opcode after the payload");
+  assert.throws(() => payloadOf(Uint8Array.from([0x6a, 0x4c, 0x51, ...plain])), ambiguous, "a push longer than the bytes left");
+  assert.throws(() => payloadOf(Uint8Array.from([0x6a, 0x4c, 0x4f, ...plain.slice(0, 79)])), ambiguous, "a 79-byte push");
+});
+
+test("12c. a malformed manual designated key is manual-invalid, not a crash", () => {
+  const priv = bobNotifPrivFromMnemonic();
+  try {
+    for (const designatedPub of ["not hex", "02" + "zz".repeat(32), "0".repeat(65), "", "04" + "00".repeat(64)]) {
+      const result = bip47DecodeNotificationTx(NOTIFY.tx, priv, { designatedPub, designatedInput: 0 });
+      assert.equal(result.status, "manual-invalid", `designatedPub ${JSON.stringify(designatedPub)}`);
+      assert.equal(result.inputIndex, null);
+    }
   } finally {
     priv.fill(0);
   }
