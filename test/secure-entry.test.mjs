@@ -1174,3 +1174,61 @@ test("commitTurnOff convert refuses a plan that names one entry twice", () => {
   assert.equal(session.entries.size, 2);
   assert.equal(second.indices[0], 2, "the entry the plan left out is not wiped");
 });
+
+// Review on 89f0ab00 (DeepSeek V4.1 red team, MiniMax).
+test("End Session wipes a pending turn-on plan's staged entries", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 9); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  const staged = plan.staged[0].entry;
+  const buffer = staged.indices;
+  sessionWipe(session);
+  assert.ok(buffer.every((value) => value === 0), "the staged word buffer is zeroed");
+  assert.equal(staged.wiped, true);
+  assert.equal(plan.staged.length, 0);
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_STALE"));
+  assert.equal(session.on, false);
+  assert.equal(session.entries.size, 0);
+});
+
+test("deleting a key wipes a pending turn-on plan's staged entries at once", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { rolls: "16" } }, { keyId: 2, methods: { seed: "abandon" } }], {
+    rolls: (text) => { const entry = rollsEntry("base10", 2); for (const face of text) rollsPush(entry, Number(face)); return entry; },
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 3); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  const [rolls, seed] = plan.staged.map((item) => item.entry);
+  sessionDeleteKey(session, 1);
+  assert.ok(rolls.rolls.every((value) => value === 0), "the deleted key's staged rolls are zeroed");
+  assert.ok(seed.indices.every((value) => value === 0), "the stale plan's other staged entries are zeroed too");
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_STALE"));
+});
+
+test("committed and discarded plans leave the pending set, so End Session never wipes a live entry twice", () => {
+  const session = createSecureSession();
+  const converters = { seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 6); return entry; } };
+  const kept = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], converters);
+  const dropped = planTurnOn(session, [{ keyId: 2, methods: { seed: "abandon" } }], converters);
+  discardPlan(dropped);
+  const live = kept.staged[0].entry;
+  commitTurnOn(session, kept);
+  assert.equal(session.pending.size, 0);
+  assert.equal(sessionGet(session, 1, "seed"), live);
+  assert.equal(live.indices[0], 6, "committing does not wipe the installed entry");
+  sessionWipe(session);
+  assert.ok(live.indices.every((value) => value === 0));
+});
+
+test("a blocked turn-on plan's staged entries are wiped by End Session too", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon", unknown: "x" } }], {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 8); return entry; },
+  });
+  assert.equal(plan.ok, false);
+  const staged = plan.staged[0].entry;
+  sessionWipe(session);
+  assert.ok(staged.indices.every((value) => value === 0));
+});

@@ -317,6 +317,31 @@ const metaOf = (session) => {
   return session.meta;
 };
 
+// Turn-on plans not yet committed or discarded. Their staged entries hold
+// secrets outside session.entries, so End Session and a key delete must
+// still reach them.
+const PLAN_SESSION = Symbol("secure-entry plan session");
+const pendingOf = (session) => {
+  if (!session.pending) Object.defineProperty(session, "pending", { value: new Set(), enumerable: false, writable: true, configurable: true });
+  return session.pending;
+};
+
+// Wipes and empties every pending turn-on plan. Callers move the generation
+// in the same step, so these plans are stale and can never commit. True when
+// every wipe went through.
+const wipePending = (session) => {
+  let clean = true;
+  const pending = pendingOf(session);
+  for (const plan of pending) {
+    if (Array.isArray(plan.staged)) {
+      for (const item of plan.staged) if (item && item.entry && !scrub(item.entry)) clean = false;
+    }
+    plan.staged = [];
+  }
+  pending.clear();
+  return clean;
+};
+
 const splitId = (id) => {
   const at = id.lastIndexOf(":");
   return at < 0 ? { keyId: id, method: "" } : { keyId: id.slice(0, at), method: id.slice(at + 1) };
@@ -339,6 +364,7 @@ const installedElsewhere = (session, entry) =>
 export const createSecureSession = () => {
   const session = { on: false, generation: 0, entries: new Map() };
   Object.defineProperty(session, "meta", { value: new Map(), enumerable: false, writable: true, configurable: true });
+  Object.defineProperty(session, "pending", { value: new Set(), enumerable: false, writable: true, configurable: true });
   return session;
 };
 
@@ -380,7 +406,9 @@ export const sessionDeleteKey = (session, keyId) => {
     meta.delete(id);
   }
   // Moves even when nothing was installed: a pending turn-on plan may hold
-  // this key's staged secrets, and committing it would bring them back.
+  // this key's staged secrets, and committing it would bring them back. Every
+  // pending plan is stale from here on, so its staged secrets are wiped now.
+  if (!wipePending(session)) failed = true;
   session.generation += 1;
   if (failed) fail("WIPE_PARTIAL", "Some secure entries could not be wiped cleanly.");
 };
@@ -390,6 +418,7 @@ export const sessionWipe = (session) => {
   for (const entry of session.entries.values()) {
     if (!scrub(entry)) failed = true;
   }
+  if (!wipePending(session)) failed = true;
   session.entries.clear();
   metaOf(session).clear();
   session.on = false;
@@ -446,7 +475,12 @@ export const planTurnOn = (session, keys, converters) => {
     for (const item of staged) scrub(item.entry);
     throw error;
   }
-  return { kind: "on", ok: blockers.length === 0, staged, blockers, generation: session.generation };
+  const plan = { kind: "on", ok: blockers.length === 0, staged, blockers, generation: session.generation };
+  if (staged.length > 0) {
+    Object.defineProperty(plan, PLAN_SESSION, { value: session, enumerable: false, configurable: true });
+    pendingOf(session).add(plan);
+  }
+  return plan;
 };
 
 export const commitTurnOn = (session, plan) => {
@@ -469,6 +503,7 @@ export const commitTurnOn = (session, plan) => {
   }
   for (const { keyId, method, entry } of plan.staged) sessionSet(session, keyId, method, entry);
   plan.staged = [];
+  pendingOf(session).delete(plan);
   session.on = true;
   session.generation += 1;
 };
@@ -481,6 +516,7 @@ export const discardPlan = (plan) => {
     for (const item of plan.staged) {
       if (item && item.entry) scrub(item.entry);
     }
+    if (plan[PLAN_SESSION]) pendingOf(plan[PLAN_SESSION]).delete(plan);
   }
   plan.staged = [];
   // A discarded plan cannot be committed: an empty turn-on would otherwise
