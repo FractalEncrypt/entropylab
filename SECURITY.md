@@ -535,14 +535,17 @@ stop/restart, disconnect, Clear Capture and completion retire the worker through
 its scrub/terminate lifecycle; stale replies cannot enter a capture. Accessible
 pixel and returned payload buffers are wiped. Retirement requests a scrub, but
 waits up to four seconds while busy, or 250 ms while idle, for an acknowledgement.
-The shared decoder reports failed scrubbing; an unresponsive worker may be stopped
+The shared decoder returns a scrub result, which the observer does not currently
+surface; an unresponsive worker may be stopped
 before it scrubs transferred frames or WASM memory; termination does not prove
 zeroing. Immutable decoded strings and browser/OS copies cannot be reliably
 zeroed either. Camera cleanup continues even if decoder retirement throws. The
 shared UR collector handles fountain assembly and wipes retained fragments on
 completion, conflict, invalid assembly or reset. The observer preserves its
 narrower type, frame, fragment and message limits and canonical CBOR envelope
-checks; nonzero fountain padding is refused. Clear Capture and End Session reset
+checks. The checksum field additionally accepts the reference encoder's fixed-width
+uint32 form even for small values; other fields retain canonical checks and the
+assembled message must still match its CRC. Nonzero fountain padding is refused. Clear Capture and End Session reset
 the collector. Foundation Devices-derived UR notices remain under `src/licenses/`.
 
 The QR observer's current preview also checks every supplied signature slot

@@ -639,8 +639,12 @@ Animated UR assembly uses the shared collector from #1273 with the observer's
 existing bounds and canonical envelope checks. Worker cleanup requests a memory
 scrub and waits up to four seconds for a busy worker (250 ms when idle).
 An unresponsive worker may terminate before wiping transferred frames or WASM
-memory; the shared decoder reports unsuccessful scrubbing. Immutable decoded strings and browser/OS copies also
+memory. The shared decoder returns a scrub result; the observer does not currently
+surface it. Immutable decoded strings and browser/OS copies also
 remain outside reliable erasure guarantees.
+Multipart CRC-32 fields accept the reference encoder's fixed-width uint32 form,
+including small values, as well as previously accepted minimal-width values.
+Other CBOR fields retain canonical encoding checks; message CRC validation is unchanged.
 This does not prove host honesty or randomness secrecy. The user reports successful local SeedSigner and Kern multisig sessions;
 broader compatibility qualification remains pending; see `docs/QR_CAPTURE_PROTOTYPE.md` for limits.
 

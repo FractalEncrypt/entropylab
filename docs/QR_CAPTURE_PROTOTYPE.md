@@ -82,7 +82,8 @@ a competing worker. Camera stop, restart and disconnect retire decoding. Frames
 are at most 1280x960, one decode is in flight, and the shared worker applies its
 four-second deadline and scrub/termination lifecycle. Stop requests a scrub but
 waits up to four seconds when busy (250 ms when idle) for an acknowledgement;
-the shared decoder reports unsuccessful scrubbing. An unresponsive worker may terminate
+the shared decoder returns a scrub result, which the observer does not currently
+surface. An unresponsive worker may terminate
 before wiping transferred frames or WASM memory. Termination is not proof of
 zeroing, and decoded immutable strings cannot be reliably erased. The adapter is
 reusable: decoding after stop creates a fresh shared decoder. Camera cleanup
@@ -96,6 +97,13 @@ assembler, and refuses nonzero fountain padding. Progress counts recovered
 fragments rather than the old assembler's independent equations. Fresh review
 and physical-device qualification of this new integration remain pending;
 earlier device results do not qualify these changed bytes.
+
+The revision18 review follow-up fixes a pre-existing refusal of small CRC-32
+values encoded as fixed-width uint32 by reference encoders. Only the checksum
+field receives this exception; previously accepted minimal-width checksums
+remain accepted, and all other canonical field/envelope checks and final CRC
+verification are unchanged. The frozen revision18 review applies to its original
+commit, not this follow-up. Independent review of the small delta remains pending.
 
 Public fixture hardware scans and the automatic-clear/result-dialog behavior
 were tested by the user, who also reports successful real Sparrow multisig

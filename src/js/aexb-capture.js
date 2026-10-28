@@ -10,10 +10,11 @@ const equal = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 function fail(code) {
   throw new Error(code);
 }
-// Canonical CBOR unsigned integers / byte strings only, with bounded lengths.
+// Canonical CBOR fields with bounded lengths; only a part checksum may also use
+// the fixed-width uint32 form emitted by BCR-2024-001 reference encoders.
 function reader(bytes) {
   let at = 0;
-  const head = (major) => {
+  const head = (major, fixedUint32 = false) => {
     if (at >= bytes.length) fail("CBOR_TRUNCATED");
     const h = bytes[at++];
     if (h >> 5 !== major) fail("CBOR_TYPE");
@@ -23,11 +24,13 @@ function reader(bytes) {
     if (!width || at + width > bytes.length) fail("CBOR_LENGTH");
     let v = 0;
     for (let i = 0; i < width; i++) v = v * 256 + bytes[at++];
-    if (v < { 1: 24, 2: 256, 4: 65536 }[width]) fail("CBOR_NONCANONICAL");
+    if (!(fixedUint32 && width === 4) && v < { 1: 24, 2: 256, 4: 65536 }[width]) fail("CBOR_NONCANONICAL");
     return v;
   };
   return {
     uint: () => head(0),
+    // Preserve minimal-width checksums already accepted, plus fixed uint32.
+    checksum: () => head(0, true),
     array: () => head(4),
     bstr: () => {
       const n = head(2);
@@ -79,7 +82,7 @@ export class UrCapture {
         if (r.array() !== 5) fail("PART_FORMAT");
         if (r.uint() !== seq || r.uint() !== count) fail("PART_SEQUENCE");
         const length = r.uint();
-        r.uint(); // The shared collector checks the whole-message CRC.
+        r.checksum(); // The shared collector checks the whole-message CRC.
         data = r.bstr();
         r.end();
         if (!length || length > MAX_BYTES || !data.length || data.length > 8192 || Math.ceil(length / data.length) !== count)

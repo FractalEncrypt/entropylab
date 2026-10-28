@@ -23,6 +23,46 @@ const fountain = JSON.parse(
 const bytes = (hex) => Uint8Array.from(Buffer.from(hex, "hex"));
 const transcript = c => [...c.messages.values()].map(e=>Buffer.from(e.bytes).toString("hex")).join("\n");
 const message = (stage) => fixture.messages.find((m) => m.stage === stage);
+// DeepSeek revision18 F1: accept fixed-width CRC32 even below 65536 without
+// relaxing canonical metadata, byte-string envelopes or final CRC checks.
+// Independent oracle: Python zlib.crc32(bytes.fromhex('474145585400b6c7'))
+// is 0x0000b35d. These literal CBOR parts encode that eight-byte message.
+test("F1: small fixed-width CRC32 completes a multipart UR", async () => {
+  const { hodlBytewordsEncode } = await import("../src/js/psbt-ur.js");
+  for (const checksum of ["1a0000b35d", "19b35d"]) {
+    const c = new UrCapture();
+    const frame = (seq, data) => `ur:x-btc-anti-exfil/${seq}-2/` +
+      hodlBytewordsEncode(bytes(`85${seq === 1 ? "01" : "02"}0208${checksum}44${data}`));
+    assert.equal(c.receive(frame(1, "47414558")).complete, false);
+    const result = c.receive(frame(2, "5400b6c7"));
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.bytes, bytes("4145585400b6c7"));
+    result.bytes.fill(0);
+    c.clear();
+  }
+});
+test("F1: checksum width exception does not relax other CBOR fields", async () => {
+  const { hodlBytewordsEncode } = await import("../src/js/psbt-ur.js");
+  for (const payload of [
+    "85180102081a0000b35d4447414558", // nonminimal sequence
+    "85011802081a0000b35d4447414558", // nonminimal count
+    "85010218081a0000b35d4447414558", // nonminimal message length
+    "850102081a0000b35d580447414558", // nonminimal byte-string length
+    "850102081b000000000000b35d4447414558", // uint64 checksum
+    "850102083a0000b35d4447414558", // negative checksum
+    "850102081a00", // truncated checksum
+  ]) {
+    const retained = [], c = new UrCapture({ track: retained });
+    assert.throws(() => c.receive("ur:x-btc-anti-exfil/1-2/" + hodlBytewordsEncode(bytes(payload))), /CBOR_/);
+    assert.equal(retained.length, 0);
+  }
+});
+test("F1: small fixed-width checksum still requires matching message CRC", async () => {
+  const { hodlBytewordsEncode } = await import("../src/js/psbt-ur.js");
+  const c = new UrCapture();
+  c.receive("ur:x-btc-anti-exfil/1-2/" + hodlBytewordsEncode(bytes("850102081a0000b35c4447414558")));
+  assert.throws(() => c.receive("ur:x-btc-anti-exfil/2-2/" + hodlBytewordsEncode(bytes("850202081a0000b35c445400b6c7"))), /MESSAGE_CHECKSUM/);
+});
 // Contract: accept only bounded, checksum-valid UR messages from one canonical
 // AEXT session; identical repeats are harmless, conflicts never replace evidence.
 for (const item of fountain.messages)
