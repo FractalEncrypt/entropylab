@@ -95,7 +95,11 @@ export const bip47RowsHtml = ({ direction, rows = [], skipped = [], budgetExhaus
   const keysName = t("Spending keys");
   const showKeyName = t("Show key");
   const hideKeyName = t("Hide key");
-  const privateNote = t("This private key can spend funds sent to this receive address. Hiding it does not clear your clipboard.");
+  // The payment code is the account's public key and chain code, and the
+  // payer knows this row's shared secret: with this key they could rebuild
+  // the BIP-47 account key, so the note says plainly not to share it
+  // (owner-approved wording, 2026-10-28).
+  const privateNote = t("This private key can spend funds sent to this receive address. Never share it: the person who paid you here can combine it with your payment code to rebuild your BIP-47 account key and spend every BIP-47 payment you have received. Hiding it does not clear your clipboard.");
   const revealedIndex = revealed && Number.isInteger(revealed.index) ? revealed.index : null;
   // The standard field pattern: the index label with its QR, the address
   // under it, so the QR never wraps away from the address on a phone.

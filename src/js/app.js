@@ -9589,7 +9589,12 @@ function hodlInitBip47() {
     hodlBip47SyncPairsNeeds();
   };
   // Editing the key text makes it the user's own; a passphrase edit does not.
-  key.addEventListener("input", () => { hodlBip47Origin = ""; });
+  // The passphrase copied with that key goes too: it belonged to the Key
+  // Station key, and kept here it would apply silently to a new seed.
+  key.addEventListener("input", () => {
+    if (hodlBip47Origin) hodlClearStationPassphrase("bip47-pass");
+    hodlBip47Origin = "";
+  });
   key.addEventListener("input", onKeyEdit);
   pass.addEventListener("input", onKeyEdit);
   network.addEventListener("change", () => { hodlBip47ClearResults(); hodlBip47ClearContact(); hodlSyncBip47Path(); });
@@ -9607,16 +9612,14 @@ function hodlInitBip47() {
 // contact; until both are present the prerequisite note stays visible. The
 // notification check needs only a key source.
 function hodlBip47SyncPairsNeeds() {
+  // A key typed but not yet derived counts as chosen: deriving the rows or
+  // checking a transaction loads it first.
+  let key = document.getElementById("bip47-key");
+  let keyChosen = hodlNodeHasPrivateKey(hodlBip47Hd) || Boolean((key?.value || "").trim());
   let needs = document.getElementById("bip47-pairs-needs");
-  if (needs) {
-    let ready = hodlNodeHasPrivateKey(hodlBip47Hd) && hodlBip47Contact?.derivable === true;
-    needs.hidden = !!ready;
-  }
+  if (needs) needs.hidden = keyChosen && hodlBip47Contact?.derivable === true;
   let notifyNeeds = document.getElementById("bip47-notify-needs");
-  if (notifyNeeds) {
-    let key = document.getElementById("bip47-key");
-    notifyNeeds.hidden = hodlNodeHasPrivateKey(hodlBip47Hd) || Boolean((key?.value || "").trim());
-  }
+  if (notifyNeeds) notifyNeeds.hidden = keyChosen;
 }
 
 // Derived rows are public data only. The revealed key is never kept here: it
@@ -9705,7 +9708,8 @@ function hodlBip47RunRows() {
     };
     hodlBip47RenderRows();
     let next = document.getElementById("bip47-rows-next");
-    if (next) next.hidden = result.budgetExhausted;
+    // Nothing follows the last unhardened index (2^31 - 1).
+    if (next) next.hidden = result.budgetExhausted || start + result.rows.length + result.skipped.length > 2147483647;
   } catch (exception) {
     if (error) error.textContent = exception.message || String(exception);
   } finally {
@@ -9870,7 +9874,11 @@ function hodlInitBip47Notify() {
   }
   // The verdict belongs to the input, key and mode it was checked with.
   for (let [id, type] of [["bip47-notify-input", "change"], ["bip47-notify-pub", "input"], ["bip47-notify-manual", "toggle"]]) {
-    document.getElementById(id)?.addEventListener(type, () => hodlBip47ClearNotify());
+    document.getElementById(id)?.addEventListener(type, () => {
+      hodlBip47ClearNotify();
+      let error = document.getElementById("bip47-error");
+      if (error) error.textContent = "";
+    });
   }
   let go = document.getElementById("bip47-notify-go");
   if (go) go.onclick = hodlBip47CheckNotify;

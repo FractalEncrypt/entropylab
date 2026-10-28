@@ -235,6 +235,12 @@ test("a network change clears every result and the decoded contact, but keeps th
   assert.match(fnSource("hodlBip47Invalidate"), /hodlBip47WipeKeys\(\);\s*hodlBip47ClearResults\(\);/);
 });
 
+test("editing key text copied from a Key Station key also drops that key's passphrase", () => {
+  // Gemini red team (10-28): kept, the copied passphrase would outlive the
+  // Key Station key's wipe and apply silently to a newly pasted seed.
+  assert.match(fnSource("hodlInitBip47"), /if \(hodlBip47Origin\) hodlClearStationPassphrase\("bip47-pass"\);\s*hodlBip47Origin = "";/);
+});
+
 // Review on round 2 (GLM 5.3): a revealed spending key is hidden by every
 // conceal trigger and every way of leaving the station, and End Session's
 // reset of the direction also resets its control.
