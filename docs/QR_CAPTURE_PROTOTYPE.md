@@ -116,7 +116,9 @@ PASS reports signature count, distinct checked input indexes and total input cou
 It cannot infer the coordinator's expected slot set or prove complete signer coverage.
 STOP includes a non-secret reason and supplied-slot count. No transcript is retained.
 
-The pasted transcript/cache are now retired by conceal and the disclosure closes.
+The pasted transcript/cache are retired on tab hide, idle timeout and print,
+and the disclosure closes. Plain window blur preserves them for copying the
+opening or PSBT from another window; visible results are still concealed.
 Incomplete QR captures still survive focus loss, tab hide and idle conceal; the UI
 states this explicitly and instructs Clear Capture / End Session / close tab.
 QR Clear also clears the separate pasted transcript and last inspector result.
