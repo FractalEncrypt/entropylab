@@ -142,7 +142,7 @@ const jsMain = (await build({
   legalComments: "none",
   charset: "utf8",
   loader: { ".html": "text" },
-  banner: { js: wasmAezNotice + (preview ? "\n/*! QR capture: jsQR 1.4.0, Apache-2.0; Foundation Devices ur2-derived fragment selection, BSD-2-Clause-Patent.\n" + readFileSync(join(root, "src/licenses/jsqr.txt"), "utf8") + "\n" + readFileSync(join(root, "src/licenses/ur2.txt"), "utf8") + "\n*/\n" : "") },
+  banner: { js: wasmAezNotice + (preview ? "\n/*! QR capture: Foundation Devices ur2-derived fragment selection, BSD-2-Clause-Patent.\n" + readFileSync(join(root, "src/licenses/ur2.txt"), "utf8") + "\n*/\n" : "") },
   plugins: [previewHtml],
   define: {
     __ENTROPYLAB_TEST_HOOKS__: testHooks ? "true" : "false", __LN_WORKER_SOURCE__: JSON.stringify(await (await import("./ln-worker-source.mjs")).buildLnWorkerSource()),

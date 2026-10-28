@@ -1,4 +1,4 @@
-import jsQR from "jsqr";
+import { createQrFrameDecoder } from "./qr-frame-decoder.js";
 import { createModal } from "./modal.js";
 import { AexbCapture, UrCapture } from "./aexb-capture.js";
 import { CameraCapture } from "./qr-camera.js";
@@ -131,10 +131,12 @@ export function initNonceQrCapture({ translate, onClear }) {
     else if (s.stages.length) say(translate("Scan successful. Keep going: this signing ceremony still needs message(s) {stages} from the same session. No complete verdict yet.", { stages: missing.join(", ") }));
 
   };
+  const frameDecoder = createQrFrameDecoder();
   const camera = new CameraCapture({
+    stopDecode: () => frameDecoder.stop(),
     getUserMedia: (constraints) =>
       navigator.mediaDevices.getUserMedia(constraints),
-    decode: (video) => {
+    decode: async (video) => {
       if (video.readyState < 2 || !video.videoWidth) return null;
       const scale = Math.min(
         1,
@@ -145,16 +147,8 @@ export function initNonceQrCapture({ translate, onClear }) {
       canvas.height = Math.round(video.videoHeight * scale);
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-      try {
-        return (
-          jsQR(frame.data, frame.width, frame.height, {
-            inversionAttempts: "attemptBoth",
-          })?.data || null
-        );
-      } finally {
-        frame.data.fill(0);
-        context.clearRect(0, 0, canvas.width, canvas.height);
-      }
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      return frameDecoder.decode(frame.data, frame.width, frame.height);
     },
   });
   const pause = () => {

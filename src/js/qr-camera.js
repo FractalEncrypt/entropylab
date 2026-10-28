@@ -1,13 +1,15 @@
 // A cancellable camera lifetime; no recording, storage, logging, or network.
 export class CameraCapture {
-  constructor({ getUserMedia, decode }) {
+  constructor({ getUserMedia, decode, stopDecode = () => {} }) {
     this.getUserMedia = getUserMedia;
     this.decode = decode;
+    this.stopDecode = stopDecode;
     this.epoch = 0;
   }
   stop() {
     this.epoch++;
     clearTimeout(this.timer);
+    this.stopDecode();
     for (const track of this.stream?.getTracks() || []) track.stop();
     this.stream = null;
     if (this.video) {

@@ -1,7 +1,8 @@
 # Local Nonce Inspector QR prototype
 
 Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
-Upstream base checked 2026-10-27: 6025a84c007c7ce598fc91c4d82689580306f2a8.
+Shared-decoder integration base checked 2026-10-28 UTC:
+770c433758b2f9c1458097a7936a4ec5d8d47ba6, plus the pinned open worker PR below.
 
 ## Current flow
 
@@ -37,7 +38,7 @@ observer check. Capture order is unrestricted, not evidence of real exchange ord
   digests and supplied-signature checks; reuses the audit/WASM BIP143 path.
 - `qr-camera.js`: cancellable camera lifetime; late permission/decode and track
   disconnect handling. No recording or audio.
-- `nonce-qr-capture.js`: preview-only bundled jsQR, permission/access states,
+- `nonce-qr-capture.js`: preview-only shared worker decoding, permission/access states,
   message indicators, in-view progress and shared result modal.
 
 Bounds: frame text 20,000 characters; 512 fountain parts; 8,192 bytes per fragment;
@@ -72,15 +73,18 @@ not real capture exports.
 Use pinned Node 22.23.4/npm 11.17.0 and npm ci. Preview command:
 `node scripts/build.mjs --preview --out ../preview`.
 Serve on loopback or another secure local browser context. No runtime downloads.
-The maintainer has requested the shared quircs decoder rather than jsQR (PR #1262).
-PR #1247 supplies the WASM crate; its follow-up will publish the decoder worker
-and preview JavaScript interface. The current draft still contains the working
-jsQR 1.4.0 proof of concept and must not be marked ready until that dependency is
-removed and capture uses the shared interface. No competing wrapper is planned.
-The camera/session cancellation and RAM-only clearing guarantees must be checked
-against that worker lifecycle before another real-device test. Apache-2.0 jsQR and BSD-2-Clause-Patent UR2 notices live under
-src/licenses and are included only in preview artifacts. Normal builds exclude
-camera decoding.
+Capture now uses the shared quircs worker and `createQrDecoder` interface from
+PR #1272, pinned locally at f7d2a5d6772af5c39ac1caac1e5df072749f5ccd.
+That dependency is still under upstream review. The camera adapter only converts
+RGBA to grayscale and consumes/wipes returned UTF-8 payloads; it does not implement
+a competing worker. Camera stop, restart and disconnect retire decoding. Frames
+are at most 1280x960, one decode is in flight, and the shared worker applies its
+four-second deadline and scrub/termination lifecycle. Multiple different QR codes
+in one frame are refused; point the camera at one code at a time. The worker's
+4096-byte decoded payload limit is below the transport parser's defensive ceiling.
+The prior decoder has been removed. UR2 notices remain in preview artifacts.
+Normal builds exclude camera decoding. Fresh DeepSeek review and physical-device
+qualification of this worker integration are still required.
 
 Public fixture hardware scans and the automatic-clear/result-dialog behavior
 were tested by the user, who also reports successful real Sparrow multisig
@@ -91,7 +95,8 @@ not broad compatibility or protocol qualification.
 The review packet beside this prototype contains source, patch, baseline,
 public fixtures, exact test evidence, issue draft and review prompt. Its current
 CODEX-REVIEW.txt distinguishes fresh checks from historical full-CI results and
-remaining prepublication gates. Nothing is published.
+remaining review gates. PR #1262 exists as a draft; this shared-decoder
+integration has not been pushed.
 
 ## Revision 9 review corrections
 

@@ -83,3 +83,41 @@ test("disconnect stops the stream and reports one disconnect without late frames
   assert.equal(stops,1);assert.equal(v.srcObject,null);assert.equal(delivered,0);
   assert.deepEqual(errors,["CAMERA_DISCONNECTED"]);
 });
+
+
+test("camera stop retires pending decoder work before it can deliver", async () => {
+  let retirements = 0, resolve, delivered = 0;
+  const c = new CameraCapture({
+    getUserMedia: async () => ({ getTracks: () => [] }),
+    decode: () => new Promise(r => { resolve = r; }),
+    stopDecode: () => { retirements++; },
+  });
+  await c.start(video(), "", () => delivered++);
+  const before = retirements;
+  c.stop();
+  assert.equal(retirements, before + 1);
+  resolve("late");
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(delivered, 0);
+});
+
+for (const failure of ["play", "decode", "disconnect"]) {
+  test(`camera ${failure} failure retires its decoder`, async () => {
+    let retired = 0, ended;
+    const c = new CameraCapture({
+      getUserMedia: async () => ({ getTracks: () => [{ stop() {}, addEventListener(_, fn) { ended = fn; } }] }),
+      decode: () => { if (failure === "decode") throw Error("decoder failed"); return null; },
+      stopDecode: () => { retired++; },
+    });
+    const v = video();
+    if (failure === "play") v.play = async () => { throw Error("play failed"); };
+    if (failure === "play") await assert.rejects(c.start(v, "", () => {}));
+    else {
+      await c.start(v, "", () => {});
+      if (failure === "disconnect") ended();
+    }
+    assert.equal(retired, 2); // Initial lifetime reset, then failure retirement.
+    assert.equal(v.srcObject, null);
+    c.stop();
+  });
+}

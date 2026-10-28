@@ -114,7 +114,9 @@ test("captured bytes are owned by the collector", () => {
 // Independent QR encoder -> bundled camera decoder -> transport collector.
 test("pixels from the existing QR encoder decode into a published UR frame", async () => {
   const { encode } = await import("uqr");
-  const { default: jsQR } = await import("jsqr");
+  const { Worker } = await import("node:worker_threads");
+  const { buildQrWorkerSource } = await import("../scripts/qr-worker-source.mjs");
+  const { QR_WASM_B64 } = await import("../src/js/qr-wasm-b64.js");
   const text = message(2).medium_ur_parts[0],
     qr = encode(text, { border: 4 }),
     scale = 5,
@@ -126,7 +128,28 @@ test("pixels from the existing QR encoder decode into a published UR frame", asy
         v = qr.data[Math.floor(y / scale)][Math.floor(x / scale)] ? 0 : 255;
       pixels.set([v, v, v, 255], at);
     }
-  assert.equal(jsQR(pixels, w, w).data, text);
+  const worker = new Worker(`const { parentPort } = require("node:worker_threads");
+    globalThis.self = { onmessage: null, postMessage(m,t) { parentPort.postMessage(m,t); } };
+    parentPort.on("message", data => self.onmessage?.({data}));
+` + await buildQrWorkerSource(), {eval:true});
+  const next = () => new Promise((resolve, reject) => {
+    worker.once("message", resolve); worker.once("error", reject);
+  });
+  try {
+    let ready = next();
+    const wasm = Uint8Array.from(Buffer.from(QR_WASM_B64, "base64"));
+    worker.postMessage({type:"init", wasm:wasm.buffer}, [wasm.buffer]);
+    assert.equal((await ready).type, "ready");
+    const gray = Uint8Array.from({length:w*w}, (_,i) => pixels[i*4]);
+    pixels.fill(0);
+    ready = next();
+    worker.postMessage({type:"decode",run:1,width:w,height:w,gray:gray.buffer}, [gray.buffer]);
+    const reply = await ready;
+    assert.equal(reply.code, text.length);
+    const payload = new Uint8Array(reply.payload);
+    assert.equal(new TextDecoder().decode(payload), text);
+    payload.fill(0);
+  } finally { await worker.terminate(); }
 });
 
 

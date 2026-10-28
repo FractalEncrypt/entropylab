@@ -699,8 +699,12 @@ verification passes. Raw transcript export is therefore excluded from this
 prototype. Live capture adds the browser to the trusted environment holding rho;
 RAM-only operation reduces retention but does not guarantee erasure.
 This remains an observer, not an enforcement boundary against a compromised host.
-The added jsQR dependency and Foundation Devices-derived UR fragment selection
-are separately licensed; see `src/licenses/`. They are bundled only in previews.
+Camera pixels use the shared quircs WASM decoder and its preview worker. Camera
+stop/restart, disconnect, Clear Capture and completion retire the worker through
+its scrub/terminate lifecycle; stale replies cannot enter a capture. Owned pixel
+and payload buffers are wiped, but browser/OS copies remain best-effort. The
+Foundation Devices-derived UR fragment selection is separately licensed under
+`src/licenses/` and bundled only in previews.
 
 The QR observer's current preview also checks every supplied signature slot
 against a BIP143 SIGHASH_ALL digest independently reconstructed from the stage-3
