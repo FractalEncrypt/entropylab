@@ -524,6 +524,21 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
     });
   }
 
+  // One proof at a time, the one entered last: a chosen .ots file would
+  // otherwise win over a proof pasted afterwards, and Verify would check the
+  // file while the box shows the pasted hex.
+  proofHex.addEventListener("input", () => {
+    if (!proofFile.value) return;
+    proofFile.value = "";
+    if (proofName) {
+      proofName.textContent = "";
+      proofName.hidden = true;
+    }
+  });
+  proofFile.addEventListener("change", () => {
+    if (proofFile.files && proofFile.files.length > 0) proofHex.value = "";
+  });
+
   for (const [input, note] of [[proofFile, proofName], [originalFile, originalName]]) {
     input.addEventListener("change", () => {
       if (!note) return;

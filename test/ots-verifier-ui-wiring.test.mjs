@@ -655,3 +655,20 @@ test("initOtsVerifier: the header-time claim survives a verifier that transfers 
   const claims = findAll(resultEl, "data-ots-claim").filter((node) => node.getAttribute("data-ots-claim") === "header-time");
   assert.equal(claims.length, 1);
 });
+
+// Review on 2edfabe8 (MiniMax): a chosen file must not win over a proof
+// pasted afterwards, nor pasted hex over a file chosen afterwards.
+test("initOtsVerifier: the proof entered last is the one verified", () => {
+  const doc = makeDoc();
+  initOtsVerifier(doc, { createVerifier: () => ({ verify: () => Promise.resolve({ result: "PENDING", paths: [] }), stop: () => {} }) });
+  const file = doc._elements.get("ots-proof-file");
+  const hex = doc._elements.get("ots-proof-hex");
+  hex.value = "0011";
+  file.files = [{ name: "a.ots" }];
+  file.value = "C:\fakepath\a.ots";
+  file.dispatchEvent("change");
+  assert.equal(hex.value, "", "choosing a file clears the pasted hex");
+  hex.value = "2233";
+  hex.dispatchEvent("input");
+  assert.equal(file.value, "", "pasting hex clears the chosen file");
+});
