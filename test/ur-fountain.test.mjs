@@ -474,3 +474,26 @@ test("the default part cap is 1000", () => {
   assert.equal(createUrCollector({ types: ["bytes"] }).receive(part(1001)).status, "too-large");
   assert.equal(createUrCollector({ types: ["bytes"] }).receive(part(1000)).status, "progress");
 });
+
+// Review on 4017841c (GLM 5.3, Kimi K3).
+test("a part over the work budget drops its cascade but never reports a false conflict or invalid", () => {
+  // A budget of 1 stops every cascade after its first equation.
+  const tracked = [];
+  const collector = createUrCollector({ types: ["bytes"], workBudget: 1, track: tracked });
+  // Fountain parts first, then the sequential ones (single equations, so
+  // they finish the message even when every cascade is cut short).
+  let completed = null;
+  for (const part of [...vectors.urEncoder.parts.slice(9), ...vectors.urEncoder.parts.slice(0, 9)]) {
+    const result = collector.receive(part);
+    assert.ok(!["conflict", "invalid"].includes(result.status), result.status);
+    if (result.status === "complete") completed = result;
+  }
+  assert.ok(completed, "the message completes");
+  assert.equal(hexEncode(completed.message), hexEncode(message256Ur));
+  for (const buffer of tracked) assert.ok(allZero(buffer));
+});
+
+test("the sampler stays in range when a draw rounds to exactly 1.0", () => {
+  const sampler = randomSampler([1, 1, 1]);
+  assert.ok([0, 1, 2].includes(sampler.next(() => 1)));
+});

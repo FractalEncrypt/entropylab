@@ -35,7 +35,10 @@ export function xoshiro256(seedBytes) {
     return result;
   };
   const nextDouble = () => Number(next()) / 2 ** 64;
-  const nextInt = (low, high) => Math.floor(nextDouble() * (high - low + 1)) + low;
+  // Converting a 64-bit draw to a double can round up to exactly 1.0 (the
+  // reference has the same edge, about once in 2^53 draws): clamp, so the
+  // result stays in range. No reference vector reaches it.
+  const nextInt = (low, high) => Math.min(high, Math.floor(nextDouble() * (high - low + 1)) + low);
   const nextByte = () => nextInt(0, 255);
   const nextData = (count) => {
     const out = new Uint8Array(count);
@@ -77,7 +80,7 @@ export function randomSampler(probs) {
     next(f) {
       const r1 = f();
       const r2 = f();
-      const i = Math.floor(n * r1);
+      const i = Math.min(n - 1, Math.floor(n * r1));
       return r2 < prob[i] ? i : alias[i];
     },
   };
@@ -185,7 +188,9 @@ export function createUrCollector(options = {}) {
   // Each part costs about seqLen^2 steps (choosing its fragments shuffles
   // seqLen indexes), and a hostile stream picks seqLen. 1000 parts is far
   // more than any PSBT a camera scan carries, and keeps that cost small.
-  const { types, maxMessageLen = 1048576, maxSeqLen = 1000, track } = options;
+  // workBudget bounds the work one received part may do (index and byte
+  // steps), cascades included.
+  const { types, maxMessageLen = 1048576, maxSeqLen = 1000, workBudget = 10_000_000, track } = options;
   if (!Array.isArray(types) || types.length === 0) {
     throw new Error("createUrCollector needs a non-empty types array.");
   }
@@ -237,15 +242,25 @@ export function createUrCollector(options = {}) {
 
   const integrate = (startIndexes, startData) => {
     const queue = [{ indexes: startIndexes, data: startData }];
+    let work = 0;
     while (queue.length) {
+      // A hostile stream can line parts up so that one new fragment cascades
+      // through the whole store. Past the budget, the rest of this part's
+      // equations are dropped (zeroed): that costs only efficiency, since the
+      // final CRC still decides and later parts carry the same information.
+      if (work > workBudget) {
+        for (const pending of queue) zeroBytes(pending.data);
+        return "ok";
+      }
       const item = queue.shift();
       const data = item.data;
 
       // Reduce by known simple fragments.
       const remaining = [];
+      work += item.indexes.length;
       for (const index of item.indexes) {
         const known = simple.get(index);
-        if (known) xorInto(data, known);
+        if (known) { xorInto(data, known); work += data.length; }
         else remaining.push(index);
       }
       let indexes = remaining;
@@ -265,9 +280,11 @@ export function createUrCollector(options = {}) {
         simple.set(index, data);
         for (let i = mixed.length - 1; i >= 0; i--) {
           const entry = mixed[i];
+          work += entry.indexes.length;
           if (entry.indexes.includes(index)) {
             mixed.splice(i, 1);
             xorInto(entry.data, data);
+            work += data.length;
             entry.indexes = entry.indexes.filter((value) => value !== index);
             queue.push(entry);
           }
@@ -279,8 +296,10 @@ export function createUrCollector(options = {}) {
       // stays stored: it is still a valid equation for later parts.
       for (let i = 0; i < mixed.length; i++) {
         const entry = mixed[i];
+        work += entry.indexes.length + indexes.length;
         if (isStrictSubset(entry.indexes, indexes)) {
           xorInto(data, entry.data);
+          work += data.length;
           indexes = indexes.filter((value) => !entry.indexes.includes(value));
         }
       }
@@ -303,9 +322,11 @@ export function createUrCollector(options = {}) {
       // Reduce stored mixed parts that are strict supersets.
       for (let i = mixed.length - 1; i >= 0; i--) {
         const entry = mixed[i];
+        work += entry.indexes.length + indexes.length;
         if (isStrictSubset(indexes, entry.indexes)) {
           mixed.splice(i, 1);
           xorInto(entry.data, data);
+          work += data.length;
           entry.indexes = entry.indexes.filter((value) => !indexes.includes(value));
           queue.push(entry);
         }
@@ -314,6 +335,7 @@ export function createUrCollector(options = {}) {
       // Same index set: duplicate or conflict.
       let duplicate = false;
       for (const entry of mixed) {
+        work += entry.indexes.length + indexes.length;
         if (sameSet(entry.indexes, indexes)) {
           if (!equalBytes(entry.data, data)) {
             zeroBytes(data);
