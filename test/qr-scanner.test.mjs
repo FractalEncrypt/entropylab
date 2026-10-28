@@ -16,7 +16,21 @@ const makeStream = () => {
   return { tracks, getTracks: () => tracks };
 };
 
-const makeVideo = () => ({ srcObject: null, videoWidth: 640, videoHeight: 480 });
+const makeVideo = () => ({
+  srcObject: null,
+  videoWidth: 640,
+  videoHeight: 480,
+  muted: false,
+  plays: 0,
+  pauses: 0,
+  play() {
+    this.plays += 1;
+    return Promise.resolve();
+  },
+  pause() {
+    this.pauses += 1;
+  },
+});
 
 const makeCanvas = () => {
   const state = { width: 0, height: 0, draws: 0, image: null };
@@ -119,17 +133,34 @@ test("a decoded code stops the camera and hands the payload to onResult", async 
   media.pending[0].resolve(stream);
   await tick();
   assert.deepEqual(statuses, ["scanning"]);
+  assert.equal(video.plays, 1, "the stream is played, so frames advance");
+  assert.equal(video.muted, true);
   frames.run();
   assert.equal(decoder.calls.length, 1);
   const payload = new Uint8Array([1, 2, 3]);
-  decoder.pending[0].resolve({ code: 1, payload });
+  decoder.pending[0].resolve({ code: 3, payload });
   await tick();
   assert.equal(results.length, 1);
   assert.equal(results[0], payload);
   assert.ok(stream.tracks.every((track) => track.stopped));
+  assert.ok(video.pauses >= 1, "the video is paused when the camera stops");
   assert.equal(video.srcObject, null);
   assert.equal(canvas.width, 0);
   assert.equal(canvas.height, 0);
+});
+
+test("a reply whose code is not the payload length is an error, never a scan", async () => {
+  const { media, frames, decoder, results, statuses, scanner } = build();
+  scanner.start();
+  media.pending[0].resolve(makeStream());
+  await tick();
+  frames.run();
+  const payload = new Uint8Array([9, 9, 9]);
+  decoder.pending[0].resolve({ code: 1, payload });
+  await tick();
+  assert.equal(results.length, 0, "a malformed reply never reaches onResult");
+  assert.ok(payload.every((byte) => byte === 0), "its payload is wiped");
+  assert.deepEqual(statuses.slice(-1), ["error"]);
 });
 
 test("the ImageData buffer is zeroed after a frame", async () => {
@@ -269,6 +300,7 @@ test("scanImage decodes a bitmap and zeroes the canvas", async () => {
     const result = await pending;
     assert.equal(result.code, 1);
     assert.equal(result.payload, payload);
+    assert.ok(decoder.calls[0].gray.every((byte) => byte === 0), "the photo's grayscale frame is wiped");
     assert.equal(bitmap.closed, true);
     assert.equal(canvas.width, 0);
     assert.equal(canvas.height, 0);

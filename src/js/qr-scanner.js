@@ -88,6 +88,7 @@ export function createQrScanner({
       }
     }
     try {
+      video.pause?.();
       video.srcObject = null;
     } catch {
       // A detached video has nothing to release.
@@ -137,7 +138,10 @@ export function createQrScanner({
     const code = reply?.code;
     if (Number.isInteger(code) && code > 0) {
       const payload = reply?.payload;
-      if (!(payload instanceof Uint8Array)) {
+      // A positive code is the payload's byte length; anything else is a
+      // malformed reply, never a scan.
+      if (!(payload instanceof Uint8Array) || payload.length !== code) {
+        wipe(payload);
         teardown();
         status("error", "DECODE_FAILED");
         return;
@@ -218,8 +222,8 @@ export function createQrScanner({
       return;
     }
     const scale = Math.min(1, maxFrame.width / sourceWidth, maxFrame.height / sourceHeight);
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const width = Math.max(1, Math.floor(sourceWidth * scale));
+    const height = Math.max(1, Math.floor(sourceHeight * scale));
     let ctx = null;
     try {
       ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -281,6 +285,12 @@ export function createQrScanner({
         current.stream = stream;
         try {
           video.srcObject = stream;
+          // A stream does not play by itself: a paused video keeps handing
+          // the canvas its first frame. start() runs from a click, so the
+          // browser allows play(); a refusal leaves the timeout to report.
+          video.muted = true;
+          const playing = video.play?.();
+          if (playing && typeof playing.catch === "function") playing.catch(() => {});
         } catch {
           // A detached video cannot show the stream; the tracks still stop.
         }
@@ -348,9 +358,10 @@ export function createQrScanner({
       let reply;
       try {
         reply = await decoder.decode(gray, width, height);
-      } catch (error) {
+      } finally {
+        // The decoder zeroes (or detaches) the frame; wiping here as well
+        // costs nothing and does not depend on that.
         wipe(gray);
-        throw error;
       }
       return { code: reply?.code, payload: reply?.payload ?? null };
     } finally {
