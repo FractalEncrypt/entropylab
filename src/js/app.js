@@ -21073,7 +21073,6 @@ async function hodlBoot() {
   hodlInitPrivateCopy({ copyIcon: hodlClipboardIconMarkup, copiedIcon: hodlCopiedIconMarkup, onCopyStart: hodlJournalCopyStart });
   hodlInitEndSession();
   hodlInitLocale(hodlApplyLocale);
-  initOtsVerifier();
 }
 // Curve operations need the WebAssembly module instantiated first (async in
 // browsers; already resolved synchronously under Node for the test suite).
