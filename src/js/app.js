@@ -15691,9 +15691,10 @@ function hodlWipeActiveKey() {
     if (el.dataset) delete el.dataset.previousValue;
     delete el.hodlDiceBeforeInput;
   });
-  // The highlight mirrors drawn behind the dice, card, number, seed and key
-  // fields repeat the typed text.
-  document.querySelectorAll(".dice-input-highlight").forEach((mirror) => {
+  // The mirrors that repeat the typed or derived text: the same set the
+  // pagehide sweep clears (highlights, the word grid, last-word options and
+  // the brain-wallet hex).
+  document.querySelectorAll(".dice-input-highlight, .dice-word-grid, #last-words, #brain-lab-hex").forEach((mirror) => {
     mirror.textContent = "";
   });
   // The BIP39 passphrase field holds the text itself in BIP39-word mode; the
@@ -16685,7 +16686,7 @@ function hodlWipeActiveMsig() {
   // Empty the cosigner key fields in place before the station re-renders: the
   // nodes it drops would otherwise keep their text, and its Undo history,
   // until garbage collection (measured in CI's browser run).
-  document.querySelectorAll('[id^="msig-x-"]').forEach((el) => {
+  document.querySelectorAll('[id^="msig-x-"], #msig-descriptor').forEach((el) => {
     if ("value" in el) el.value = "";
   });
   hodlMsigs[hodlActiveMsig] = state.isLab ? hodlNewMsigLabState() : hodlNewMsigState(state.name, state.id, state.number);
