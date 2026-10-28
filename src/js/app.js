@@ -15669,6 +15669,35 @@ function hodlWipeActiveKey() {
   // too, and the passphrase bytes are zeroed rather than left to GC.
   hodlReleaseKeyConsumers(state.id);
   hodlZeroKeyPassphrase(state);
+  // Empty the secret fields in place before the form re-renders for the fresh
+  // key: the nodes it drops would otherwise keep their text, and its Undo
+  // history, until garbage collection. Assignment drops that history.
+  ["dice", "hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards"].forEach((id) => {
+    let el = document.getElementById(id);
+    if (!el) return;
+    el.value = "";
+    // The dice field keeps its previous text for diffing; drop that copy too.
+    if (el.dataset) delete el.dataset.previousValue;
+    delete el.hodlDiceBeforeInput;
+  });
+  // The copies that repeat the typed or derived text, the same set the
+  // pagehide sweep clears: the mirrors (highlights, the word grid, last-word
+  // options, the brain-wallet hex), then the dealt-cards strip, the worked
+  // calculations, the fairness panel and the progress lines.
+  document.querySelectorAll(".dice-input-highlight, .dice-word-grid, #last-words, #brain-lab-hex").forEach((mirror) => {
+    mirror.textContent = "";
+  });
+  for (let id of ["dealt-cards", "dice-manual-calculations", "cards-manual-calculations", "number-base-calculations", "dice-fairness", "dice-meta", "cards-meta", "entropy-meta", "seed-meta", "seed-number-meta", "private-key-meta"]) {
+    let panel = document.getElementById(id);
+    if (panel) panel.textContent = "";
+  }
+  // The BIP39 passphrase field holds the text itself in BIP39-word mode; the
+  // vault's own clear() empties it in step with the vault.
+  if (typeof hodlPassphraseVaultField !== "undefined" && hodlPassphraseVaultField) hodlPassphraseVaultField.clear();
+  else {
+    let pass = document.getElementById("pass");
+    if (pass) pass.value = "";
+  }
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
   // Restoring the fresh state re-renders the form; dropping the still-filled
@@ -16648,6 +16677,12 @@ function hodlWipeActiveMsig() {
   hodlInvalidateDerivation();
   if (hodlActiveMsig < 0 || !hodlMsigs[hodlActiveMsig]) return;
   let state = hodlMsigs[hodlActiveMsig];
+  // Empty the cosigner key fields in place before the station re-renders: the
+  // nodes it drops would otherwise keep their text, and its Undo history,
+  // until garbage collection (measured in CI's browser run).
+  document.querySelectorAll('[id^="msig-x-"], #msig-descriptor').forEach((el) => {
+    if ("value" in el) el.value = "";
+  });
   hodlMsigs[hodlActiveMsig] = state.isLab ? hodlNewMsigLabState() : hodlNewMsigState(state.name, state.id, state.number);
   hodlRestoreMsig();
   hodlJournalLog("clear", `multisig-${state.number}`, "msig");
@@ -20722,13 +20757,16 @@ function hodlInitEndSession() {
 // change handler, so its view re-renders masked exactly as a click would.
 // Five minutes untouched is long enough to copy a phrase onto paper.
 var hodlRevealIdleMs = 5 * 60 * 1000;
-function hodlConcealPrivateValues() {
-  // The pasted host reveal remains sensitive after a successful inspection.
-  const transcript = document.getElementById("psbt-ax-transcript");
-  if (transcript) transcript.value = "";
-  const transcriptSection = document.getElementById("nonce-jade-options");
-  if (transcriptSection) transcriptSection.open = false;
-  hodlNonceLast = null;
+function hodlConcealPrivateValues({ reason } = {}) {
+  // Plain blur permits copying the opening/PSBT from another window. Other
+  // conceal triggers retire the pasted host reveal, which remains sensitive.
+  if (reason !== "blur") {
+    const transcript = document.getElementById("psbt-ax-transcript");
+    if (transcript) transcript.value = "";
+    const transcriptSection = document.getElementById("nonce-jade-options");
+    if (transcriptSection) transcriptSection.open = false;
+    hodlNonceLast = null;
+  }
   for (let state of [...hodlKeys, ...hodlBip85Children, ...hodlSpAddresses]) state.reveal = false;
   if (hodlSpVerifyMatches) hodlSpVerifyMatches.reveal = false;
   hodlRevealPrivate = hodlBip85Reveal = hodlVanityReveal = hodlJournalReveal = false;

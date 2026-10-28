@@ -153,6 +153,21 @@ an explicit error before those pairs are allocated.
   result whenever required data or support is missing. “Completed” describes
   only that check against the data in the file; it is not a claim that the
   transaction is safe or that PSBT-provided data is true.
+
+  Host randomness (rho) remains sensitive after signing. A malicious signer using
+  an operator-known base nonce can expose the signing key if its operator later
+  obtains rho and the signature. With the corresponding account xpub and a
+  non-hardened derivation path, compromise can extend to the account private key.
+  Do not save, share or record real transcripts or paste them on a shared/recorded
+  screen. Clipboard copies can persist outside this page.
+
+  In normal and preview builds, tab hide, idle timeout and print clear the pasted
+  transcript and last-inspection cache and close its disclosure. Plain window
+  blur preserves them so the opening or PSBT can be copied from another window;
+  other revealed secrets and visible result panes are still concealed. End
+  Session and pagehide clear field/cache. Clearing is best-effort; browser/OS
+  copies are outside reliable erasure. A successful transcript check does not
+  establish that host randomness stayed secret.
 - Accepts a fully signed raw Bitcoin transaction (hex or base64) in the same
   inspector: outputs, extracted ECDSA nonces, and inscription-envelope hints.
   Fee and RFC 6979 cannot be checked without previous outputs.
@@ -878,7 +893,7 @@ npm ci
 npm run build
 ```
 
-To modify the Rust bindings (`entropylab-wasm/`, `psbt-wasm/`, `vanity-wasm/`),
+To modify the Rust bindings (`entropylab-wasm/`, `psbt-wasm/`, `vanity-wasm/`, `qr-wasm/`),
 Rust (with the `wasm32-unknown-unknown` target, installed automatically by
 rustup) is also required; regenerate the committed artifacts with
 `npm run build:wasm`.
@@ -1007,18 +1022,3 @@ to the public domain, with the same meaning as The Unlicense: free to copy,
 modify, publish, use, compile, sell, or distribute, in source or binary form,
 for any purpose and by any means, with no warranty of any kind. Any and all
 copyright interest in the software is dedicated to the public at large.
-
-### Anti-exfil transcript confidentiality
-
-Host randomness (rho) remains sensitive after signing. A malicious signer using
-an operator-known base nonce can expose the signing key if its operator later
-obtains rho and the signature. With the corresponding account xpub and a
-non-hardened derivation path, compromise can extend to the account private key.
-Do not save, share or record real transcripts or paste them on a shared/recorded
-screen. Clipboard copies can persist outside this page.
-
-In normal and preview builds, conceal on blur, tab hide, idle or print clears the
-pasted transcript and last-inspection cache and closes its disclosure. End Session
-and pagehide already cleared field/cache (the disclosure could remain open but
-empty). Clearing is best-effort; browser/OS copies are outside reliable erasure.
-A successful transcript check does not establish that host randomness stayed secret.

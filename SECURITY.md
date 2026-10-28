@@ -20,6 +20,21 @@ Successful signature verification checks the supplied hashes and transcript;
 it does not derive transaction hashes from a PSBT or establish an honest
 host's randomness, secrecy, or live exchange ordering.
 
+Host randomness (rho) remains sensitive after signing. A malicious signer using
+an operator-known base nonce can expose the signing key if its operator later
+obtains rho and the signature. With the corresponding account xpub and a
+non-hardened derivation path, compromise can extend to the account private key.
+Do not save, share or record real transcripts or paste them on a shared/recorded
+screen. Clipboard copies can persist outside this page.
+
+In normal and preview builds, tab hide, idle timeout and print clear the pasted
+transcript and last-inspection cache and close its disclosure. Plain window blur
+preserves them so the opening or PSBT can be copied from another window; other
+revealed secrets and visible result panes are still concealed. End Session and
+pagehide clear field/cache. Clearing is best-effort; browser/OS copies are outside
+reliable erasure. A successful transcript check does not establish that host
+randomness stayed secret.
+
 Who EntropyLab defends against, what it checks against each of them, and
 what it leaves to you: [docs/Threat_Model.md](docs/Threat_Model.md).
 
@@ -548,9 +563,13 @@ cannot overwrite them:
 
 - Text you type or paste. A field's value is text, and the browser's editor,
   undo history, spell checker and on-screen keyboard may keep copies of their
-  own. The Key Station's BIP39 passphrase field is the exception: it shows
-  one bullet per character and never holds the passphrase, which is kept in
-  a form the page can wipe and reaches the seed as bytes. Each key still
+  own. Clear empties a field by assignment, which also drops that field's
+  Undo history in Chrome, Edge and Firefox (measured 2026-10-27); earlier
+  copies can still sit in browser memory until it is reused. The Key
+  Station's BIP39 passphrase field is the exception: it shows one bullet per
+  character and keeps the passphrase out of its value. The passphrase is kept
+  in a form the page can wipe and reaches the seed as bytes. This reduces
+  copies; it does not remove them. Each key still
   arrives as a one-character string, a paste or an input-method word arrives
   as its text once, and showing the passphrase builds it. In
   BIP39-word mode the field holds the text, as other fields do.
@@ -677,18 +696,3 @@ implied, no promise it work or fit any purpose — under
 [The Ooga Booga License](LICENSE), which dedicates it to the public domain. The
 caveman words mean what The Unlicense means. Keep verified backups, and use it
 at your own risk.
-
-### Anti-exfil transcript confidentiality
-
-Host randomness (rho) remains sensitive after signing. A malicious signer using
-an operator-known base nonce can expose the signing key if its operator later
-obtains rho and the signature. With the corresponding account xpub and a
-non-hardened derivation path, compromise can extend to the account private key.
-Do not save, share or record real transcripts or paste them on a shared/recorded
-screen. Clipboard copies can persist outside this page.
-
-In normal and preview builds, conceal on blur, tab hide, idle or print clears the
-pasted transcript and last-inspection cache and closes its disclosure. End Session
-and pagehide already cleared field/cache (the disclosure could remain open but
-empty). Clearing is best-effort; browser/OS copies are outside reliable erasure.
-A successful transcript check does not establish that host randomness stayed secret.

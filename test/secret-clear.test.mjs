@@ -19,6 +19,7 @@ import { KEY_VAULT_MAX_KEYS, keyVaultIdentity } from "../src/js/keymanager.js";
 import { hodlInitLn } from "../src/js/lightning.js";
 import { initLowEntropyConfirm } from "../src/js/low-entropy-confirm.js";
 import { initFingerprintCollisionConfirm } from "../src/js/fingerprint-collision-confirm.js";
+import { initConcealOnLeave } from "../src/js/conceal-on-leave.js";
 
 // The helpers that zero address-row key bytes (#546 B2). The lifecycle
 // harness loads whichever of them app.js defines, so a source without them
@@ -1043,6 +1044,8 @@ test("the key Wipe button drops the cached partial mnemonics", () => {
   for (const activeKey of [-1, 0]) {
     const cache = new Map([["24:abandon abandon abandon", { candidates: [] }]]);
     const context = createContext({
+      // hodlWipeActiveKey empties the form fields it finds; this slice has none.
+      document: { getElementById: () => null, querySelectorAll: () => [] },
       hodlLastWordCache: cache,
       hodlInvalidateDerivation() {},
       hodlActiveKey: activeKey,
@@ -1094,7 +1097,13 @@ test("the key Wipe clears the partial-phrase cache after the form restore refill
   }
   slice.__set.hodlKeys([{ name: "Key 1", id: 1, number: 1, isLab: false }]);
   slice.__set.hodlActiveKey(0);
-  slice.hodlWipeActiveKey();
+  // hodlWipeActiveKey empties the form fields it finds; this slice has none.
+  globalThis.document = { getElementById: () => null, querySelectorAll: () => [] };
+  try {
+    slice.hodlWipeActiveKey();
+  } finally {
+    delete globalThis.document;
+  }
   assert.equal(slice.hodlLastWordCache.size, 0, "Wipe left the restore's re-cached partial phrase in the last-word cache");
 });
 
@@ -1173,7 +1182,7 @@ test("Wipe zeroes a wallet's row key bytes unless another key tab still shows th
     const { rows, result } = walletWithRows();
     const active = { name: "Key 1", id: 1, number: 1, isLab: false, result };
     const context = createContext({
-      hodlLastWordCache: new Map(), hodlInvalidateDerivation() {}, hodlActiveKey: 0,
+      document: { getElementById: () => null, querySelectorAll: () => [] }, hodlLastWordCache: new Map(), hodlInvalidateDerivation() {}, hodlActiveKey: 0,
       hodlKeys: shared ? [active, { isLab: true, result }] : [active], hodlKeyManagerPending: [], hodlWalletResult: result,
       hodlNewKeyState: () => ({ result: null }), hodlNewLabState: () => ({ result: null }),
       hodlRestoreKey() { context.hodlWalletResult = context.hodlKeys[context.hodlActiveKey]?.result ?? null; }, hodlJournalLog() {},
@@ -1238,7 +1247,7 @@ test("an ignored key's saved copy carries no key bytes", async () => {
 test("a Key Manager reset leaves the row key bytes of a wallet a station still shows", () => {
   const context = createContext({
     hodlKeyManagerIgnored: [], hodlKeyManagerIds: new Set(), hodlKeyManagerActiveId: "",
-    document: { getElementById: () => null }, hodlKeyManagerStatus() {}, hodlKeyManagerRender() {},
+    document: { getElementById: () => null, querySelectorAll: () => [] }, hodlKeyManagerStatus() {}, hodlKeyManagerRender() {},
     hodlRefreshStationKeyPickers() {}, hodlRefreshMsigSessionPickers() {},
     hodlSpDropAddressesFrom() {}, hodlBip85WipeParent() {}, hodlDropBip85ChildrenOf() {},
   });
@@ -2152,3 +2161,44 @@ test("conceal retires pasted anti-exfil transcript, cache and disclosure",()=>{
  vm.runInContext(functionSource('hodlConcealPrivateValues'),context);
  context.hodlConcealPrivateValues();assert.equal(field.value,'');assert.equal(section.open,false);assert.equal(context.hodlNonceLast,null);
 });
+
+// #1261 maintainer contract: copying between windows must preserve the pasted
+// transcript on plain blur; hidden/idle/print still retire it. Every trigger
+// must continue masking other secrets, clearing result panes and pausing capture.
+for (const trigger of ["blur", "hidden", "idle", "beforeprint", "print-media", "legacy-print-media"]) {
+  test(`anti-exfil transcript lifecycle through conceal-on-leave: ${trigger}`, () => {
+    const field = { value: "public-rho-marker" }, section = { open: true };
+    const result = { textContent: "public-inspection-marker" };
+    const cache = { transcript: "public-rho-marker" }, key = { reveal: true };
+    const events = {}, signals = [];
+    let idle, printChange;
+    const doc = {
+      visibilityState: "visible",
+      getElementById: id => id === "psbt-ax-transcript" ? field : id === "nonce-jade-options" ? section : id === "nonce-out" ? result : null,
+      querySelectorAll: () => [], dispatchEvent: event => signals.push(event.type),
+      addEventListener: (name, fn) => { events[name] = fn; },
+    };
+    const win = {
+      addEventListener: (name, fn) => { events[name] = fn; },
+      setTimeout: fn => { idle = fn; return 1; }, clearTimeout() {},
+      matchMedia: () => trigger === "legacy-print-media"
+        ? { addListener: fn => { printChange = fn; } }
+        : { addEventListener: (_name, fn) => { printChange = fn; } },
+    };
+    const context = createContext({ hodlKeys: [key], hodlBip85Children: [], hodlSpAddresses: [],
+      hodlSpVerifyMatches: null, hodlNonceLast: cache, document: doc,
+      Event: class { constructor(type) { this.type = type; } } });
+    vm.runInContext(functionSource("hodlConcealPrivateValues"), context);
+    initConcealOnLeave({ conceal: context.hodlConcealPrivateValues, idleMs: 300000, win, doc });
+    if (trigger === "hidden") { doc.visibilityState = "hidden"; events.visibilitychange(); }
+    else if (trigger === "idle") idle();
+    else if (trigger.endsWith("print-media")) printChange({ matches: true });
+    else events[trigger]({ type: trigger });
+    assert.equal(field.value, trigger === "blur" ? "public-rho-marker" : "", "pasted transcript lifecycle");
+    assert.equal(section.open, trigger === "blur", "transcript disclosure lifecycle");
+    assert.equal(context.hodlNonceLast, trigger === "blur" ? cache : null, "inspection cache lifecycle");
+    assert.equal(key.reveal, false, "other secrets must still be concealed on blur");
+    assert.equal(result.textContent, "", "visible inspection result must still clear on blur");
+    assert.deepEqual(signals, ["hodl:conceal"], "camera/overlay conceal signal must still fire on blur");
+  });
+}
