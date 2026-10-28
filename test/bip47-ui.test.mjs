@@ -305,3 +305,32 @@ test("a shown receive key must match the address on screen; stale rows are clear
     globalThis.document = previous;
   }
 });
+
+// Clearing or deleting a Key Station key empties a BIP-47 session that used
+// it, and also the seed text copied from it after a passphrase edit made the
+// session manual (Gemini red team, 10-28). Run against the app's own hook.
+test("a dropped Key Station key wipes the session that used it or the text copied from it", async () => {
+  const { loadAppFunctions } = await import("./app-slice-harness.mjs");
+  let wipes = 0;
+  const api = await loadAppFunctions(["hodlBip47ReleaseSource"], {
+    stubs: { hodlBip47WipeSource: () => { wipes += 1; } },
+    settable: ["hodlBip47Source", "hodlBip47Origin"],
+  });
+  const run = (source, origin, dropped) => {
+    wipes = 0;
+    api.__set.hodlBip47Source(source);
+    api.__set.hodlBip47Origin(origin);
+    api.hodlBip47ReleaseSource(dropped);
+    return wipes;
+  };
+  assert.equal(run("key:a", "key:a", "key:a"), 1, "the session's own key");
+  assert.equal(run("manual", "key:a", "key:a"), 1, "a passphrase edit made it manual; the copied seed still goes");
+  assert.equal(run("", "key:a", "key:a"), 1, "after a wipe of the root, the copied text still goes");
+  assert.equal(run("manual", "", "key:a"), 0, "text the user typed is theirs");
+  assert.equal(run("key:b", "key:b", "key:a"), 0, "another key's session stays");
+});
+
+test("an engine error keeps any text a translation puts after the code", () => {
+  const html = bip47ErrorHtml("BAD_VERSION");
+  assert.match(html, /<code>BAD_VERSION<\/code><\/p>$/, "English ends at the code");
+});

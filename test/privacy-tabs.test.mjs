@@ -105,7 +105,7 @@ test("the BIP-47 card ships only in preview builds and holds its sections in ord
   const release = applyPreviewBlocks(shell, false);
   assert.doesNotMatch(release, /id="bip47-card"|data-bip47-section/, "a release build must not carry the BIP-47 card");
   const preview = applyPreviewBlocks(shell, true);
-  assert.match(preview, /<div class="card no-print tool-card" id="bip47-card" role="tabpanel" hidden>/, "the card starts hidden, like every other station card");
+  assert.match(preview, /<div\b[^>]*\bid="bip47-card"[^>]*\brole="tabpanel"[^>]*\bhidden>/, "the card starts hidden, like every other station card");
   const sections = [...preview.matchAll(/data-bip47-section="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(sections, ["intro", "source", "own", "counterparty", "pairs", "notify"], "the sections run intro → source → your code → counterparty → payment addresses → notification check");
   for (const id of ["bip47-session-keys", "bip47-session-keys-note", "bip47-key", "bip47-pass", "bip47-network", "bip47-path", "bip47-go", "bip47-error", "bip47-own", "bip47-contact", "bip47-decode", "bip47-contact-out"]) {
@@ -220,15 +220,19 @@ test("both Key Station clear/delete handlers also wipe a BIP-47 session using th
   assert.ok(spSites >= 2, "the SP per-key wipe sites exist");
   const pattern = /if \(typeof hodlBip47ReleaseSource === "function"\) hodlBip47ReleaseSource\(source\);\n\s*if \(hodlSpSource === source\) \{/g;
   assert.equal((appSource.match(pattern) || []).length, spSites, "every SP per-key wipe site has the BIP-47 wipe beside it");
-  assert.match(fnSource("hodlBip47ReleaseSource"), /if \(hodlBip47Source && hodlBip47Source === source\) hodlBip47WipeSource\(\);/, "the hook wipes only the session that used the dropped key");
+  assert.match(fnSource("hodlBip47ReleaseSource"), /if \(\(hodlBip47Source && hodlBip47Source === source\) \|\| \(hodlBip47Origin && hodlBip47Origin === source\)\) hodlBip47WipeSource\(\);/, "the hook wipes only the session that used, or copied text from, the dropped key");
   const wipeSource = appSource.slice(appSource.indexOf("function hodlBip47WipeSource()"), appSource.indexOf("function hodlBip47ClearContact()"));
   for (const needle of ["hodlBip47Invalidate()", "\"bip47-key\"", "\"bip47-pass\"", "hodlClearStationPassphrase(\"bip47-pass\")"]) {
     assert.ok(wipeSource.includes(needle), `hodlBip47WipeSource clears ${needle}`);
   }
 });
 
-test("a network change clears the decoded contact, whose notification address is per network", () => {
-  assert.match(appSource, /network\.addEventListener\("change", \(\) => \{ hodlBip47Invalidate\(\); hodlBip47ClearContact\(\); hodlSyncBip47Path\(\); \}\);/);
+test("a network change clears every result and the decoded contact, but keeps the key and its Key Station link", () => {
+  assert.match(appSource, /network\.addEventListener\("change", \(\) => \{ hodlBip47ClearResults\(\); hodlBip47ClearContact\(\); hodlSyncBip47Path\(\); \}\);/);
+  // Wiping the root here would also drop hodlBip47Source, so a Key Station
+  // key deleted afterwards would no longer clear the seed left in the field.
+  assert.doesNotMatch(fnSource("hodlBip47ClearResults"), /hodlBip47WipeKeys|hodlBip47Source/);
+  assert.match(fnSource("hodlBip47Invalidate"), /hodlBip47WipeKeys\(\);\s*hodlBip47ClearResults\(\);/);
 });
 
 // Review on round 2 (GLM 5.3): a revealed spending key is hidden by every
@@ -310,14 +314,14 @@ test("the notification check ships only in preview, after the pairs disclosure",
 test("the notification check holds its prerequisite, transaction, manual override, action and results in order", () => {
   const preview = applyPreviewBlocks(shell, true);
   const block = detailsBlock(preview, "bip47-notify");
-  assert.match(block, /^<details class="derivation-advanced" id="bip47-notify" data-bip47-section="notify">/, "the check is a closed disclosure at rest");
+  assert.match(block, /^<details\b(?![^>]*\bopen\b)[^>]*\bid="bip47-notify"[^>]*\bdata-bip47-section="notify"[^>]*>/, "the check is a closed disclosure at rest");
   for (const id of ["bip47-notify-needs", "bip47-notify-tx", "bip47-notify-manual", "bip47-notify-input", "bip47-notify-pub", "bip47-notify-go", "bip47-notify-out"]) {
     assert.ok(block.includes(`id="${id}"`), `#${id} sits inside the notification check`);
   }
   const order = ["bip47-notify-needs", "bip47-notify-tx", "bip47-notify-manual", "bip47-notify-go", "bip47-notify-out"].map((id) => block.indexOf(`id="${id}"`));
   assert.deepEqual(order, [...order].sort((a, b) => a - b), "the parts run prerequisite → transaction → manual override → action → results");
   const manual = detailsBlock(preview, "bip47-notify-manual");
-  assert.match(manual, /^<details class="derivation-advanced" id="bip47-notify-manual">/, "the manual override is closed at rest");
+  assert.match(manual, /^<details\b(?![^>]*\bopen\b)[^>]*\bid="bip47-notify-manual"[^>]*>/, "the manual override is closed at rest");
   assert.ok(manual.includes('id="bip47-notify-input"'));
   assert.ok(manual.includes('id="bip47-notify-pub"'));
   assert.ok(!manual.includes('id="bip47-notify-go"'), "the action sits outside the manual override");

@@ -75,8 +75,9 @@ export const bip47ContactHtml = (decoded, network, icons = {}) => {
 // A Bip47Error code (or the engine's own message) is shown as text, never as
 // markup, and never as a claim about what the code is.
 export const bip47ErrorHtml = (code) => {
-  const lead = t("This payment code could not be read: {code}", { code: "\u0000" }).split("\u0000")[0];
-  return `<p class="err" role="alert">${escape(lead)}<code>${escape(code)}</code></p>`;
+  // A translation may put {code} mid-sentence: keep the text on both sides.
+  const [lead, tail = ""] = t("This payment code could not be read: {code}", { code: "\u0000" }).split("\u0000");
+  return `<p class="err" role="alert">${escape(lead)}<code>${escape(code)}</code>${escape(tail)}</p>`;
 };
 
 // One row builder for both directions. Rows keep their real derivation index;

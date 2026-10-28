@@ -9304,6 +9304,11 @@ function hodlOpenKeyStation() {
 // m/47'/coin'/0' account node; the payment code and its notification address
 // are public readouts. Nothing here builds, signs or broadcasts a transaction.
 var hodlBip47Source = "";
+// The Key Station key whose seed or root text was copied into #bip47-key. It
+// outlives hodlBip47Source (a passphrase edit makes the session manual) and is
+// cleared only when the key text itself is edited, so clearing or deleting
+// that Key Station key still empties the copy.
+var hodlBip47Origin = "";
 var hodlBip47Hd = null;
 var hodlBip47Contact = null;
 var hodlBip47Direction = "send";
@@ -9345,8 +9350,11 @@ function hodlBip47ClearNotify() {
   if (out) out.innerHTML = "";
 }
 
-function hodlBip47Invalidate() {
-  hodlBip47WipeKeys();
+// Every derived result goes, the key stays. The root does not depend on the
+// network (the account path does, at derive time), so a network change clears
+// only these: keeping the root also keeps its Key Station link, and with it
+// the wipe when that key is cleared or deleted.
+function hodlBip47ClearResults() {
   hodlBip47ClearOwn();
   hodlBip47ClearRows();
   hodlBip47ClearNotify();
@@ -9355,10 +9363,16 @@ function hodlBip47Invalidate() {
   hodlBip47SyncPairsNeeds();
 }
 
+function hodlBip47Invalidate() {
+  hodlBip47WipeKeys();
+  hodlBip47ClearResults();
+}
+
 // The key source and everything derived from it: the root, the readouts and
 // the seed or root text in the station's own fields.
 function hodlBip47WipeSource() {
   hodlBip47Invalidate();
+  hodlBip47Origin = "";
   for (let id of ["bip47-key", "bip47-pass"]) {
     let field = document.getElementById(id);
     if (field) field.value = "";
@@ -9417,7 +9431,11 @@ function hodlBip47LoadKey(text, passphrase) {
   if (/^[xt]prv[1-9A-HJ-NP-Za-km-z]+$/.test(value.replace(/\s/g, ""))) {
     let parsed = hodlParseExtendedKey(value.replace(/\s/g, ""));
     if (!parsed.isPrivate) throw new Error("Watch-only extended keys cannot derive BIP-47 payment codes.");
-    if (parsed.node.depth !== 0) throw new Error("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
+    if (parsed.node.depth !== 0) {
+      // A refused account key is still private material: wipe it here.
+      try { parsed.node.wipePrivateData(); } catch {}
+      throw new Error("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
+    }
     hodlBip47Hd = parsed.node;
     hodlBip47Source = "manual";
     return;
@@ -9467,6 +9485,7 @@ function hodlPickBip47SessionKey(state) {
   try {
     hodlBip47UseKey(state);
     document.getElementById("bip47-key").value = hodlResultMnemonic(state.result) || hodlResultRootXprv(state.result) || "";
+    hodlBip47Origin = hodlBip47Source;
     hodlSetStationPassphrase("bip47-pass", hodlResultHasSeed(state.result) ? state.fields?.pass : "");
   } catch (exception) {
     if (error) error.textContent = exception.message || String(exception);
@@ -9545,7 +9564,7 @@ function hodlRefreshBip47Picker() {
 
 // A Key Station key was cleared or deleted: a BIP-47 session using it goes too.
 function hodlBip47ReleaseSource(source) {
-  if (hodlBip47Source && hodlBip47Source === source) hodlBip47WipeSource();
+  if ((hodlBip47Source && hodlBip47Source === source) || (hodlBip47Origin && hodlBip47Origin === source)) hodlBip47WipeSource();
 }
 
 function hodlInitBip47() {
@@ -9569,9 +9588,11 @@ function hodlInitBip47() {
     if (wasStationKey) hodlRefreshStationKeyPickers();
     hodlBip47SyncPairsNeeds();
   };
+  // Editing the key text makes it the user's own; a passphrase edit does not.
+  key.addEventListener("input", () => { hodlBip47Origin = ""; });
   key.addEventListener("input", onKeyEdit);
   pass.addEventListener("input", onKeyEdit);
-  network.addEventListener("change", () => { hodlBip47Invalidate(); hodlBip47ClearContact(); hodlSyncBip47Path(); });
+  network.addEventListener("change", () => { hodlBip47ClearResults(); hodlBip47ClearContact(); hodlSyncBip47Path(); });
   go.onclick = hodlRunBip47;
   decode.onclick = hodlDecodeBip47Contact;
   contact.addEventListener("input", () => {
@@ -9759,6 +9780,9 @@ function hodlInitBip47Pairs() {
       if (details?.matches?.("details[data-bip47-keys]") && !details.open) hodlBip47Conceal();
     }, true);
   }
+  // Closing the whole Payment addresses disclosure hides a shown key too.
+  let pairs = document.getElementById("bip47-pairs");
+  if (pairs) pairs.addEventListener("toggle", () => { if (!pairs.open) hodlBip47Conceal(); });
   hodlBip47SyncPairsNeeds();
 }
 
@@ -9843,6 +9867,10 @@ function hodlInitBip47Notify() {
       let pub = document.getElementById("bip47-notify-pub");
       if (pub) pub.value = "";
     });
+  }
+  // The verdict belongs to the input, key and mode it was checked with.
+  for (let [id, type] of [["bip47-notify-input", "change"], ["bip47-notify-pub", "input"], ["bip47-notify-manual", "toggle"]]) {
+    document.getElementById(id)?.addEventListener(type, () => hodlBip47ClearNotify());
   }
   let go = document.getElementById("bip47-notify-go");
   if (go) go.onclick = hodlBip47CheckNotify;
