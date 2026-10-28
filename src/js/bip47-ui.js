@@ -63,7 +63,11 @@ export const bip47ContactHtml = (decoded, network, icons = {}) => {
   return [
     fact("valid", "yes", escape(validName), `<p class="mono">${escape(yes)}</p>`),
     fact("derivable", derivable ? "yes" : "no", escape(derivableName), `<p class="mono">${escape(derivable ? yes : no)}</p>`),
-    fact("notification-address", notificationAddress ? "yes" : "no", escape(addressName), addressValue),
+    // The readout carries its own label (with the network and QR), so the fact
+    // adds none; without an address, the plain label and a dash stand in.
+    notificationAddress
+      ? `<div data-bip47-fact="notification-address" data-bip47-status="yes">${addressValue}</div>`
+      : fact("notification-address", "no", escape(addressName), addressValue),
     details,
   ].join("");
 };
@@ -91,27 +95,30 @@ export const bip47RowsHtml = ({ direction, rows = [], skipped = [], budgetExhaus
   const showKeyName = t("Show key");
   const hideKeyName = t("Hide key");
   const privateNote = t("This private key can spend funds sent to this receive address. Hiding it does not clear your clipboard.");
-  const copyLabel = t("Copy {label}", { label: keysName });
   const revealedIndex = revealed && Number.isInteger(revealed.index) ? revealed.index : null;
+  // The standard field pattern: the index label with its QR, the address
+  // under it, so the QR never wraps away from the address on a phone.
   const rowHtml = (row) => {
     const index = Number(row?.index);
     const address = String(row?.address ?? "");
     const label = `${indexName} ${index}`;
     return `<div class="bip47-row" data-row-index="${escape(index)}" data-direction="${dir}">`
-      + publicValueHtml(address, { label, copyIcon, clipboard: false })
-      + addressQrButtonHtml(address, label)
+      + publicFieldHtml(escape(label), address, { copyIcon, qrHtml: addressQrButtonHtml(address, label) })
       + `</div>`;
   };
+  // Each key control names its row's index, so it is clear which key it shows.
   const keyHtml = (row) => {
     const index = Number(row?.index);
+    const label = `${indexName} ${index}`;
     if (revealedIndex === index && revealed.wif) {
-      const label = `${keysName} ${index}`;
+      const copyLabel = t("Copy {label}", { label });
       return `<div data-bip47-key-index="${escape(index)}">`
         + `<p class="private-field is-revealed" data-private-field><span class="label copy-field-label">${escape(label)}${privateCopy({ label: copyLabel })}</span>${privateValue(revealed.wif, "secret private-field-value", true)}</p>`
         + `<button class="btn" type="button" data-bip47-conceal>${escape(hideKeyName)}</button>`
         + `</div>`;
     }
-    return `<button class="btn" type="button" data-bip47-reveal="${escape(index)}">${escape(showKeyName)}</button>`;
+    return `<div class="row" data-bip47-key-index="${escape(index)}"><span class="label">${escape(label)}</span>`
+      + `<button class="btn" type="button" data-bip47-reveal="${escape(index)}">${escape(showKeyName)}</button></div>`;
   };
   const skippedHtml = skipped.length
     ? `<p class="field-note" data-bip47-skipped>${escape(skippedName)}</p>`

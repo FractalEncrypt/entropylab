@@ -146,6 +146,18 @@ test("an unknown station id falls back to Silent Payments", () => {
   assert.deepEqual(api.journal, [], "no station change is logged when the id falls back to the current one");
 });
 
+test("switching away from the BIP-47 station conceals a revealed key; switching to it does not", () => {
+  const document = fakeDocument(["sp", "bip47"]);
+  const api = loadPrivacy(document, { tools: [["sp", "sp-card"], ["bip47", "bip47-card"]] });
+  api.init();
+  api.show("bip47");
+  assert.equal(api.conceals.length, 0, "opening the BIP-47 station has nothing to conceal");
+  api.show("sp");
+  assert.equal(api.conceals.length, 1, "leaving the BIP-47 station conceals it");
+  api.show("nonsense");
+  assert.equal(api.conceals.length, 2, "a fallback to Silent Payments conceals too");
+});
+
 test("the station tabs answer the arrow, Home and End keys", () => {
   const document = fakeDocument(["sp", "bip47"]);
   const api = loadPrivacy(document, { tools: [["sp", "sp-card"], ["bip47", "bip47-card"]] });

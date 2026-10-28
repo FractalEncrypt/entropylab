@@ -170,7 +170,8 @@ test("row values are escaped, never interpreted as markup", () => {
 // The BIP-47 spec's notification vector (SamouraiDev gist 6aad669604c5930864bd,
 // the link in BIP-47's "Test Vectors" section), pinned in test/bip47.test.mjs:
 // Alice's notification transaction, which Bob decodes with child 0 of his
-// BIP-47 account. Nothing below is derived by running the code under test.
+// BIP-47 account. The vector values are pinned from the spec; the decode
+// results come from bip47.js, whose own tests anchor them to the vector.
 const NOTIFY_TX = "010000000186f411ab1c8e70ae8a0795ab7a6757aea6e4d5ae1826fc7b8f00c597d500609c010000006b483045022100ac8c6dbc482c79e86c18928a8b364923c774bfdbd852059f6b3778f2319b59a7022029d7cc5724e2f41ab1fcfc0ba5a0d4f57ca76f72f19530ba97c860c70a6bf0a801210272d83d8a1fa323feab1c085157a0791b46eba34afb8bfbfaeb3a3fcc3f2c9ad8ffffffff0210270000000000001976a9148066a8e7ee82e5c5b9b7dc1765038340dc5420a988ac1027000000000000536a4c50010002063e4eb95e62791b06c50e1a3a942e1ecaaa9afbbeb324d16ae6821e091611fa96c0cf048f607fe51a0327f5e2528979311c78cb2de0d682c61e1180fc3d543b0000000000000000000000000000000000";
 const NOTIFY_DISPLAY_TXID = "9c6000d597c5008f7bfc2618aed5e4a6ae57677aab95078aae708e1cab11f486";
 const NOTIFY_DESIGNATED_PUBKEY = "0272d83d8a1fa323feab1c085157a0791b46eba34afb8bfbfaeb3a3fcc3f2c9ad8";
