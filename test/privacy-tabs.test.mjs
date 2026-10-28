@@ -235,6 +235,14 @@ test("a network change clears every result and the decoded contact, but keeps th
   assert.match(fnSource("hodlBip47Invalidate"), /hodlBip47WipeKeys\(\);\s*hodlBip47ClearResults\(\);/);
 });
 
+test("an invalid start index is refused, never rewritten to a valid one", () => {
+  // Codex review (10-28): rewriting -1 to 0 could show an already used
+  // address; validation fails closed instead.
+  const rows = fnSource("hodlBip47RunRows");
+  assert.match(rows, /if \(!Number\.isInteger\(start\) \|\| start < 0 \|\| start > 2147483647\) \{\s*throw new Error\(/);
+  assert.doesNotMatch(rows, /Math\.trunc\(start\)|field\.value = String\(start\)/);
+});
+
 test("editing key text copied from a Key Station key also drops that key's passphrase", () => {
   // Gemini red team (10-28): kept, the copied passphrase would outlive the
   // Key Station key's wipe and apply silently to a newly pasted seed.

@@ -9683,13 +9683,12 @@ function hodlBip47RunRows() {
     }
     let network = hodlBip47Network();
     let direction = hodlBip47Direction === "receive" ? "receive" : "send";
-    // An empty or out-of-range start index is brought into range and shown,
-    // so the rows' own index numbers always match the field.
+    // Fail closed: an empty, fractional or out-of-range start index is
+    // refused, never rewritten, so a used address is not shown again by
+    // accident (Codex review, 10-28).
     let start = hodlBip47StartIndex();
     if (!Number.isInteger(start) || start < 0 || start > 2147483647) {
-      start = Number.isFinite(start) ? Math.min(2147483647, Math.max(0, Math.trunc(start))) : 0;
-      let field = document.getElementById("bip47-start");
-      if (field) field.value = String(start);
+      throw new Error(hodlTText("Start index must be a whole number from 0 to 2,147,483,647."));
     }
     account = hodlBip47AccountNode(hodlBip47Hd, network);
     if (direction === "send") {
