@@ -2,7 +2,7 @@
 
 Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
 Shared-decoder integration base checked 2026-10-28 UTC:
-770c433758b2f9c1458097a7936a4ec5d8d47ba6, plus the pinned open worker PR below.
+530666a36ee66b57636d04e461a9da13042f8852, including merged shared-worker PR #1272.
 
 ## Current flow
 
@@ -74,8 +74,8 @@ Use pinned Node 22.23.4/npm 11.17.0 and npm ci. Preview command:
 `node scripts/build.mjs --preview --out ../preview`.
 Serve on loopback or another secure local browser context. No runtime downloads.
 Capture now uses the shared quircs worker and `createQrDecoder` interface from
-PR #1272, pinned locally at d08a2d3fd9a0b43844d9bf358f106766d433c1bf.
-That dependency is still under upstream review. The camera adapter only converts
+merged PR #1272 (head 2c2c3088c5f1d3921877c3b80d4fd6931cb4e52e).
+The dependency is now part of the upstream base. The camera adapter only converts
 RGBA to grayscale and consumes/wipes returned UTF-8 payloads; it does not implement
 a competing worker. Camera stop, restart and disconnect retire decoding. Frames
 are at most 1280x960, one decode is in flight, and the shared worker applies its
