@@ -264,3 +264,44 @@ test("no report echoes the raw transaction", () => {
   ];
   for (const html of reports) assert.ok(!html.includes(NOTIFY_TX), "the raw transaction never reaches the page");
 });
+
+// Showing a receive key derives it again from the current session, so the
+// station checks it against the address on screen. Run against the app's
+// own hodlBip47RevealRow, with the engine and render calls stubbed.
+test("a shown receive key must match the address on screen; stale rows are cleared instead", async () => {
+  const { loadAppFunctions } = await import("./app-slice-harness.mjs");
+  const calls = { rendered: 0, cleared: 0 };
+  const keys = [];
+  let derived = "1ShownAddress";
+  const api = await loadAppFunctions(["hodlBip47RevealRow"], {
+    stubs: {
+      hodlBip47EnsureHd: () => {},
+      hodlBip47Network: () => "mainnet",
+      hodlBip47AccountNode: () => ({ wipePrivateData() {} }),
+      hodlBip47ReceiveRow: () => {
+        const privateKey = new Uint8Array(32).fill(7);
+        keys.push(privateKey);
+        return { address: derived, privateKey };
+      },
+      hodlEncodeWif: () => "WIF",
+      hodlBip47RenderRows: () => { calls.rendered += 1; },
+      hodlBip47ClearRows: () => { calls.cleared += 1; },
+      hodlBip47Conceal: () => {},
+    },
+    settable: ["hodlBip47RowsLast", "hodlBip47Contact"],
+  });
+  const previous = globalThis.document;
+  globalThis.document = { getElementById: () => null };
+  try {
+    api.__set.hodlBip47Contact({ derivable: true });
+    api.__set.hodlBip47RowsLast({ direction: "receive", start: 0, rows: [{ index: 0, address: "1ShownAddress" }], skipped: [], budgetExhausted: false });
+    api.hodlBip47RevealRow(0);
+    assert.deepEqual(calls, { rendered: 1, cleared: 0 }, "a matching key is shown");
+    derived = "1OtherAddress";
+    api.hodlBip47RevealRow(0);
+    assert.deepEqual(calls, { rendered: 1, cleared: 1 }, "a key for another address clears the rows and is not shown");
+    for (const key of keys) assert.ok(key.every((byte) => byte === 0), "every derived private key is wiped");
+  } finally {
+    globalThis.document = previous;
+  }
+});

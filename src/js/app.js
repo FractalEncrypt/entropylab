@@ -9398,7 +9398,9 @@ function hodlBip47WipeMem() {
   hodlBip47RowsLast = null;
   hodlBip47Revealed = null;
   hodlBip47ClearNotify();
-  for (let id of ["bip47-notify-tx", "bip47-notify-pub"]) {
+  // A contact's code is public, but it names who the session was paying:
+  // ending the session leaves nothing on screen.
+  for (let id of ["bip47-contact", "bip47-notify-tx", "bip47-notify-pub"]) {
     let field = document.getElementById(id);
     if (field) field.value = "";
   }
@@ -9446,7 +9448,14 @@ function hodlBip47UseKey(state) {
   if (result.kind === "hd" && hodlResultHasSeed(result)) {
     hodlBip47Hd = hodlSeedSessionRoot(result, state.fields.pass || "");
   } else if (result.kind === "hd" && hodlResultHasRoot(result)) {
-    hodlBip47Hd = hodlResultRootNode(result);
+    let root = hodlResultRootNode(result);
+    // The same rule as a pasted xprv: m/47' hangs off the master key. The
+    // copy is this station's own, so a refused one is wiped here.
+    if (root?.depth !== 0) {
+      try { root?.wipePrivateData(); } catch {}
+      throw new Error("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
+    }
+    hodlBip47Hd = root;
   } else throw new Error("BIP-47 needs a seed or root xprv. Account-level and single keys cannot derive m/47'.");
   hodlBip47Source = "key:" + state.id;
 }
@@ -9485,6 +9494,8 @@ function hodlBip47EnsureHd() {
 
 function hodlRunBip47() {
   let error = document.getElementById("bip47-error"), out = document.getElementById("bip47-own");
+  // Working elsewhere in the station hides a shown spending key.
+  hodlBip47Conceal();
   if (error) error.textContent = "";
   if (out) out.innerHTML = "";
   let account = null;
@@ -9633,19 +9644,29 @@ function hodlBip47RunRows() {
   hodlBip47ClearRows();
   let account = null, child0 = null, own = null, result = null;
   try {
-    let ready = false;
+    let ready = false, keyError = null;
     try {
       hodlBip47EnsureHd();
       ready = hodlNodeHasPrivateKey(hodlBip47Hd);
-    } catch {
-      ready = false;
+    } catch (exception) {
+      keyError = exception;
     }
+    // A key that was entered but cannot be read says why, rather than the
+    // generic prerequisite note.
+    if (keyError && (document.getElementById("bip47-key")?.value || "").trim()) throw keyError;
     if (!ready || hodlBip47Contact?.derivable !== true) {
       throw new Error(hodlTText("Choose a key and decode a contact's payment code first."));
     }
     let network = hodlBip47Network();
     let direction = hodlBip47Direction === "receive" ? "receive" : "send";
+    // An empty or out-of-range start index is brought into range and shown,
+    // so the rows' own index numbers always match the field.
     let start = hodlBip47StartIndex();
+    if (!Number.isInteger(start) || start < 0 || start > 2147483647) {
+      start = Number.isFinite(start) ? Math.min(2147483647, Math.max(0, Math.trunc(start))) : 0;
+      let field = document.getElementById("bip47-start");
+      if (field) field.value = String(start);
+    }
     account = hodlBip47AccountNode(hodlBip47Hd, network);
     if (direction === "send") {
       child0 = account.deriveChild(0);
@@ -9687,6 +9708,10 @@ function hodlBip47RevealRow(index) {
     account = hodlBip47AccountNode(hodlBip47Hd, network);
     row = hodlBip47ReceiveRow(account, hodlBip47Contact, index, network);
     if (!row || !row.privateKey) { hodlBip47Conceal(); return; }
+    // The key is derived again on show, so it must belong to the address on
+    // screen; if it does not, the rows are stale and go.
+    let shown = hodlBip47RowsLast.rows.find((entry) => entry.index === index);
+    if (!shown || row.address !== shown.address) { hodlBip47ClearRows(); return; }
     hodlBip47Revealed = { index, wif: hodlEncodeWif(row.privateKey, true, network) };
     hodlBip47RenderRows();
   } catch (exception) {
@@ -9770,6 +9795,7 @@ function hodlBip47FillNotifyInputs() {
 function hodlBip47CheckNotify() {
   let error = document.getElementById("bip47-error");
   let out = document.getElementById("bip47-notify-out");
+  hodlBip47Conceal();
   if (error) error.textContent = "";
   if (out) out.innerHTML = "";
   hodlBip47NotifyCode = null;
@@ -9813,6 +9839,9 @@ function hodlInitBip47Notify() {
     tx.addEventListener("input", () => {
       hodlBip47ClearNotify();
       hodlBip47FillNotifyInputs();
+      // A public key entered for the old transaction's input does not carry over.
+      let pub = document.getElementById("bip47-notify-pub");
+      if (pub) pub.value = "";
     });
   }
   let go = document.getElementById("bip47-notify-go");
