@@ -250,9 +250,11 @@ const zeroBuffers = (entry) => {
 export const wipeEntry = (entry) => {
   if (!entry || typeof entry !== "object") fail("BAD_ENTRY", "Not a secure entry.");
   // A wiped entry's buffers stay reachable (a key entry's vault can be refilled
-  // through entry.vault), so a repeat wipe clears them again.
+  // through entry.vault), so a repeat wipe clears them again, and invalidates
+  // guards as a first wipe does: one taken after the refill must not survive.
   if (entry.wiped) {
     zeroBuffers(entry);
+    bumpOwner(entry);
     return;
   }
   switch (entry.kind) {
@@ -274,6 +276,10 @@ export const wipeEntry = (entry) => {
       break;
     default: fail("BAD_ENTRY", "Not a secure entry.");
   }
+  // A direct wipe must invalidate any guard captured before it, so the owning
+  // session's generation moves even when the wipe did not go through the map,
+  // and before the refusal below: the buffers are zeroed either way.
+  bumpOwner(entry);
   // The buffers are zeroed above even for a frozen entry (typed-array contents
   // stay writable); a frozen entry's own fields cannot be updated, so report
   // it as a coded refusal rather than a raw TypeError.
@@ -284,9 +290,6 @@ export const wipeEntry = (entry) => {
     fail("BAD_ENTRY", "This entry cannot be marked wiped.");
   }
   if (entry.wiped !== true) fail("BAD_ENTRY", "This entry cannot be marked wiped.");
-  // A direct wipe must invalidate any guard captured before it, so the owning
-  // session's generation moves even when the wipe did not go through the map.
-  bumpOwner(entry);
 };
 
 // Best-effort wipe: if wipeEntry throws on a malformed entry, still zero every
@@ -376,7 +379,9 @@ export const sessionDeleteKey = (session, keyId) => {
     session.entries.delete(id);
     meta.delete(id);
   }
-  if (doomed.length > 0) session.generation += 1;
+  // Moves even when nothing was installed: a pending turn-on plan may hold
+  // this key's staged secrets, and committing it would bring them back.
+  session.generation += 1;
   if (failed) fail("WIPE_PARTIAL", "Some secure entries could not be wiped cleanly.");
 };
 
@@ -478,11 +483,16 @@ export const discardPlan = (plan) => {
     }
   }
   plan.staged = [];
+  // A discarded plan cannot be committed: an empty turn-on would otherwise
+  // switch secure entry on with the user's text already wiped.
+  plan.ok = false;
 };
 
 export const planTurnOff = (session, serializers) => {
   const meta = metaOf(session);
-  const staged = [], blockers = [];
+  const ready = [], staged = [], blockers = [];
+  // Check every entry before serializing any: a blocked plan can be neither
+  // committed nor wiped, so it must not carry secret text.
   for (const [id, entry] of session.entries) {
     const info = meta.get(id) ?? splitId(id);
     const { keyId, method } = info;
@@ -490,14 +500,22 @@ export const planTurnOff = (session, serializers) => {
     catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
     const serialize = serializers && Object.prototype.hasOwnProperty.call(serializers, method) ? serializers[method] : undefined;
     if (typeof serialize !== "function") { blockers.push({ keyId, method, reason: "no-serializer" }); continue; }
-    let text;
-    try { text = serialize(entry); }
-    catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
-    if (typeof text !== "string") { blockers.push({ keyId, method, reason: "invalid" }); continue; }
-    const item = { keyId, method, text };
-    Object.defineProperty(item, "entry", { value: entry, enumerable: false });
-    Object.defineProperty(item, "rev", { value: entry.rev, enumerable: false });
-    staged.push(item);
+    ready.push({ keyId, method, entry, serialize });
+  }
+  if (blockers.length === 0) {
+    for (const { keyId, method, entry, serialize } of ready) {
+      let text;
+      try { text = serialize(entry); }
+      catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
+      if (typeof text !== "string") { blockers.push({ keyId, method, reason: "invalid" }); continue; }
+      const item = { keyId, method, text };
+      Object.defineProperty(item, "entry", { value: entry, enumerable: false });
+      Object.defineProperty(item, "rev", { value: entry.rev, enumerable: false });
+      staged.push(item);
+    }
+    // A serializer that fails part way blocks the plan too: drop the texts
+    // already made rather than return them with it.
+    if (blockers.length > 0) staged.length = 0;
   }
   return { kind: "off", ok: blockers.length === 0, staged, blockers, generation: session.generation };
 };
@@ -506,9 +524,14 @@ export const commitTurnOff = (session, plan, mode) => {
   if (mode === "convert") {
     if (!plan || plan.kind !== "off" || plan.ok !== true || !Array.isArray(plan.staged)) fail("PLAN_BLOCKED", "The plan has blockers; nothing was changed.");
     if (plan.generation !== session.generation) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+    // Each staged item must name a distinct entry: with the size check below,
+    // that makes the plan cover every installed entry exactly once.
+    const seenEntries = new Set();
     for (const item of plan.staged) {
       if (!item || typeof item !== "object" || !item.entry) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
       if (item.entry.rev !== item.rev) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
+      if (seenEntries.has(item.entry)) fail("PLAN_BLOCKED", "The plan is not valid; nothing was changed.");
+      seenEntries.add(item.entry);
     }
     if (plan.staged.length !== session.entries.size) fail("PLAN_BLOCKED", "The plan is stale; nothing was changed.");
     for (const item of plan.staged) {

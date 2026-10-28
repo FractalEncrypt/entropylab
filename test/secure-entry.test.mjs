@@ -1077,3 +1077,100 @@ test("replacing an entry installs the new one even when the old one cannot be ma
   assert.equal(sessionGet(session, 1, "seed"), replacement);
   assert.ok(oldBuffer.every((value) => value === 0), "the replaced word buffer is zeroed");
 });
+
+// Red team on efa778cc (Kimi K3.1, SE-01).
+test("a repeat direct wipe makes a guard taken after the refill stale", () => {
+  const session = createSecureSession();
+  const key = keyEntry();
+  sessionSet(session, 1, "key", key);
+  wipeEntry(key);
+  key.vault.setText("refilled secret");
+  touchEntry(key);
+  const guard = sessionGuard(session);
+  wipeEntry(key);
+  assert.equal(key.vault.length, 0);
+  assert.equal(guard.current(), false, "the second wipe invalidates late results");
+});
+
+// Review on efa778cc (Kimi K3).
+test("wiping a frozen installed entry still makes a guard stale before it refuses", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 3);
+  sessionSet(session, 1, "seed", entry);
+  const guard = sessionGuard(session);
+  Object.freeze(entry);
+  assert.throws(() => wipeEntry(entry), code("BAD_ENTRY"));
+  assert.ok(entry.indices.every((value) => value === 0));
+  assert.equal(guard.current(), false);
+});
+
+// Red team on efa778cc (Kimi K3.1, SE-02).
+test("a blocked turn-off plan carries no secret text", () => {
+  const secret = "SENTINEL-SEED-SECRET-9f3a";
+  const session = createSecureSession();
+  sessionSet(session, 1, "seed", seedEntry(12));
+  sessionSet(session, 2, "key", keyEntry());
+  let calls = 0;
+  const missing = planTurnOff(session, { seed: () => { calls += 1; return secret; } });
+  assert.equal(missing.ok, false);
+  assert.deepEqual(missing.blockers, [{ keyId: "2", method: "key", reason: "no-serializer" }]);
+  assert.equal(calls, 0, "nothing is serialized once a blocker is known");
+  assert.equal(missing.staged.length, 0);
+  // A serializer that fails after another succeeded: the texts made so far
+  // are dropped with the plan.
+  const failing = planTurnOff(session, { seed: () => secret, key: () => { throw new Error("no"); } });
+  assert.equal(failing.ok, false);
+  assert.deepEqual(failing.blockers, [{ keyId: "2", method: "key", reason: "invalid" }]);
+  assert.equal(failing.staged.length, 0);
+  assert.equal(JSON.stringify(failing).includes(secret), false);
+  assert.throws(() => commitTurnOff(session, failing, "convert"), code("PLAN_BLOCKED"));
+  assert.equal(session.entries.size, 2);
+});
+
+// Codex review on efa778cc.
+test("deleting a key makes its pending turn-on plan stale", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { rolls: "16" } }], {
+    rolls: (text) => { const entry = rollsEntry("base10", 2); for (const face of text) rollsPush(entry, Number(face)); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  const staged = plan.staged[0].entry;
+  sessionDeleteKey(session, 1);
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_STALE"));
+  assert.equal(sessionGet(session, 1, "rolls"), null);
+  assert.equal(session.on, false);
+  discardPlan(plan);
+  assert.ok(staged.rolls.every((value) => value === 0));
+});
+
+// Review on efa778cc (Kimi K3).
+test("a discarded turn-on plan cannot be committed", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 9); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  discardPlan(plan);
+  const before = session.generation;
+  assert.throws(() => commitTurnOn(session, plan), code("PLAN_BLOCKED"));
+  assert.equal(session.on, false);
+  assert.equal(session.entries.size, 0);
+  assert.equal(session.generation, before);
+});
+
+// Review on efa778cc (GLM 5.3).
+test("commitTurnOff convert refuses a plan that names one entry twice", () => {
+  const session = createSecureSession();
+  const first = seedEntry(12), second = seedEntry(12);
+  seedSet(first, 0, 1);
+  seedSet(second, 0, 2);
+  sessionSet(session, 1, "seed", first);
+  sessionSet(session, 2, "seed", second);
+  const plan = planTurnOff(session, { seed: () => "text" });
+  assert.equal(plan.ok, true);
+  plan.staged = [plan.staged[0], plan.staged[0]];
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_BLOCKED"));
+  assert.equal(session.entries.size, 2);
+  assert.equal(second.indices[0], 2, "the entry the plan left out is not wiped");
+});
