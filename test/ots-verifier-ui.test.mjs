@@ -16,7 +16,7 @@ import {
   pathSummaryHtml,
   pathSummaryListHtml,
 } from "../src/js/ots-verifier-ui.js";
-import { OtsParseError } from "../src/js/ots-parser.js";
+import { OtsParseError, OtsBudgetError } from "../src/js/ots-parser.js";
 
 // ---- parseHexInput --------------------------------------------------------
 
@@ -72,11 +72,39 @@ test("formatResult: MATCHES includes the issue-required 'Header supplied by user
   assert.match(r.body, /not verified/);
 });
 
-test("formatResult: PENDING explicitly says NOT Bitcoin-anchored and warns against calling it valid", () => {
+test("formatResult: PENDING says no completed Bitcoin attestation was checked", () => {
   const r = formatResult({ result: "PENDING", paths: [], summary: { pending: 1 } });
   assert.equal(r.tone, "warning");
-  assert.match(r.body, /NOT/);
-  assert.match(r.body, /do not describe this state/i);
+  assert.match(r.body, /No completed Bitcoin attestation was checked/);
+  assert.match(r.body, /does not establish Bitcoin anchoring/);
+});
+
+test("formatResult: HEADER_REQUIRED asks for a block header", () => {
+  const r = formatResult({ result: "HEADER_REQUIRED", paths: [], summary: {} });
+  assert.equal(r.tone, "warning");
+  assert.match(r.body, /Supply the block header/);
+});
+
+test("formatResult: INCOMPLETE says the proof exceeds resource limits and is not a verdict", () => {
+  const r = formatResult({ result: "INCOMPLETE", reason: "too-many-ops", paths: [], summary: {} });
+  assert.equal(r.tone, "warning");
+  assert.match(r.body, /resource limits/);
+  assert.match(r.body, /not a verdict about the proof/);
+});
+
+test("formatResult: INVALID by reason names the specific failure", () => {
+  const cases = [
+    ["parse:BAD_MAGIC", /not a valid OpenTimestamps proof file/],
+    ["expected-digest", /does not match the expected digest/],
+    ["original-file", /does not hash to the proof's file digest/],
+    ["op-too-long", /4096-byte limit/],
+    ["header-mismatch", /matches the supplied header/],
+  ];
+  for (const [reason, re] of cases) {
+    const r = formatResult({ result: "INVALID", reason, paths: [], summary: {} });
+    assert.equal(r.tone, "danger");
+    assert.match(r.body, re, `reason ${reason}`);
+  }
 });
 
 test("formatResult: INVALID tones danger and explains inconsistency", () => {
@@ -105,6 +133,14 @@ test("formatError: OtsParseError with code yields headline with the code", () =>
   const r = formatError(err);
   assert.equal(r.tone, "danger");
   assert.match(r.headline, /BAD_MAGIC/);
+  assert.equal(r.body, err.message);
+});
+
+test("formatError: OtsBudgetError surfaces the resource-limit code", () => {
+  const err = new OtsBudgetError("too-many-ops", "more than 1024 op nodes");
+  const r = formatError(err);
+  assert.equal(r.tone, "danger");
+  assert.match(r.headline, /too-many-ops/);
   assert.equal(r.body, err.message);
 });
 

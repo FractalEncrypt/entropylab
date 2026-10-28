@@ -45,6 +45,29 @@ export class OtsParseError extends Error {
   }
 }
 
+// Resource limits are EntropyLab application policy, not part of the OTS
+// format. Real proofs fit easily (the v1.0.0 release proof: 249 ops, paths
+// up to 88 ops, fork nesting 3). Exceeding one is a budget failure, distinct
+// from a malformed proof, so the verifier can report INCOMPLETE rather than
+// INVALID.
+export class OtsBudgetError extends Error {
+  constructor(code, message) {
+    super(`${code}: ${message}`);
+    this.name = "OtsBudgetError";
+    this.code = code;
+  }
+}
+
+export const OTS_LIMITS = {
+  MAX_PROOF_BYTES: 1048576,
+  MAX_OPS: 1024,
+  MAX_PATH_OPS: 256,
+  MAX_FORK_NESTING: 32,
+  MAX_ATTESTATIONS: 64,
+  MAX_HASHED_BYTES: 4194304,
+  MAX_ORIGINAL_BYTES: 67108864,
+};
+
 // DetachedTimestampFile.HEADER_MAGIC (timestamp.py): a leading NUL so `file`
 // classifies it as data, a human-readable banner, then 8 random-looking
 // bytes to make accidental collisions implausible. 31 bytes total.
@@ -85,7 +108,6 @@ const ATTESTATION_URIS = {
 const MAX_OP_ARG_LENGTH = 4096; // Op.MAX_RESULT_LENGTH; binary op args read with min_len=1
 const MAX_ATTESTATION_PAYLOAD = 8192; // TimeAttestation.MAX_PAYLOAD_SIZE
 const MAX_URI_LENGTH = 1000; // PendingAttestation.MAX_URI_LENGTH
-const MAX_RECURSION_DEPTH = 256; // Timestamp.deserialize(_recursion_limit=256)
 const MAX_VARUINT_BYTES = 8; // stricter than the reference (which loops
 // unbounded); every legitimate length field is <= 8192 and every block height
 // < 2^32, so >8 LEB128 bytes can only be hostile or corrupt. Fail closed.
@@ -121,28 +143,29 @@ class Reader {
 
   // Unsigned LEB128 (serialize.py read_varuint). Like the reference, accepts
   // non-minimal encodings — canonical-form strictness would reject proofs the
-  // reference accepts, breaking interop.
+  // reference accepts, breaking interop. Decoded with BigInt so a value above
+  // 2^53 is never silently rounded before its field limit is checked.
   readVaruint() {
-    let value = 0;
-    let shift = 0;
+    let value = 0n;
+    let shift = 0n;
     for (let i = 0; i < MAX_VARUINT_BYTES; i++) {
       const b = this.readByte();
-      value += (b & 0x7f) * 2 ** shift; // +=, not |=: bitwise ops coerce to int32 and would corrupt varuints > 2^31
+      value |= BigInt(b & 0x7f) << shift;
       if ((b & 0x80) === 0) return value;
-      shift += 7;
+      shift += 7n;
     }
     throw new OtsParseError("VARUINT_TOO_LONG", `varuint exceeded ${MAX_VARUINT_BYTES} bytes`);
   }
 
   readVarbytes(maxLen, minLen = 0) {
     const len = this.readVaruint();
-    if (len > maxLen) {
+    if (len > BigInt(maxLen)) {
       throw new OtsParseError("LENGTH_LIMIT", `varbytes length ${len} exceeds limit ${maxLen}`);
     }
-    if (len < minLen) {
+    if (len < BigInt(minLen)) {
       throw new OtsParseError("LENGTH_LIMIT", `varbytes length ${len} below minimum ${minLen}`);
     }
-    return this.readBytes(len);
+    return this.readBytes(Number(len));
   }
 
   assertEof(what) {
@@ -167,11 +190,16 @@ function parseOp(reader, tag) {
   return { tag, name: def.name, kind: def.kind };
 }
 
-function parseAttestation(reader) {
+function parseAttestation(reader, state) {
   const uriBytes = reader.readBytes(8); // TimeAttestation.TAG_SIZE
   const uriHex = bytesToHex(uriBytes);
   const payload = reader.readVarbytes(MAX_ATTESTATION_PAYLOAD);
   const type = ATTESTATION_URIS[uriHex] ?? "unknown";
+
+  state.attestations += 1;
+  if (state.attestations > OTS_LIMITS.MAX_ATTESTATIONS) {
+    throw new OtsBudgetError("too-many-attestations", `more than ${OTS_LIMITS.MAX_ATTESTATIONS} attestations`);
+  }
 
   if (type === "pending") {
     // PendingAttestation payload: varbytes(utf8 URI), then EOF.
@@ -190,11 +218,16 @@ function parseAttestation(reader) {
   if (type === "bitcoin" || type === "litecoin") {
     // BitcoinBlockHeaderAttestation / LitecoinBlockHeaderAttestation payload:
     // varuint height, then EOF. The height is attestation metadata ONLY — it
-    // is never independently authenticated (#315).
+    // is never independently authenticated (#315). A height above 2^32-1 is
+    // not a parse error: it becomes a per-path unsupported outcome so a
+    // sibling branch can still be evaluated.
     const inner = new Reader(payload);
     const height = inner.readVaruint();
     inner.assertEof(`${type} attestation payload`);
-    return { type, uriHex, height };
+    if (height > 0xffffffffn) {
+      return { type: "unsupported", uriHex, detail: "height out of range" };
+    }
+    return { type, uriHex, height: Number(height) };
   }
 
   // Unknown/future attestation: preserve tag and payload verbatim so the
@@ -204,29 +237,40 @@ function parseAttestation(reader) {
 
 // Timestamp.deserialize (timestamp.py): siblings are separated by 0xff; a
 // path ends either at an attestation (0x00 tag) or by returning to a parent
-// level. Like the reference, parsing is depth-limited to keep hostile proofs
-// from smashing the stack.
-function parseTimestamp(reader, depth) {
-  if (depth >= MAX_RECURSION_DEPTH) {
-    throw new OtsParseError("RECURSION_LIMIT", `timestamp DAG exceeded recursion depth ${MAX_RECURSION_DEPTH}`);
+// level. Resource limits are enforced here, while parsing, so a hostile proof
+// is rejected before it can exhaust memory or the stack. Recursion depth is
+// bounded by MAX_PATH_OPS, so no separate recursion limit is needed.
+function parseTimestamp(reader, state, opDepth, forkDepth) {
+  if (opDepth > OTS_LIMITS.MAX_PATH_OPS) {
+    throw new OtsBudgetError("path-too-long", `more than ${OTS_LIMITS.MAX_PATH_OPS} ops on a path`);
   }
   const node = { attestations: [], ops: [] };
+  let isFork = false;
 
   const processTag = (tag) => {
     if (tag === 0x00) {
-      node.attestations.push(parseAttestation(reader));
+      node.attestations.push(parseAttestation(reader, state));
     } else {
       const op = parseOp(reader, tag);
+      state.ops += 1;
+      if (state.ops > OTS_LIMITS.MAX_OPS) {
+        throw new OtsBudgetError("too-many-ops", `more than ${OTS_LIMITS.MAX_OPS} op nodes`);
+      }
       // NOTE: the reference EAGERLY applies the op to validate message length
       // limits during deserialization. This parser deliberately does not —
       // applying ops is the verifier's job, and length limits are re-enforced
       // there. Structural shape is identical either way.
-      node.ops.push({ op, child: parseTimestamp(reader, depth + 1) });
+      const child = parseTimestamp(reader, state, opDepth + 1, forkDepth + (isFork ? 1 : 0));
+      node.ops.push({ op, child });
     }
   };
 
   let tag = reader.readByte();
   while (tag === 0xff) {
+    isFork = true;
+    if (forkDepth + 1 > OTS_LIMITS.MAX_FORK_NESTING) {
+      throw new OtsBudgetError("fork-nesting", `fork nesting exceeds ${OTS_LIMITS.MAX_FORK_NESTING}`);
+    }
     processTag(reader.readByte());
     tag = reader.readByte();
   }
@@ -250,6 +294,9 @@ export function parseDetachedTimestamp(bytes) {
   if (!(bytes instanceof Uint8Array)) {
     throw new TypeError("proof bytes must be a Uint8Array");
   }
+  if (bytes.length > OTS_LIMITS.MAX_PROOF_BYTES) {
+    throw new OtsBudgetError("proof-too-large", `proof is ${bytes.length} bytes, limit ${OTS_LIMITS.MAX_PROOF_BYTES}`);
+  }
   const reader = new Reader(bytes);
 
   const magic = reader.readBytes(HEADER_MAGIC.length); // TRUNCATED if short
@@ -257,10 +304,12 @@ export function parseDetachedTimestamp(bytes) {
     throw new OtsParseError("BAD_MAGIC", "input is not an OpenTimestamps detached timestamp file");
   }
 
-  const majorVersion = reader.readByte();
-  if (majorVersion !== MAJOR_VERSION) {
-    throw new OtsParseError("UNSUPPORTED_VERSION", `detached timestamp major version ${majorVersion} is not supported`);
+  // DetachedTimestampFile.MAJOR_VERSION is a varuint in the reference.
+  const majorVersionBig = reader.readVaruint();
+  if (majorVersionBig !== BigInt(MAJOR_VERSION)) {
+    throw new OtsParseError("UNSUPPORTED_VERSION", `detached timestamp major version ${majorVersionBig} is not supported`);
   }
+  const majorVersion = Number(majorVersionBig);
 
   // CryptOp.deserialize: the file-hash op must be a cryptographic op tag.
   const hashTag = reader.readByte();
@@ -270,7 +319,8 @@ export function parseDetachedTimestamp(bytes) {
   }
   const fileDigest = reader.readBytes(hashDef.digestLength);
 
-  const timestamp = parseTimestamp(reader, 0);
+  const state = { ops: 0, attestations: 0 };
+  const timestamp = parseTimestamp(reader, state, 0, 0);
   reader.assertEof("detached timestamp file");
 
   return {

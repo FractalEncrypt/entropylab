@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseDetachedTimestamp, OtsParseError } from "../src/js/ots-parser.js";
+import { parseDetachedTimestamp, OtsParseError, OtsBudgetError, OTS_LIMITS } from "../src/js/ots-parser.js";
 
 // ---- byte helpers ---------------------------------------------------------
 
@@ -20,6 +20,22 @@ const u8 = (arr) => Uint8Array.from(arr);
 const ascii = (s) => Array.from(s, (c) => c.charCodeAt(0));
 const hexToBytes = (hex) => u8(hex.match(/../g).map((b) => parseInt(b, 16)));
 const bytesToHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+// LEB128 varuint, written from the format definition (serialize.py).
+const varuint = (n) => {
+  const out = [];
+  let v = BigInt(n);
+  for (;;) {
+    const b = Number(v & 0x7fn);
+    v >>= 7n;
+    if (v === 0n) {
+      out.push(b);
+      return out;
+    }
+    out.push(b | 0x80);
+  }
+};
+const varbytes = (bytes) => [...varuint(bytes.length), ...bytes];
 
 // ---- format anchors (literal, spec-derived) -------------------------------
 
@@ -235,13 +251,26 @@ test("varuint with 9 continuation bytes → VARUINT_TOO_LONG", () => {
   ]);
 });
 
-test("timestamp nesting deeper than 256 → RECURSION_LIMIT", () => {
+test("exactly MAX_PATH_OPS ops on one path parses", () => {
   const deep = [
     ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_EMPTY,
-    ...Array(300).fill(0x08), // 300 nested sha256 ops
+    ...Array(OTS_LIMITS.MAX_PATH_OPS).fill(0x08),
     0x00, ...BTC_ATT_URI, 0x03, ...HEIGHT_123456,
   ];
-  expectCode("RECURSION_LIMIT", deep);
+  const out = parseDetachedTimestamp(u8(deep));
+  assert.equal(out.timestamp.ops.length, 1);
+});
+
+test("more than MAX_PATH_OPS ops on one path → OtsBudgetError path-too-long", () => {
+  const deep = [
+    ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_EMPTY,
+    ...Array(OTS_LIMITS.MAX_PATH_OPS + 1).fill(0x08),
+    0x00, ...BTC_ATT_URI, 0x03, ...HEIGHT_123456,
+  ];
+  assert.throws(
+    () => parseDetachedTimestamp(u8(deep)),
+    (e) => e instanceof OtsBudgetError && e.code === "path-too-long",
+  );
 });
 
 test("pending attestation with disallowed URI character → INVALID_URI", () => {
@@ -253,4 +282,48 @@ test("pending attestation with disallowed URI character → INVALID_URI", () => 
 
 test("non-Uint8Array input → TypeError", () => {
   assert.throws(() => parseDetachedTimestamp("not bytes"), TypeError);
+});
+
+// ---- #460 rework: varuint / version / height / budgets ---------------------
+
+test("major version is read as a varuint: non-minimal 0x81 0x00 (=1) is accepted", () => {
+  const bytes = [...MAGIC, 0x81, 0x00, 0x08, ...DIGEST_SHA256_EMPTY, 0x00, ...BTC_ATT_URI, 0x03, ...HEIGHT_123456];
+  const out = parseDetachedTimestamp(u8(bytes));
+  assert.equal(out.majorVersion, 1);
+});
+
+test("bitcoin attestation height 0xFFFFFFFF is stored as a Number", () => {
+  const bytes = [
+    ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_EMPTY,
+    0x00, ...BTC_ATT_URI, ...varbytes(varuint(0xffffffff)),
+  ];
+  const out = parseDetachedTimestamp(u8(bytes));
+  assert.equal(out.timestamp.attestations[0].height, 0xffffffff);
+});
+
+test("bitcoin attestation height above 0xFFFFFFFF becomes type 'unsupported'", () => {
+  const bytes = [
+    ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_EMPTY,
+    0x00, ...BTC_ATT_URI, ...varbytes(varuint(2 ** 40)),
+  ];
+  const out = parseDetachedTimestamp(u8(bytes));
+  const att = out.timestamp.attestations[0];
+  assert.equal(att.type, "unsupported");
+  assert.equal(att.detail, "height out of range");
+});
+
+test("varbytes length encoded in 8 bytes above the limit → LENGTH_LIMIT (BigInt compare)", () => {
+  // 0xff ×7 then 0x7f = 2^56 - 1, far above MAX_ATTESTATION_PAYLOAD.
+  expectCode("LENGTH_LIMIT", [
+    ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_EMPTY, 0x00, ...BTC_ATT_URI,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+  ]);
+});
+
+test("proof larger than MAX_PROOF_BYTES → OtsBudgetError proof-too-large", () => {
+  const bytes = new Uint8Array(OTS_LIMITS.MAX_PROOF_BYTES + 1);
+  assert.throws(
+    () => parseDetachedTimestamp(bytes),
+    (e) => e instanceof OtsBudgetError && e.code === "proof-too-large",
+  );
 });

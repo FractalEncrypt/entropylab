@@ -1,20 +1,15 @@
 // OpenTimestamps verifier tests — issue #315, phase 2.
 //
-// Async because the verifier routes SHA-1 through `crypto.subtle.digest`
-// (Promise). Node 19+ and all modern browsers expose `crypto.subtle`
-// natively, so no module shim is needed.
-//
 // Fixture provenance: every byte string below is hand-constructed from the
 // format spec; digest anchors are NIST-published SHA-256, SHA-1, and
-// RIPEMD-160 test vectors. The SHA-1 wiring test cross-checks the
-// verifier's output against `crypto.subtle.digest` directly (dispatcher
-// wiring, not cross-implementation correctness).
+// RIPEMD-160 test vectors.
 //
 // Run with: node --test test/ots-verifier.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { verifyOts } from "../src/js/ots-verifier.js";
+import { OTS_LIMITS } from "../src/js/ots-parser.js";
 
 // ---- byte helpers ---------------------------------------------------------
 
@@ -40,6 +35,7 @@ const DIGEST_SHA256_EMPTY = hexToBytes("e3b0c44298fc1c149afbf4c8996fb92427ae41e4
 // NIST-published RIPEMD-160 vector (used for the SHA-1 op wiring test —
 // 32-byte input so the sha1 op transforms into a 20-byte digest).
 const DIGEST_RIPEMD160_ABC = hexToBytes("8eb208f7e05d987a9b044a8e98c6b087f15a0bfc");
+const DIGEST_SHA1_EMPTY = hexToBytes("da39a3ee5e6b4b0d3255bfef95601890afd80709");
 
 const BTC_ATT_URI = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
 const PENDING_ATT_URI = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
@@ -102,11 +98,30 @@ const proofKeccakThenPending = () =>
     0x00, ...pendingAttestation,
   ]);
 
-// SHA-1 op (0x02) feeding a pending attestation. Tests WebCrypto SHA-1
-// wiring through the verifier dispatcher. file_hash_op = ripemd160 (0x03)
-// so the 20-byte RIPEMD-160 digest matches the parser's digestLength.
-const proofSha1ThenPending = (digest = DIGEST_RIPEMD160_ABC) =>
-  u8([...MAGIC, 0x01, 0x03, ...digest, 0x02, 0x00, ...pendingAttestation]);
+// SHA-1 op (0x02) on one branch, a direct pending attestation on a sibling
+// branch. SHA-1 is unsupported, so its path is unsupported-op; the sibling
+// must still evaluate.
+const proofSha1AndPendingSibling = (digest = DIGEST_RIPEMD160_ABC) =>
+  u8([
+    ...MAGIC, 0x01, 0x03, ...digest,
+    0xff, 0x02, 0x00, ...pendingAttestation,
+    0x00, ...pendingAttestation,
+  ]);
+
+// LEB128 varuint, written from the format definition (serialize.py).
+const varuint = (n) => {
+  const out = [];
+  let v = BigInt(n);
+  for (;;) {
+    const b = Number(v & 0x7fn);
+    v >>= 7n;
+    if (v === 0n) {
+      out.push(b);
+      return out;
+    }
+    out.push(b | 0x80);
+  }
+};
 
 // ---- tests ----------------------------------------------------------------
 
@@ -164,47 +179,102 @@ test("precedence rule 3: pending + litecoin → PENDING (no completed bitcoin ev
   assert.ok(out.paths.find((p) => p.outcome === "pending"));
 });
 
-test("expectedDigest mismatch → overall INVALID (cryptographic failure, single path)", async () => {
+test("expectedDigest mismatch → overall INVALID / expected-digest", async () => {
   const out = await verifyOts({
     proofBytes: proofBitcoin(DIGEST_SHA256_ABC),
     header: null,
     expectedDigest: DIGEST_SHA256_EMPTY,
   });
   assert.equal(out.result, "INVALID");
-  assert.equal(out.paths[0].outcome, "expected-digest-mismatch");
-  assert.match(out.paths[0].detail, /ba78/, "detail cites both expected and actual digests");
+  assert.equal(out.reason, "expected-digest");
 });
 
-test("precedence rule 3 with existence scan: pending behind keccak barrier → PENDING (NOT UNSUPPORTED)", async () => {
+test("pending behind an unsupported op is not reachable → UNSUPPORTED", async () => {
   const out = await verifyOts({ proofBytes: proofKeccakThenPending(), header: null });
-  assert.equal(out.result, "PENDING");
+  assert.equal(out.result, "UNSUPPORTED");
   assert.equal(out.paths[0].outcome, "unsupported-op");
   assert.equal(out.paths[0].opNames[0], "keccak256");
 });
 
-test("SHA-1 op (WebCrypto) wired: fileDigest → sha1 → 20-byte pending attestation", async () => {
-  // No NIST-published vector for sha1(ripemd160("abc")), so cross-check
-  // against crypto.subtle.digest directly — validates dispatcher wiring.
-  const out = await verifyOts({ proofBytes: proofSha1ThenPending(), header: null });
-  assert.equal(out.paths[0].opNames[0], "sha1");
-  assert.equal(out.paths[0].finalDigest.length, 20, "SHA-1 produces a 20-byte digest");
-  const direct = new Uint8Array(await crypto.subtle.digest("SHA-1", DIGEST_RIPEMD160_ABC));
-  assert.deepEqual(Array.from(out.paths[0].finalDigest), Array.from(direct), "verifier and WebCrypto produce identical SHA-1 output");
+test("sha1 op is unsupported; a pending sibling still evaluates → PENDING", async () => {
+  const out = await verifyOts({ proofBytes: proofSha1AndPendingSibling(), header: null });
   assert.equal(out.result, "PENDING");
+  const outcomes = out.paths.map((p) => p.outcome);
+  assert.ok(outcomes.includes("unsupported-op"), "sha1 path recorded as unsupported-op");
+  assert.ok(outcomes.includes("pending"), "sibling pending path still evaluated");
 });
 
-test("bitcoin att with no supplied header → 'no-header' outcome; falls to UNSUPPORTED", async () => {
+test("bitcoin att with no supplied header → HEADER_REQUIRED with claimed heights", async () => {
   const out = await verifyOts({ proofBytes: proofBitcoin(), header: null });
-  assert.equal(out.result, "UNSUPPORTED");
+  assert.equal(out.result, "HEADER_REQUIRED");
+  assert.deepEqual(out.claimedHeights, [123456]);
   assert.equal(out.paths[0].outcome, "no-header");
-  assert.match(out.paths[0].detail, /no header/i);
 });
 
-test("header length != 80 → RangeError", async () => {
+test("header length != 80 → TypeError", async () => {
   await assert.rejects(
     () => verifyOts({ proofBytes: proofBitcoin(), header: new Uint8Array(79) }),
-    (e) => e instanceof RangeError,
+    (e) => e instanceof TypeError,
   );
+});
+
+test("wrong argument types → TypeError", async () => {
+  await assert.rejects(() => verifyOts({ proofBytes: "nope" }), (e) => e instanceof TypeError);
+  await assert.rejects(() => verifyOts({ proofBytes: proofBitcoin(), header: "nope" }), (e) => e instanceof TypeError);
+  await assert.rejects(() => verifyOts({ proofBytes: proofBitcoin(), expectedDigest: "nope" }), (e) => e instanceof TypeError);
+  await assert.rejects(() => verifyOts({ proofBytes: proofBitcoin(), originalFileBytes: "nope" }), (e) => e instanceof TypeError);
+});
+
+test("an append op that pushes the message past 4096 bytes → INVALID / op-too-long", async () => {
+  // 32-byte digest + append(4096) = 4128 > 4096.
+  const arg = new Array(4096).fill(0xaa);
+  const bytes = u8([
+    ...MAGIC, 0x01, 0x08, ...DIGEST_SHA256_ABC,
+    0xf0, ...varuint(4096), ...arg,
+    0x00, ...bitcoinAttestation,
+  ]);
+  const out = await verifyOts({ proofBytes: bytes, header: makeHeader(DIGEST_SHA256_ABC) });
+  assert.equal(out.result, "INVALID");
+  assert.equal(out.reason, "op-too-long");
+});
+
+test("originalFileBytes: sha256 match → 'matches', verdict unchanged", async () => {
+  const out = await verifyOts({
+    proofBytes: proofBitcoin(DIGEST_SHA256_EMPTY),
+    header: makeHeader(DIGEST_SHA256_EMPTY),
+    originalFileBytes: new Uint8Array(0),
+  });
+  assert.equal(out.original.status, "matches");
+  assert.equal(out.result, "MATCHES_SUPPLIED_HEADER");
+});
+
+test("originalFileBytes: sha256 mismatch → INVALID / original-file", async () => {
+  const out = await verifyOts({
+    proofBytes: proofBitcoin(DIGEST_SHA256_EMPTY),
+    header: makeHeader(DIGEST_SHA256_EMPTY),
+    originalFileBytes: u8(ascii("x")),
+  });
+  assert.equal(out.original.status, "mismatch");
+  assert.equal(out.result, "INVALID");
+  assert.equal(out.reason, "original-file");
+});
+
+test("originalFileBytes: sha1 file hash op → unsupported-hash, verdict unchanged", async () => {
+  const proof = u8([...MAGIC, 0x01, 0x02, ...DIGEST_SHA1_EMPTY, 0x00, ...bitcoinAttestation]);
+  const out = await verifyOts({ proofBytes: proof, header: null, originalFileBytes: u8(ascii("anything")) });
+  assert.equal(out.original.status, "unsupported-hash");
+  assert.equal(out.result, "HEADER_REQUIRED");
+});
+
+test("originalFileBytes over MAX_ORIGINAL_BYTES → 'too-large', verdict unchanged", async () => {
+  const big = new Uint8Array(OTS_LIMITS.MAX_ORIGINAL_BYTES + 1);
+  const out = await verifyOts({
+    proofBytes: proofBitcoin(DIGEST_SHA256_EMPTY),
+    header: makeHeader(DIGEST_SHA256_EMPTY),
+    originalFileBytes: big,
+  });
+  assert.equal(out.original.status, "too-large");
+  assert.equal(out.result, "MATCHES_SUPPLIED_HEADER");
 });
 
 test("bitcoin att with valid header but attested digest wrong length (32B file + sha256 op mismatched) → mismatch", async () => {
