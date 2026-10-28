@@ -635,3 +635,23 @@ test("release app.js does not call initOtsVerifier outside an if (PREVIEW) guard
     assert.match(line, /^\s*if\s*\(\s*PREVIEW\s*\)\s*initOtsVerifier\s*\(\s*document\s*\)\s*;\s*$/, line);
   }
 });
+
+// Review on 19d228b2 (Kimi K3): the verifier transfers its inputs, which
+// detached the page's header bytes, so the header-time claim never rendered.
+test("initOtsVerifier: the header-time claim survives a verifier that transfers its inputs", async () => {
+  const doc = makeDoc();
+  const verifier = {
+    verify: (input) => {
+      // Transfer, as the worker client does: the passed buffers are detached.
+      structuredClone(input, { transfer: [input.proofBytes.buffer, input.header.buffer] });
+      return Promise.resolve({ result: "MATCHES_SUPPLIED_HEADER", paths: [path()] });
+    },
+    stop: () => {},
+  };
+  initOtsVerifier(doc, { createVerifier: () => verifier });
+  doc._elements.get("ots-proof-hex").value = "00";
+  doc._elements.get("ots-header-hex").value = "00".repeat(80);
+  const resultEl = await clickVerify(doc);
+  const claims = findAll(resultEl, "data-ots-claim").filter((node) => node.getAttribute("data-ots-claim") === "header-time");
+  assert.equal(claims.length, 1);
+});

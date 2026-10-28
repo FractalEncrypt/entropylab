@@ -551,7 +551,9 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
       const expectedBytes = readOptionalHex(expectedDigest.value, [32, 20], "Expected initial digest");
       const out = await verifier.verify({
         proofBytes,
-        header: headerBytes,
+        // The verifier transfers its inputs to the worker; the page keeps its
+        // own copy of the header for the header-time claim.
+        header: headerBytes ? headerBytes.slice() : headerBytes,
         expectedDigest: expectedBytes,
         originalFileBytes,
       });
