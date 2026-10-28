@@ -822,23 +822,28 @@ words, pick one of the checksum words.</span></span>
       <!-- preview -->
       <section class="card" id="verify-card" role="tabpanel" hidden>
         <h2>Verify</h2>
-        <p class="muted">Check an OpenTimestamps proof against a Bitcoin block header you supply. Nothing leaves this page.</p>
+        <p class="edge-note is-info">Check an OpenTimestamps proof against a Bitcoin block header you supply. Nothing leaves this page.</p>
         <section class="tool-section" id="ots-station">
-          <h3>OpenTimestamps proof</h3>
+          <h3 class="label">OpenTimestamps proof</h3>
           <div class="row">
             <button type="button" class="btn" id="ots-proof-choose">Choose .ots file</button>
             <input type="file" id="ots-proof-file" accept=".ots" hidden>
           </div>
-          <label class="field" for="ots-proof-hex">or paste the proof as hex</label>
+          <p class="field-note" id="ots-proof-name" hidden></p>
+          <label class="label" for="ots-proof-hex">or paste the proof as hex</label>
           <textarea id="ots-proof-hex" class="field" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-          <label class="field" for="ots-original-file">Original file (optional)</label>
-          <input type="file" id="ots-original-file">
-          <label class="field" for="ots-header-hex">Bitcoin block header (80 bytes, hex)</label>
-          <textarea id="ots-header-hex" class="field" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-          <p class="field-note">The header is supplied by you and is not checked against the Bitcoin network.</p>
-          <label class="field" for="ots-expected-digest">Expected digest (hex)</label>
-          <input type="text" id="ots-expected-digest" class="field" spellcheck="false" autocomplete="off" autocapitalize="off">
+          <p class="label" id="ots-original-label">Original file (optional)</p>
           <div class="row">
+            <button type="button" class="btn" id="ots-original-choose" aria-describedby="ots-original-label">Choose file</button>
+            <input type="file" id="ots-original-file" hidden>
+          </div>
+          <p class="field-note" id="ots-original-name" hidden></p>
+          <label class="label" for="ots-header-hex">Bitcoin block header (80 bytes, hex)</label>
+          <textarea id="ots-header-hex" class="field" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="ots-header-note"></textarea>
+          <p class="field-note" id="ots-header-note">The header is supplied by you and is not checked against the Bitcoin network.</p>
+          <label class="label" for="ots-expected-digest">Expected digest (hex)</label>
+          <input type="text" id="ots-expected-digest" class="field" spellcheck="false" autocomplete="off" autocapitalize="off">
+          <div class="row tool-actions">
             <button type="button" class="btn primary" id="ots-verify">Verify</button>
             <button type="button" class="btn" id="ots-clear">Clear</button>
           </div>

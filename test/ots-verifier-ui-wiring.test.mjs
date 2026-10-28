@@ -85,8 +85,11 @@ const WIRING_IDS = [
   "verify-card",
   "ots-proof-file",
   "ots-proof-choose",
+  "ots-proof-name",
   "ots-proof-hex",
   "ots-original-file",
+  "ots-original-choose",
+  "ots-original-name",
   "ots-header-hex",
   "ots-expected-digest",
   "ots-verify",
@@ -264,6 +267,68 @@ test("renderOtsResult: an unsupported original-file hash is reported as not chec
   assert.equal(findAll(resultEl, "data-ots-original-file").length, 0);
 });
 
+// ---- result layout --------------------------------------------------------
+
+test("renderOtsResult: MATCHES with 3 paths lays out headline, caution, and a closed paths disclosure", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(doc, resultEl, {
+    result: "MATCHES_SUPPLIED_HEADER",
+    paths: [path(), path(), path()],
+  });
+  assert.equal(findAll(resultEl, "data-ots-headline").length, 1);
+  const cautions = findAll(resultEl, "data-ots-caution");
+  assert.equal(cautions.length, 1);
+  assert.equal(cautions[0].childNodes.length, 2);
+  for (const child of cautions[0].childNodes) assert.equal(child.tagName, "P");
+  const details = findAll(resultEl, "data-ots-paths").filter((el) => el.tagName === "DETAILS");
+  assert.equal(details.length, 1);
+  assert.equal(details[0].getAttribute("open"), null);
+  const summary = details[0].childNodes.find((el) => el.tagName === "SUMMARY");
+  assert.ok(summary, "the disclosure has a summary");
+  assert.ok(summary.textContent.includes("3"));
+  assert.ok(findAll(details[0], "data-ots-claim").length >= 1);
+});
+
+test("renderOtsResult: HEADER_REQUIRED keeps claimed heights outside the paths disclosure", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(doc, resultEl, {
+    result: "HEADER_REQUIRED",
+    paths: [path({ attestation: { type: "bitcoin", height: 700000 } })],
+  });
+  const details = findAll(resultEl, "data-ots-paths").filter((el) => el.tagName === "DETAILS");
+  assert.equal(details.length, 1);
+  assert.equal(findAll(details[0], "data-ots-claim").length, 0);
+  assert.ok(findAll(resultEl, "data-ots-claim").length >= 1);
+});
+
+test("renderOtsResult: PENDING puts its limitation in one caution note", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(doc, resultEl, { result: "PENDING", paths: [] });
+  const cautions = findAll(resultEl, "data-ots-caution");
+  assert.equal(cautions.length, 1);
+  assert.equal(cautions[0].childNodes.length, 1);
+  assert.equal(cautions[0].childNodes[0].tagName, "P");
+});
+
+test("renderOtsResult: INVALID has no caution note", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(doc, resultEl, { result: "INVALID", reason: "header-mismatch", paths: [path()] });
+  assert.equal(findAll(resultEl, "data-ots-caution").length, 0);
+});
+
+test("renderOtsResult: zero paths renders a plain line, not a disclosure", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsResult(doc, resultEl, { result: "PENDING", paths: [] });
+  assert.equal(findAll(resultEl, "data-ots-paths").filter((el) => el.tagName === "DETAILS").length, 0);
+  const lines = findAll(resultEl, "data-ots-paths").filter((el) => el.tagName === "P");
+  assert.equal(lines.length, 1);
+});
+
 // ---- escaping -------------------------------------------------------------
 
 test("renderOtsResult: path detail is rendered as text, not HTML", () => {
@@ -308,6 +373,16 @@ test("renderOtsError: sets ERROR verdict and clears previous verdict hooks", () 
   assert.equal(resultEl.getAttribute("data-ots-warning"), null);
   assert.equal(resultEl.getAttribute("data-ots-reason"), null);
   assert.equal(resultEl.getAttribute("data-ots-limit"), null);
+});
+
+test("renderOtsError: the error is a titled note with the headline inside", () => {
+  const doc = makeDoc();
+  const resultEl = doc._elements.get("ots-result");
+  renderOtsError(doc, resultEl, new Error("x"));
+  const errors = findAll(resultEl, "data-ots-error");
+  assert.equal(errors.length, 1);
+  assert.equal(findAll(errors[0], "data-ots-headline").length, 1);
+  assert.equal(resultEl.getAttribute("data-ots-verdict"), "ERROR");
 });
 
 // ---- initOtsVerifier ------------------------------------------------------
@@ -359,6 +434,27 @@ test("initOtsVerifier: clear empties inputs and clears the result", () => {
   assert.equal(resultEl.getAttribute("data-ots-verdict"), null);
   assert.equal(resultEl.hidden, true);
   assert.equal(resultEl.childNodes.length, 0);
+});
+
+test("initOtsVerifier: the original-file chooser opens the hidden input and shows the chosen name", () => {
+  const doc = makeDoc();
+  initOtsVerifier(doc);
+  const choose = doc._elements.get("ots-original-choose");
+  const input = doc._elements.get("ots-original-file");
+  const name = doc._elements.get("ots-original-name");
+  let clicked = 0;
+  input.click = () => {
+    clicked += 1;
+  };
+  choose.click();
+  assert.equal(clicked, 1, "the chooser clicks the hidden input");
+  input.files = [{ name: "a.txt" }];
+  input.dispatchEvent("change");
+  assert.equal(name.textContent, "a.txt");
+  assert.equal(name.hidden, false);
+  doc._elements.get("ots-clear").click();
+  assert.equal(name.textContent, "");
+  assert.equal(name.hidden, true);
 });
 
 test("initOtsVerifier: changing the proof hex clears a stale result", () => {

@@ -251,9 +251,11 @@ function collectClaims(out, headerBytes) {
 
 function renderPathRow(doc, path) {
   const row = doc.createElement("div");
+  row.setAttribute("class", "ots-path");
   row.setAttribute("data-ots-path", String(path && path.outcome));
 
   const outcome = doc.createElement("span");
+  outcome.setAttribute("class", "ots-outcome");
   outcome.setAttribute("data-ots-path-outcome", String(path && path.outcome));
   outcome.textContent = String(path && path.outcome);
   row.appendChild(outcome);
@@ -326,26 +328,57 @@ export function renderOtsResult(doc, resultEl, out, options = {}) {
     resultEl.removeAttribute("data-ots-limit");
   }
 
-  const headline = doc.createElement("h3");
+  // 1. Headline.
+  const headline = doc.createElement("p");
+  headline.setAttribute("class", "label");
   headline.setAttribute("data-ots-headline", "");
   headline.textContent = r.headline;
   resultEl.appendChild(headline);
 
-  for (const line of String(r.body).split("\n")) {
-    if (line === "") continue;
+  // 2. Explanation: the first paragraph. 3. Limitations: the rest, in a
+  // caution note for MATCHES and PENDING, plain paragraphs otherwise.
+  const paragraphs = String(r.body).split("\n\n").filter((para) => para !== "");
+  const explanation = paragraphs.shift();
+  if (explanation !== undefined) {
     const p = doc.createElement("p");
-    p.textContent = line;
+    p.textContent = explanation;
     resultEl.appendChild(p);
   }
-
-  for (const claim of collectClaims(out, options.headerBytes)) {
-    const p = doc.createElement("p");
-    p.setAttribute("data-ots-claim", claim.kind);
-    p.textContent = claim.text;
-    resultEl.appendChild(p);
+  const cautionVerdicts = verdict === "MATCHES_SUPPLIED_HEADER" || verdict === "PENDING";
+  if (paragraphs.length > 0) {
+    if (cautionVerdicts) {
+      const caution = doc.createElement("div");
+      caution.setAttribute("class", "edge-note is-private");
+      caution.setAttribute("data-ots-caution", "");
+      for (const para of paragraphs) {
+        const p = doc.createElement("p");
+        p.textContent = para;
+        caution.appendChild(p);
+      }
+      resultEl.appendChild(caution);
+    } else {
+      for (const para of paragraphs) {
+        const p = doc.createElement("p");
+        p.textContent = para;
+        resultEl.appendChild(p);
+      }
+    }
   }
 
-  // A file was supplied but never compared: its hash op is one the verifier
+  // 4. Claimed heights stay visible for HEADER_REQUIRED; every other verdict
+  // puts them inside the paths disclosure.
+  const claims = collectClaims(out, options.headerBytes);
+  const appendClaims = (container) => {
+    for (const claim of claims) {
+      const p = doc.createElement("p");
+      p.setAttribute("data-ots-claim", claim.kind);
+      p.textContent = claim.text;
+      container.appendChild(p);
+    }
+  };
+  if (verdict === "HEADER_REQUIRED") appendClaims(resultEl);
+
+  // 5. A file was supplied but never compared: its hash op is one the verifier
   // cannot compute, or it is over the verifier's size limit.
   const originalUnchecked = ["unsupported-hash", "too-large"].includes(out && out.original && out.original.status);
   if (options.originalFileProvided === false || originalUnchecked) {
@@ -355,17 +388,31 @@ export function renderOtsResult(doc, resultEl, out, options = {}) {
     resultEl.appendChild(p);
   }
 
+  // 6. Paths disclosure.
   const paths = out && Array.isArray(out.paths) ? out.paths : [];
-  const pathsBox = doc.createElement("div");
-  pathsBox.setAttribute("data-ots-paths", "");
   if (paths.length === 0) {
+    if (verdict !== "HEADER_REQUIRED") appendClaims(resultEl);
     const p = doc.createElement("p");
+    p.setAttribute("data-ots-paths", "");
     p.textContent = "No attestation paths in this proof.";
-    pathsBox.appendChild(p);
+    resultEl.appendChild(p);
   } else {
-    for (const path of paths) pathsBox.appendChild(renderPathRow(doc, path));
+    const details = doc.createElement("details");
+    details.setAttribute("class", "derivation-advanced");
+    details.setAttribute("data-ots-paths", "");
+    const summary = doc.createElement("summary");
+    summary.textContent = `Attestation paths (${paths.length})`;
+    details.appendChild(summary);
+    // The rows sit in their own box: browsers put a <details> element's
+    // contents in an internal box, so spacing set on <details> never reaches
+    // them.
+    const body = doc.createElement("div");
+    body.setAttribute("class", "ots-paths-body");
+    if (verdict !== "HEADER_REQUIRED") appendClaims(body);
+    for (const path of paths) body.appendChild(renderPathRow(doc, path));
+    details.appendChild(body);
+    resultEl.appendChild(details);
   }
-  resultEl.appendChild(pathsBox);
 }
 
 export function renderOtsError(doc, resultEl, err) {
@@ -377,16 +424,28 @@ export function renderOtsError(doc, resultEl, err) {
   resultEl.removeAttribute("data-ots-warning");
   resultEl.removeAttribute("data-ots-reason");
   resultEl.removeAttribute("data-ots-limit");
-  const headline = doc.createElement("h3");
+
+  const group = doc.createElement("div");
+  group.setAttribute("class", "edge-note-titled");
+  group.setAttribute("data-ots-error", "");
+
+  const headline = doc.createElement("p");
+  headline.setAttribute("class", "edge-note-title is-private");
   headline.setAttribute("data-ots-headline", "");
   headline.textContent = e.headline;
-  resultEl.appendChild(headline);
+  group.appendChild(headline);
+
+  const note = doc.createElement("div");
+  note.setAttribute("class", "edge-note is-private");
   for (const line of String(e.body).split("\n")) {
     if (line === "") continue;
     const p = doc.createElement("p");
     p.textContent = line;
-    resultEl.appendChild(p);
+    note.appendChild(p);
   }
+  group.appendChild(note);
+
+  resultEl.appendChild(group);
 }
 
 function clearResult(resultEl) {
@@ -415,6 +474,8 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
   const verifyBtn = els["ots-verify"];
   const clearBtn = els["ots-clear"];
   const resultEl = els["ots-result"];
+  const proofName = doc.getElementById("ots-proof-name");
+  const originalName = doc.getElementById("ots-original-name");
 
   // Each Verify click takes a new run number. An edit or Clear moves the
   // counter on and stops the verifier, so a stale run renders nothing.
@@ -429,6 +490,11 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
     proofChoose.addEventListener("click", () => proofFile.click());
   }
 
+  const originalChoose = doc.getElementById("ots-original-choose");
+  if (originalChoose && typeof originalChoose.addEventListener === "function") {
+    originalChoose.addEventListener("click", () => originalFile.click());
+  }
+
   clearBtn.addEventListener("click", () => {
     cancelRun();
     proofHex.value = "";
@@ -436,6 +502,14 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
     expectedDigest.value = "";
     proofFile.value = "";
     originalFile.value = "";
+    if (proofName) {
+      proofName.textContent = "";
+      proofName.hidden = true;
+    }
+    if (originalName) {
+      originalName.textContent = "";
+      originalName.hidden = true;
+    }
     clearResult(resultEl);
   });
 
@@ -447,6 +521,20 @@ export function initOtsVerifier(root, { createVerifier = createOtsVerifier } = {
     el.addEventListener("change", () => {
       cancelRun();
       clearResult(resultEl);
+    });
+  }
+
+  for (const [input, note] of [[proofFile, proofName], [originalFile, originalName]]) {
+    input.addEventListener("change", () => {
+      if (!note) return;
+      const file = input.files && input.files[0];
+      if (file && file.name) {
+        note.textContent = file.name;
+        note.hidden = false;
+      } else {
+        note.textContent = "";
+        note.hidden = true;
+      }
     });
   }
 
