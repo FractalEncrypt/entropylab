@@ -1,6 +1,7 @@
-// UR crypto-psbt (BCR-2020-005 / tag 310). Detector and display only.
-// Decode Coldcard / SeedSigner / Sparrow paste; encode single-part or
-// sequential seq-len fragments for an animated QR. Not a signer.
+// UR crypto-psbt (BCR-2020-005 / tag 310, multipart per BCR-2024-001 "MUR").
+// Detector and display only. Decode Coldcard / SeedSigner / Sparrow paste;
+// encode single-part or fixed-rate MUR fragments for an animated QR.
+// Not a signer.
 
 const WORDS = "able acid also apex aqua arch atom aunt away axis back bald barn belt beta bias blue body brag brew bulb buzz calm cash cats chef city claw code cola cook cost crux curl cusp cyan dark data days deli dice diet door down draw drop drum dull duty each easy echo edge epic even exam exit eyes fact fair fern figs film fish fizz flap flew flux foxy free frog fuel fund gala game gear gems gift girl glow good gray grim guru gush gyro half hang hard hawk heat help high hill holy hope horn huts iced idea idle inch inky into iris iron item jade jazz join jolt jowl judo jugs jump junk jury keep keno kept keys kick kiln king kite kiwi knob lamb lava lazy leaf legs liar limp lion list logo loud love luau luck lung main many math maze memo menu meow mild mint miss monk nail navy need news next noon note numb obey oboe omit onyx open oval owls paid part peck play plus poem pool pose puff puma purr quad quiz race ramp real redo rich road rock roof ruby ruin runs rust safe saga scar sets silk skew slot soap solo song stub surf swan taco task taxi tent tied time tiny toil tomb toys trip tuna twin ugly undo unit urge user vast very veto vial vibe view visa void vows wall wand warm wasp wave waxy webs what when whiz wolf work yank yawn yell yoga yurt zaps zero zest zinc zone zoom".split(" ");
 
@@ -102,10 +103,6 @@ export function hodlCborBstrRead(bytes, offset) {
   return [bytes.slice(start, start + length), start + length];
 }
 
-export function hodlCborCryptoPsbt(psbt) {
-  return concatBytes(Uint8Array.of(0xd9, 0x01, 0x36), hodlCborBstr(psbt));
-}
-
 export function hodlCborUnwrapPsbt(bytes) {
   if (bytes.length >= 3 && bytes[0] === 0xd9 && bytes[1] === 0x01 && bytes[2] === 0x36) {
     const [psbt, end] = hodlCborBstrRead(bytes, 3);
@@ -122,6 +119,66 @@ export function hodlCborUnwrapPsbt(bytes) {
   return psbt;
 }
 
+// A dCBOR unsigned integer, minimal width.
+function cborUint(value) {
+  if (value < 0x18) return Uint8Array.of(value);
+  if (value < 0x100) return Uint8Array.of(0x18, value);
+  if (value < 0x10000) return Uint8Array.of(0x19, value >> 8, value & 255);
+  return Uint8Array.of(0x1a, value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255);
+}
+
+// BCR-2024-001 part: [seqNum, seqLen, messageLen, checksum, data]. The
+// checksum is the CRC-32 of the whole message, serialized as a fixed-width
+// uint32; the other numbers use minimal-width dCBOR. Matches the published
+// testEncoderCBOR vectors.
+export function hodlUrPartCbor(seqNum, seqLen, messageLen, checksum, data) {
+  return concatBytes(
+    Uint8Array.of(0x85),
+    cborUint(seqNum),
+    cborUint(seqLen),
+    cborUint(messageLen),
+    Uint8Array.of(0x1a, checksum >>> 24, (checksum >>> 16) & 255, (checksum >>> 8) & 255, checksum & 255),
+    hodlCborBstr(data),
+  );
+}
+
+// The inverse: strict parse of the part structure, or null when the payload
+// is anything else (a legacy raw-fragment chunk, garbage).
+function hodlUrPartParse(bytes) {
+  try {
+    if (!bytes.length || bytes[0] !== 0x85) return null;
+    let offset = 1;
+    const readUint = () => {
+      const first = bytes[offset++];
+      if (first < 0x18) return first;
+      if (first === 0x18) return bytes[offset++];
+      if (first === 0x19) {
+        const value = (bytes[offset] << 8) | bytes[offset + 1];
+        offset += 2;
+        return value;
+      }
+      if (first === 0x1a) {
+        const value = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+        offset += 4;
+        return value;
+      }
+      throw new Error("not a uint");
+    };
+    const seqNum = readUint(), seqLen = readUint(), messageLen = readUint(), checksum = readUint();
+    if ([seqNum, seqLen, messageLen, checksum].some((value) => !Number.isInteger(value))) return null;
+    const [data, end] = hodlCborBstrRead(bytes, offset);
+    if (end !== bytes.length) return null;
+    return { seqNum, seqLen, messageLen, checksum, data };
+  } catch {
+    return null;
+  }
+}
+
+const crc32Number = (bytes) => {
+  const crc = hodlCrc32(bytes);
+  return ((crc[0] << 24) | (crc[1] << 16) | (crc[2] << 8) | crc[3]) >>> 0;
+};
+
 export function hodlUrParsePart(raw) {
   const text = String(raw).trim().toLowerCase().replace(/^ur:\/\//, "ur:");
   const match = text.match(/^ur:([a-z0-9-]+)(?:\/(\d+)-(\d+))?\/([a-z][a-z0-9-]*)$/);
@@ -129,34 +186,54 @@ export function hodlUrParsePart(raw) {
   const type = match[1];
   const seq = match[2] ? Number(match[2]) : 1;
   const count = match[3] ? Number(match[3]) : 1;
+  if (!Number.isSafeInteger(seq) || seq < 1 || !Number.isSafeInteger(count) || count < 1) {
+    throw new Error("UR sequence and count must be positive safe integers.");
+  }
   const payload = hodlBytewordsDecode(match[4].replace(/-/g, ""));
   // A sequence number past the part count marks a multi-part fountain code.
-  return { type, seq, count, payload, fountain: Boolean(match[2] && seq > count) };
+  const fountain = Boolean(match[2] && seq > count);
+  // A BCR-2024-001 part is only believed when its metadata agrees with the
+  // URI's own sequencing; anything else is a legacy raw-fragment payload.
+  let part = null;
+  if (!fountain) {
+    const candidate = hodlUrPartParse(payload);
+    if (candidate && candidate.seqNum === seq && candidate.seqLen === count) part = candidate;
+  }
+  return { type, seq, count, payload, fountain, part };
 }
 
-export function hodlUrEncodePsbt(psbt, options = {}) {
-  if (!(psbt instanceof Uint8Array) || !psbt.length) throw new Error("Need PSBT bytes to encode a UR.");
-  const cbor = hodlCborCryptoPsbt(psbt);
+export function hodlUrEncodeMessage(type, message, options = {}) {
+  if (!/^[a-z0-9-]+$/.test(type)) throw new Error("Bad UR type.");
+  if (!(message instanceof Uint8Array) || !message.length) throw new Error("Need UR message bytes.");
   const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : 200;
+  if (message.length <= maxBytes) return ["ur:" + type + "/" + hodlBytewordsEncode(message, "minimal")];
+  // Same BCR-2024-001 fixed-rate parts crypto-psbt already uses. Not a new
+  // dialect and not a fountain code: equal-length fragments, the last one
+  // zero-padded, each carrying the whole message's length and CRC-32.
+  const count = Math.ceil(message.length / maxBytes);
+  const checksum = crc32Number(message);
   const parts = [];
-  if (cbor.length <= maxBytes) {
-    parts.push("ur:crypto-psbt/" + hodlBytewordsEncode(cbor, "minimal"));
-    return parts;
-  }
-  const count = Math.ceil(cbor.length / maxBytes);
   for (let i = 0; i < count; i++) {
-    const chunk = cbor.slice(i * maxBytes, (i + 1) * maxBytes);
-    parts.push("ur:crypto-psbt/" + (i + 1) + "-" + count + "/" + hodlBytewordsEncode(chunk, "minimal"));
+    let fragment = message.slice(i * maxBytes, (i + 1) * maxBytes);
+    if (fragment.length < maxBytes) fragment = concatBytes(fragment, new Uint8Array(maxBytes - fragment.length));
+    parts.push("ur:" + type + "/" + (i + 1) + "-" + count + "/" + hodlBytewordsEncode(hodlUrPartCbor(i + 1, count, message.length, checksum, fragment), "minimal"));
   }
   return parts;
 }
 
-export function hodlUrDecodePsbt(raw) {
+export function hodlUrEncodePsbt(psbt, options = {}) {
+  if (!(psbt instanceof Uint8Array) || !psbt.length) throw new Error("Need PSBT bytes to encode a UR.");
+  // The UR payload is the untagged CBOR byte string: the type component
+  // already carries tag 310's information (BCR-2020-005).
+  return hodlUrEncodeMessage("crypto-psbt", hodlCborBstr(psbt), options);
+}
+
+function hodlUrReassemble(raw, emptyMessage, acceptType) {
   const pieces = Array.isArray(raw) ? raw : String(raw).split(/[\s,]+/).filter(Boolean);
-  if (!pieces.length) throw new Error("Paste a UR crypto-psbt.");
+  if (!pieces.length) throw new Error(emptyMessage);
   const parsed = pieces.map(hodlUrParsePart);
   const type = parsed[0].type;
-  if (type !== "crypto-psbt" && type !== "psbt") throw new Error("This UR is " + type + ", not crypto-psbt.");
+  acceptType(type);
   if (parsed.some((part) => part.type !== type)) throw new Error("Mixed UR types.");
   if (parsed.some((part) => part.fountain)) {
     throw new Error("Fountain UR fragments (seq > count) are not assembled yet. Display only: scan sequential 1-N parts.");
@@ -165,28 +242,133 @@ export function hodlUrDecodePsbt(raw) {
   if (parsed.some((part) => part.count !== count)) throw new Error("UR fragment counts do not match.");
   if (count === 1) {
     if (parsed.length !== 1) throw new Error("A single-part UR should be pasted once.");
-    return { type, psbt: hodlCborUnwrapPsbt(parsed[0].payload), parts: 1 };
+    return { type, message: parsed[0].payload, parts: 1, wholeMessageVerified: true };
   }
-  const slots = Array.from({ length: count }, () => null);
+  // Retain only supplied fragments, never allocate from an untrusted count.
+  const slots = new Map();
   for (const part of parsed) {
     if (part.seq < 1 || part.seq > count) throw new Error("UR fragment index is out of range.");
     // A second fragment for an already-filled sequence number would silently
-    // overwrite it — with fragments spliced from two different PSBTs the
-    // reassembly would decode to a transaction neither sender produced.
+    // overwrite it — with fragments spliced from two different messages the
+    // reassembly would decode to bytes neither sender produced.
     // Exact repeats (the same fragment pasted twice) are idempotent;
     // conflicting ones are rejected (issue #364).
-    const existing = slots[part.seq - 1];
+    const existing = slots.get(part.seq);
     if (existing) {
-      if (existing.length === part.payload.length && existing.every((byte, i) => byte === part.payload[i])) continue;
+      if (eq(existing.payload, part.payload)) continue;
       throw new Error("Duplicate UR fragment " + part.seq + " with different content.");
     }
-    slots[part.seq - 1] = part.payload;
+    slots.set(part.seq, part);
   }
-  if (slots.some((slot) => !slot)) {
-    const have = slots.reduce((n, slot) => n + (slot ? 1 : 0), 0);
+  if (slots.size !== count) {
+    const have = slots.size;
     throw new Error("Need all " + count + " sequential UR fragments (have " + have + "). Fountain recovery is not implemented.");
   }
-  return { type, psbt: hodlCborUnwrapPsbt(concatBytes(...slots)), parts: count };
+  const ordered = [...slots.values()].sort((a, b) => a.seq - b.seq);
+  const standard = ordered[0].part;
+  if (standard) {
+    // BCR-2024-001 fixed-rate reassembly: every part must carry the same
+    // message metadata, and the reassembled message must match the CRC-32
+    // they all commit to — fragments spliced from another message fail here
+    // even when they land in different slots (audit C3-5).
+    if (ordered.some((part) => !part.part)) throw new Error("Mixed UR fragment formats: some parts carry MUR metadata and some do not.");
+    for (const part of ordered) {
+      const p = part.part;
+      if (p.seqLen !== standard.seqLen || p.messageLen !== standard.messageLen || p.checksum !== standard.checksum || p.data.length !== standard.data.length) {
+        throw new Error("UR fragment metadata do not match.");
+      }
+    }
+    const message = concatBytes(...ordered.map((part) => part.part.data)).slice(0, standard.messageLen);
+    if (crc32Number(message) !== standard.checksum) {
+      throw new Error("UR message checksum failed: the reassembled message is not the one the fragments belong to.");
+    }
+    return { type, message, parts: count, wholeMessageVerified: true };
+  }
+  if (ordered.some((part) => part.part)) throw new Error("Mixed UR fragment formats: some parts carry MUR metadata and some do not.");
+  // Legacy pre-MUR fragments: raw chunks tied only by per-chunk checksums.
+  // BCR-2020-005 legacy sequencing carries no whole-message checksum, so a
+  // reassembly of same-length fragments spliced across payloads cannot be
+  // refused here — the result says so instead of implying verification
+  // (audit L2).
+  return { type, message: concatBytes(...ordered.map((part) => part.payload)), parts: count, wholeMessageVerified: false };
+}
+
+export function hodlUrDecodePsbt(raw) {
+  const assembled = hodlUrReassemble(raw, "Paste a UR crypto-psbt.", (type) => {
+    if (type !== "crypto-psbt" && type !== "psbt") throw new Error("This UR is " + type + ", not crypto-psbt.");
+  });
+  return { type: assembled.type, psbt: hodlCborUnwrapPsbt(assembled.message), parts: assembled.parts, wholeMessageVerified: assembled.wholeMessageVerified };
+}
+
+// Watch-only descriptor and BIP-388 policy text. Same UR family as
+// crypto-psbt: ur:bytes is the untagged CBOR byte string in BCR-2020-005,
+// and a payload past one QR uses the same fixed-rate MUR parts. Not a
+// signing protocol. Private key material is refused.
+export const WATCH_ONLY_QR_STATIC_MAX_CHARS = 1000;
+
+// Keys are whole tokens, never slices of longer ones: a 111-character xpub
+// contains WIF-length windows starting with 5/K/L/9/c by chance. Same rules
+// as verification-package.js's assertPublicOnly. A raw 32-byte hex key reads
+// the same whether it is an x-only public key or a private key, so the only
+// one allowed is BIP-341's NUMS point, the Taproot multisig internal key.
+const BASE58_RUN = /[1-9A-HJ-NP-Za-km-z]+/g;
+const EXTENDED_PRIVATE_PREFIX = /^(?:[xyztuv]prv|[YZUV]prv)/;
+const WIF_PREFIXES = "5KL9c";
+const HEX_KEY = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])/g;
+const NUMS_POINT = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+function watchOnlyTextHasPrivateKey(value) {
+  for (const [token] of value.matchAll(BASE58_RUN)) {
+    if (token.length >= 94 && EXTENDED_PRIVATE_PREFIX.test(token)) return true;
+    if ((token.length === 51 || token.length === 52) && WIF_PREFIXES.includes(token[0])) return true;
+  }
+  for (const [hex] of value.matchAll(HEX_KEY)) if (hex.toLowerCase() !== NUMS_POINT) return true;
+  return false;
+}
+
+// The refusal is fixed text and never repeats the material.
+function assertWatchOnlyText(value) {
+  if (watchOnlyTextHasPrivateKey(value)) throw new Error("Watch-only QR refused private key material.");
+}
+
+// The one decision the field builder uses: null means no QR button, {} a
+// single text QR, and { animate: "watch" } the shared animated UR overlay.
+export function watchOnlyQrButtonOptions(text) {
+  const value = String(text ?? "");
+  if (watchOnlyTextHasPrivateKey(value)) return null;
+  return value.length > WATCH_ONLY_QR_STATIC_MAX_CHARS ? { animate: "watch" } : {};
+}
+
+export function watchOnlyQrPlan(text) {
+  const value = String(text ?? "");
+  assertWatchOnlyText(value);
+  if (value.length <= WATCH_ONLY_QR_STATIC_MAX_CHARS) return { mode: "static", text: value };
+  const message = hodlCborBstr(new TextEncoder().encode(value));
+  const parts = hodlUrEncodeMessage("bytes", message, { maxBytes: 200 }).map((part) => part.toUpperCase());
+  if (parts.length < 2) throw new Error("A payload past one QR must split into UR parts.");
+  return { mode: "ur", parts };
+}
+
+// The overlay's frames for kind "watch": UR parts when the text needs more
+// than one QR, otherwise null (one static QR). Refused text yields null too,
+// so no code is drawn for it.
+export function watchOnlyQrFrames(text) {
+  try {
+    const plan = watchOnlyQrPlan(text);
+    return plan.mode === "ur" ? plan.parts : null;
+  } catch {
+    return null;
+  }
+}
+
+export function hodlUrDecodeWatchOnly(raw) {
+  const assembled = hodlUrReassemble(raw, "Paste a UR bytes payload.", (type) => {
+    if (type !== "bytes") throw new Error("This UR is " + type + ", not bytes.");
+  });
+  const bytes = hodlCborUnwrapPsbt(assembled.message);
+  const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  assertWatchOnlyText(value);
+  return value;
 }
 
 export { WORDS };

@@ -6,30 +6,40 @@
 // to rock after each merge so the file stays downloadable. The Pages workflow
 // copies it to a deployment-only index.html so both / and /entropylab.html
 // serve the same application. The output is byte-for-byte reproducible from
-// the sources, the version declared in package.json, and the commit the
-// build is cut from (stamped into the footer).
+// the sources, the version declared in package.json, and the last commit
+// that changed a build input (stamped into the footer; see build-commit.mjs).
 //
 // The browser test harness builds a staging variant with
 // `--test-hooks --out <dir>`: it compiles in the suite's test bridge (see
 // src/js/app.js) and writes the files outside the repository root. The
 // release build leaves the flag off, so no test code reaches entropylab.html.
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSync } from "esbuild";
+import { build } from "esbuild";
+import { buildCommit } from "./build-commit.mjs";
+import { applyPreviewBlocks, previewHtmlPlugin } from "./preview-blocks.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(root, "src");
 
 const testHooks = process.argv.includes("--test-hooks");
+const preview = process.argv.includes("--preview");
 const outFlag = process.argv.indexOf("--out");
 if (outFlag !== -1 && !process.argv[outFlag + 1]) throw new Error("--out requires a directory");
 const outDir = outFlag === -1 ? root : resolve(root, process.argv[outFlag + 1]);
 if (testHooks && outDir === root) {
   throw new Error("--test-hooks requires --out outside the repository root: the release artifact ships no test code");
 }
+if (preview && outDir === root) {
+  throw new Error("--preview requires --out outside the repository root: the release artifact ships no unreleased features");
+}
+// Unreleased features merge hidden, in two mechanisms. JavaScript gates on the
+// __ENTROPYLAB_PREVIEW__ define below: esbuild folds it to false in a release
+// build and drops the dead branch. Markup gates on the <!-- preview --> /
+// <!-- /preview --> comment blocks that applyPreviewBlocks strips from the
+// shell. A preview build is never deployed.
 
 const read = (path) => readFileSync(join(SRC, path), "utf8");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -38,15 +48,10 @@ if (!/^\d+(?:\.\d+)*$/.test(version)) {
   throw new Error(`Invalid version in package.json: ${version}`);
 }
 
-// The footer identifies the exact source revision the build was cut from; a
-// build from a snapshot without git metadata stamps "unknown".
-const commit = (() => {
-  try {
-    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  } catch {
-    return "unknown";
-  }
-})();
+// The footer identifies the exact source revision the build was cut from: the
+// last commit that changed a build input. A build from a snapshot without git
+// metadata stamps "unknown"; a shallow clone is refused.
+const commit = buildCommit(root);
 if (!/^(?:[0-9a-f]{40}|unknown)$/.test(commit)) {
   throw new Error(`Unexpected git commit id: ${commit}`);
 }
@@ -64,11 +69,12 @@ if (process.argv.includes("--clean")) {
   process.exit(0);
 }
 
-const template = read("index.html");
+// Both templates that reach the artifact take the same preview-block pass.
+const template = applyPreviewBlocks(read("index.html"), preview);
 // The page body lives once in shell.html: it is injected into index.html for
 // first paint / no-JS and imported by app.js (esbuild text loader) for the
 // boot render, so the two can never drift.
-const shell = read("shell.html");
+const shell = applyPreviewBlocks(read("shell.html"), preview);
 const workerTemplate = read("service-worker.js");
 const css = read("css/styles.css");
 // The header logo is inlined as SVG markup so the downloaded file shows it
@@ -85,7 +91,7 @@ const siteLogo = `<span class="site-logo" aria-hidden="true">${logoSvg("logo-dar
 const favicon = readFileSync(join(root, "assets/favicon.png")).toString("base64");
 const faviconSvg = read("assets/favicon.svg").trim()
   .replace(/\s+/g, " ")
-  .replace(/[#<>"%]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  .replace(/[#<>"% ]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 // The app bundle is minified with legalComments "none", which strips the
 // generated WASM module's header comment — but that module compiles in the
 // MIT-licensed AEZ v5 vendored at entropylab-wasm/src/aez/ (zears 0.2.1),
@@ -119,7 +125,13 @@ const wasmAezNotice = `/*!
  *   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 `;
-const jsMain = buildSync({
+// shell.html reaches the artifact twice: injected into index.html below and
+// inlined into the app bundle by esbuild's text loader for the boot render.
+// previewHtmlPlugin applies the same preview-block transform to every .html
+// module esbuild loads, so a release build hides the markup in both copies.
+// Plugins need the async API.
+const previewHtml = previewHtmlPlugin(preview);
+const jsMain = (await build({
   entryPoints: [join(SRC, "js/app.js")],
   bundle: true,
   minify: true,
@@ -131,16 +143,33 @@ const jsMain = buildSync({
   charset: "utf8",
   loader: { ".html": "text" },
   banner: { js: wasmAezNotice },
-  define: { __ENTROPYLAB_TEST_HOOKS__: testHooks ? "true" : "false" },
-}).outputFiles[0].text.split(siteLogoSpan).join(siteLogo);
+  plugins: [previewHtml],
+  define: {
+    __ENTROPYLAB_TEST_HOOKS__: testHooks ? "true" : "false", __LN_WORKER_SOURCE__: JSON.stringify(await (await import("./ln-worker-source.mjs")).buildLnWorkerSource()),
+    ...(preview ? { __QR_WORKER_SOURCE__: JSON.stringify(await (await import("./qr-worker-source.mjs")).buildQrWorkerSource()) } : {}),
+    __ENTROPYLAB_PREVIEW__: preview ? "true" : "false",
+  },
+})).outputFiles[0].text.split(siteLogoSpan).join(siteLogo)
+  // @scure/base probes TextDecoder with "A0+" and a DEL (U+007F). Its source
+  // spells DEL as an escape, but esbuild writes the character itself, which
+  // HTML forbids in a script. Put the escape back: the string is unchanged.
+  .split(String.fromCharCode(0x7f)).join(String.fromCharCode(92) + "x7f");
 const jsSqliteWriter = read("js/sqlite-writer.js");
+const jsSqliteReader = read("js/sqlite-reader.js");
 const jsWalletExport = read("js/wallet-export.js");
+const jsCoreWallet = read("js/core-wallet.js");
 const jsOnline = read("js/online.js");
 const jsNetwork = read("js/network-check.js");
 const jsBrowserCheck = read("js/browser-check.js");
 const jsLifeHash = read("js/lifehash.js");
 const jsEnhanced = read("js/enhanced-inputs.js");
 const jsRepeat = read("js/repeat-inputs.js");
+// The classic scripts are inlined verbatim: esbuild never sees them, so the
+// preview constant would be an undefined name there and break the release
+// page. Refuse it at build time; gate classic-script features from app.js.
+for (const [name, text] of Object.entries({ jsSqliteWriter, jsSqliteReader, jsWalletExport, jsCoreWallet, jsOnline, jsNetwork, jsBrowserCheck, jsLifeHash, jsEnhanced, jsRepeat })) {
+  if (text.includes("__ENTROPYLAB_PREVIEW__")) throw new Error(`${name}: classic scripts cannot use __ENTROPYLAB_PREVIEW__ (only ES modules bundled by esbuild see it)`);
+}
 
 let html = template
   .replace("/*@@SHELL@@*/", () => shell)
@@ -150,7 +179,9 @@ let html = template
   .replace("/*@@CSS@@*/", () => css)
   .replace("/*@@JS_MAIN@@*/", () => jsMain)
   .replace("/*@@JS_SQLITE_WRITER@@*/", () => jsSqliteWriter)
+  .replace("/*@@JS_SQLITE_READER@@*/", () => jsSqliteReader)
   .replace("/*@@JS_WALLET_EXPORT@@*/", () => jsWalletExport)
+  .replace("/*@@JS_CORE_WALLET@@*/", () => jsCoreWallet)
   .replace("/*@@JS_ONLINE@@*/", () => jsOnline)
   .replace("/*@@JS_NETWORK@@*/", () => jsNetwork)
   .replace("/*@@JS_BROWSER_CHECK@@*/", () => jsBrowserCheck)
@@ -178,6 +209,15 @@ const worker = workerTemplate.split("{{PWA_VERSION}}").join(pwaVersion);
 for (const leftover of `${html}\n${worker}`.match(/\/\*@@|{{(?:VERSION|PWA_VERSION|COMMIT|COMMIT_SHORT)}}/g) || []) {
   throw new Error(`Unreplaced build token in output: ${leftover}`);
 }
+// HTML forbids control characters other than whitespace, and noncharacters,
+// anywhere in a document. A dependency that starts emitting one fails the
+// build here rather than shipping a page that does not conform.
+for (const char of html) {
+  const code = char.codePointAt(0);
+  const control = (code < 0x20 && ![0x09, 0x0a, 0x0c, 0x0d].includes(code)) || (code >= 0x7f && code <= 0x9f);
+  const nonCharacter = (code >= 0xfdd0 && code <= 0xfdef) || (code & 0xfffe) === 0xfffe;
+  if (control || nonCharacter) throw new Error(`Code point HTML forbids in output: U+${code.toString(16).toUpperCase().padStart(4, "0")}`);
+}
 
 if (outDir === root) {
   // Remove stale generated files (e.g. versioned copies from older releases)
@@ -189,6 +229,6 @@ if (outDir === root) {
 writeFileSync(join(outDir, appFile), html);
 writeFileSync(join(outDir, workerFile), worker);
 
-console.log(`Built EntropyLab v${version}${testHooks ? " (test hooks enabled; not for release)" : ""}`);
+console.log(`Built EntropyLab v${version}${testHooks ? " (test hooks enabled; not for release)" : ""}${preview ? " (preview: unreleased features on; not for release)" : ""}`);
 console.log(`  ${appFile} (${Buffer.byteLength(html, "utf8")} bytes)`);
 console.log(`  ${workerFile} (${Buffer.byteLength(worker, "utf8")} bytes)`);

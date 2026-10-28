@@ -20,22 +20,11 @@ function hodlError(key, vars) {
 }
 
 function loadSlice(name) {
-  const start = app.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, name);
-  let depth = 0;
-  let end = -1;
-  for (let index = app.indexOf("{", start); index < app.length; index++) {
-    if (app[index] === "{") depth++;
-    else if (app[index] === "}") {
-      depth--;
-      if (depth === 0) {
-        end = index + 1;
-        break;
-      }
-    }
-  }
-  assert.ok(end > start, name);
-  return app.slice(start, end);
+  // Top-level declarations close at column zero. Braces in default
+  // parameters (options = {}) must not be mistaken for the function body.
+  const match = app.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"));
+  assert.ok(match, name);
+  return match[0];
 }
 
 const hodlSha256 = (input) => new Uint8Array(createHash("sha256").update(input).digest());
@@ -86,7 +75,7 @@ test("brain-wallet lab hashes exact UTF-8 text as 256-bit BIP39 entropy", () => 
   const expected = createHash("sha256").update(text, "utf8").digest("hex");
   const result = lab.hodlBrainLabEntropy(text);
   assert.equal(result.ok, true);
-  assert.equal(result.hex, expected);
+  assert.equal(Buffer.from(result.bytes).toString("hex"), expected);
   assert.equal(result.bits, 256);
   assert.equal(result.sourceBits, 256);
   assert.equal(result.method, "brain-lab");
@@ -114,7 +103,7 @@ test("the lab note says when the hashed text was trimmed (audit #365)", () => {
 test("brain-wallet lab rejects empty text and keeps private-key hashing separate", () => {
   assert.equal(lab.hodlBrainLabEntropy("").ok, false);
   const text = "correct horse battery staple";
-  const labHex = lab.hodlBrainLabEntropy(text).hex;
+  const labHex = Buffer.from(lab.hodlBrainLabEntropy(text).bytes).toString("hex");
   const scalarHex = Buffer.from(helpers.hodlBrainWalletPrivateKey(text)).toString("hex");
   assert.equal(labHex, scalarHex);
   assert.match(app, /kind === "brain" && hodlBrainWalletOutput\(\) === "hd"/);
