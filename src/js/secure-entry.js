@@ -317,29 +317,57 @@ const metaOf = (session) => {
   return session.meta;
 };
 
-// Turn-on plans not yet committed or discarded. Their staged entries hold
-// secrets outside session.entries, so End Session and a key delete must
-// still reach them.
+// Plans not yet committed or discarded. A turn-on plan's staged entries and a
+// turn-off plan's serialized texts hold secrets outside session.entries, so
+// End Session and a key delete must still reach them.
 const PLAN_SESSION = Symbol("secure-entry plan session");
 const pendingOf = (session) => {
   if (!session.pending) Object.defineProperty(session, "pending", { value: new Set(), enumerable: false, writable: true, configurable: true });
   return session.pending;
 };
 
-// Wipes and empties every pending turn-on plan. Callers move the generation
-// in the same step, so these plans are stale and can never commit. True when
+// True when the entry is live in some session. A staged entry that ended up
+// installed (a converter that handed one object to two plans) belongs to
+// that session now, and only its own wipe may zero it.
+const isInstalled = (entry) => Boolean(entry && typeof entry === "object" && entry.owner && installedId(entry.owner, entry) !== null);
+
+// Empties one plan. A turn-on plan wipes the staged entries it still owns; a
+// turn-off plan points at the live entries, so it only drops its texts
+// (strings cannot be zeroed, but no reference to them is left). True when
 // every wipe went through.
+const dropPlan = (plan) => {
+  let clean = true;
+  if (Array.isArray(plan.staged)) {
+    for (const item of plan.staged) {
+      if (!item || typeof item !== "object") continue;
+      if (plan.kind === "on") {
+        if (item.entry && !isInstalled(item.entry) && !scrub(item.entry)) clean = false;
+      } else if (typeof item.text === "string") {
+        try { item.text = ""; } catch { /* the plan below still lets go of it */ }
+      }
+    }
+  }
+  plan.staged = [];
+  return clean;
+};
+
+// Empties every pending plan. Callers move the generation in the same step,
+// so these plans are stale and can never commit. True when every wipe went
+// through.
 const wipePending = (session) => {
   let clean = true;
   const pending = pendingOf(session);
-  for (const plan of pending) {
-    if (Array.isArray(plan.staged)) {
-      for (const item of plan.staged) if (item && item.entry && !scrub(item.entry)) clean = false;
-    }
-    plan.staged = [];
-  }
+  for (const plan of pending) if (!dropPlan(plan)) clean = false;
   pending.clear();
   return clean;
+};
+
+// True when a pending turn-on plan of this session already stages the entry.
+const stagedInPending = (session, entry) => {
+  for (const plan of pendingOf(session)) {
+    if (plan.kind === "on" && Array.isArray(plan.staged) && plan.staged.some((item) => item && item.entry === entry)) return true;
+  }
+  return false;
 };
 
 const splitId = (id) => {
@@ -455,7 +483,7 @@ export const planTurnOn = (session, keys, converters) => {
         let entry;
         try { entry = convert(text); }
         catch { blockers.push({ keyId, method, reason: "invalid" }); continue; }
-        if (stagedEntries.has(entry) || installedId(session, entry) !== null || installedElsewhere(session, entry)) {
+        if (stagedEntries.has(entry) || stagedInPending(session, entry) || installedId(session, entry) !== null || installedElsewhere(session, entry)) {
           blockers.push({ keyId, method, reason: "invalid" });
           continue;
         }
@@ -476,10 +504,8 @@ export const planTurnOn = (session, keys, converters) => {
     throw error;
   }
   const plan = { kind: "on", ok: blockers.length === 0, staged, blockers, generation: session.generation };
-  if (staged.length > 0) {
-    Object.defineProperty(plan, PLAN_SESSION, { value: session, enumerable: false, configurable: true });
-    pendingOf(session).add(plan);
-  }
+  Object.defineProperty(plan, PLAN_SESSION, { value: session, enumerable: false, configurable: true });
+  if (staged.length > 0) pendingOf(session).add(plan);
   return plan;
 };
 
@@ -501,6 +527,9 @@ export const commitTurnOn = (session, plan) => {
     seenEntries.add(item.entry);
     seenIds.add(id);
   }
+  // A plan commits only into the session it was made for: two fresh sessions
+  // share generation 0, so the generation alone cannot tell them apart.
+  if (plan[PLAN_SESSION] !== session) fail("PLAN_STALE", "The plan is stale; nothing was changed.");
   for (const { keyId, method, entry } of plan.staged) sessionSet(session, keyId, method, entry);
   plan.staged = [];
   pendingOf(session).delete(plan);
@@ -511,14 +540,9 @@ export const commitTurnOn = (session, plan) => {
 export const discardPlan = (plan) => {
   if (!plan || !Array.isArray(plan.staged)) return;
   // Only a turn-on plan owns its staged entries. A turn-off plan points at the
-  // live entries, so discarding it must never wipe them.
-  if (plan.kind === "on") {
-    for (const item of plan.staged) {
-      if (item && item.entry) scrub(item.entry);
-    }
-    if (plan[PLAN_SESSION]) pendingOf(plan[PLAN_SESSION]).delete(plan);
-  }
-  plan.staged = [];
+  // live entries, so discarding it must never wipe them; it drops its texts.
+  dropPlan(plan);
+  if (plan[PLAN_SESSION]) pendingOf(plan[PLAN_SESSION]).delete(plan);
   // A discarded plan cannot be committed: an empty turn-on would otherwise
   // switch secure entry on with the user's text already wiped.
   plan.ok = false;
@@ -553,7 +577,12 @@ export const planTurnOff = (session, serializers) => {
     // already made rather than return them with it.
     if (blockers.length > 0) staged.length = 0;
   }
-  return { kind: "off", ok: blockers.length === 0, staged, blockers, generation: session.generation };
+  const plan = { kind: "off", ok: blockers.length === 0, staged, blockers, generation: session.generation };
+  Object.defineProperty(plan, PLAN_SESSION, { value: session, enumerable: false, configurable: true });
+  // The texts are the secrets in the clear: End Session and a key delete must
+  // drop them even if the plan is never committed or discarded.
+  if (staged.length > 0) pendingOf(session).add(plan);
+  return plan;
 };
 
 export const commitTurnOff = (session, plan, mode) => {
@@ -576,6 +605,7 @@ export const commitTurnOff = (session, plan, mode) => {
     // Each text keeps its key and method, so the caller puts it back in the right field.
     const texts = plan.staged.map(({ keyId, method, text }) => ({ keyId, method, text }));
     plan.staged = [];
+    pendingOf(session).delete(plan);
     try {
       sessionWipe(session);
     } catch (error) {

@@ -1232,3 +1232,101 @@ test("a blocked turn-on plan's staged entries are wiped by End Session too", () 
   sessionWipe(session);
   assert.ok(staged.indices.every((value) => value === 0));
 });
+
+// Review on f5a552f8 (Kimi K3.1 red team, MiniMax, GLM 5.3).
+test("End Session drops a pending turn-off plan's texts", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 7);
+  sessionSet(session, 1, "seed", entry);
+  const plan = planTurnOff(session, { seed: () => "SECRET-SEED-TEXT" });
+  assert.equal(plan.ok, true);
+  const item = plan.staged[0];
+  sessionWipe(session);
+  assert.equal(plan.staged.length, 0);
+  assert.equal(item.text, "", "a caller still holding the item no longer sees the text");
+  assert.equal(session.pending.size, 0);
+  assert.throws(() => commitTurnOff(session, plan, "convert"), code("PLAN_STALE"));
+});
+
+test("deleting a key drops every pending turn-off plan's texts", () => {
+  const session = createSecureSession();
+  const first = seedEntry(12), second = seedEntry(12);
+  seedSet(first, 0, 1);
+  seedSet(second, 0, 2);
+  sessionSet(session, 1, "seed", first);
+  sessionSet(session, 2, "seed", second);
+  const plan = planTurnOff(session, { seed: (entry) => `words-${entry.indices[0]}` });
+  assert.equal(plan.ok, true);
+  const items = [...plan.staged];
+  sessionDeleteKey(session, 1);
+  assert.ok(items.every((item) => item.text === ""));
+  assert.equal(plan.staged.length, 0);
+  assert.equal(second.indices[0], 2, "the other key's live entry is not wiped");
+  assert.equal(sessionGet(session, 2, "seed"), second);
+});
+
+test("discarded and committed turn-off plans leave the pending set; discarding never wipes a live entry", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 4);
+  sessionSet(session, 1, "seed", entry);
+  const dropped = planTurnOff(session, { seed: () => "words" });
+  const item = dropped.staged[0];
+  discardPlan(dropped);
+  assert.equal(item.text, "");
+  assert.equal(session.pending.size, 0);
+  assert.equal(entry.indices[0], 4);
+  const plan = planTurnOff(session, { seed: () => "words" });
+  assert.equal(session.pending.size, 1);
+  assert.deepEqual(commitTurnOff(session, plan, "convert"), [{ keyId: "1", method: "seed", text: "words" }]);
+  assert.equal(session.pending.size, 0);
+});
+
+test("an entry staged by another pending turn-on plan is blocked, so discarding one plan never wipes the other's entry", () => {
+  const session = createSecureSession();
+  const shared = seedEntry(12);
+  seedSet(shared, 0, 7);
+  const converters = { seed: () => shared };
+  const first = planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }], converters);
+  const second = planTurnOn(session, [{ keyId: 2, methods: { seed: "b" } }], converters);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  assert.ok(second.blockers.some((b) => b.reason === "invalid"));
+  commitTurnOn(session, first);
+  discardPlan(second);
+  assert.equal(sessionGet(session, 1, "seed"), shared);
+  assert.equal(shared.wiped, false);
+  assert.equal(shared.indices[0], 7);
+});
+
+test("discarding a plan whose staged entry is installed leaves the live entry alone", () => {
+  const session = createSecureSession();
+  const converters = { seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 5); return entry; } };
+  const first = planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }], converters);
+  const live = first.staged[0].entry;
+  const second = planTurnOn(session, [{ keyId: 2, methods: { seed: "b" } }], converters);
+  const own = second.staged[0].entry;
+  commitTurnOn(session, first);
+  second.staged.push({ keyId: "3", method: "seed", entry: live });
+  discardPlan(second);
+  assert.ok(own.indices.every((value) => value === 0), "the plan's own staged entry is wiped");
+  assert.equal(live.wiped, false);
+  assert.equal(live.indices[0], 5);
+  assert.equal(sessionGet(session, 1, "seed"), live);
+});
+
+test("a turn-on plan commits only into the session it was made for", () => {
+  const sessionA = createSecureSession();
+  const sessionB = createSecureSession();
+  const plan = planTurnOn(sessionA, [{ keyId: 1, methods: { seed: "a" } }], {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 3); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(sessionA.generation, sessionB.generation);
+  assert.throws(() => commitTurnOn(sessionB, plan), code("PLAN_STALE"));
+  assert.equal(sessionB.entries.size, 0);
+  assert.equal(sessionB.on, false);
+  commitTurnOn(sessionA, plan);
+  assert.equal(sessionA.entries.size, 1);
+});
