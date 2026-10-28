@@ -20774,10 +20774,10 @@ function hodlInitEndSession() {
 // change handler, so its view re-renders masked exactly as a click would.
 // Five minutes untouched is long enough to copy a phrase onto paper.
 var hodlRevealIdleMs = 5 * 60 * 1000;
-function hodlConcealPrivateValues({ reason } = {}) {
+function hodlConcealPrivateValues(options) {
   // Plain blur permits copying the opening/PSBT from another window. Other
   // conceal triggers retire the pasted host reveal, which remains sensitive.
-  if (reason !== "blur") {
+  if (options?.reason !== "blur") {
     const transcript = document.getElementById("psbt-ax-transcript");
     if (transcript) transcript.value = "";
     const transcriptSection = document.getElementById("nonce-jade-options");
