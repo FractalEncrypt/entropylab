@@ -182,7 +182,10 @@ export function retireUrCollectors() {
 }
 
 export function createUrCollector(options = {}) {
-  const { types, maxMessageLen = 1048576, maxSeqLen = 10000, track } = options;
+  // Each part costs about seqLen^2 steps (choosing its fragments shuffles
+  // seqLen indexes), and a hostile stream picks seqLen. 1000 parts is far
+  // more than any PSBT a camera scan carries, and keeps that cost small.
+  const { types, maxMessageLen = 1048576, maxSeqLen = 1000, track } = options;
   if (!Array.isArray(types) || types.length === 0) {
     throw new Error("createUrCollector needs a non-empty types array.");
   }
@@ -335,6 +338,9 @@ export function createUrCollector(options = {}) {
     return "ok";
   };
 
+  // Parsing a frame makes fresh copies of its bytes (the bytewords payload
+  // and the part's data). They are zeroed once the collector has copied what
+  // it keeps, whatever the outcome.
   const receive = (text) => {
     if (dead) return { status: deadStatus };
     let parsed;
@@ -343,11 +349,21 @@ export function createUrCollector(options = {}) {
     } catch {
       return { status: "bad-part" };
     }
+    const scratch = [parsed.payload, parsed.part && parsed.part.data];
+    try {
+      return accept(text, parsed, scratch);
+    } finally {
+      for (const bytes of scratch) zeroBytes(bytes);
+    }
+  };
+
+  const accept = (text, parsed, scratch) => {
     const normalized = String(text).trim().toLowerCase().replace(/^ur:\/\//, "ur:");
 
     if (!MULTIPART.test(normalized)) {
       if (!allowed.has(parsed.type)) return { status: "wrong-type" };
       if (bound) return { status: "mismatch" };
+      if (parsed.payload.length > maxMessageLen) return { status: "too-large" };
       const message = new Uint8Array(parsed.payload.length);
       message.set(parsed.payload);
       status = "complete";
@@ -359,6 +375,7 @@ export function createUrCollector(options = {}) {
     let part;
     if (parsed.fountain) {
       part = hodlUrPartParse(parsed.payload);
+      if (part) scratch.push(part.data);
       if (!part || part.seqNum !== parsed.seq || part.seqLen !== parsed.count) {
         return { status: "bad-part" };
       }

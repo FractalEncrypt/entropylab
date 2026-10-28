@@ -461,3 +461,16 @@ test("retireUrCollectors zeroes a live collector and it starts fresh", () => {
   assert.equal(collector.state().status, "idle");
   assert.equal(collector.receive(vectors.urEncoder.parts[1]).status, "progress");
 });
+
+// Review on 3e12704a (GLM 5.3, Kimi K3, MiniMax, DeepSeek V4.1 red team).
+test("a single-part UR over maxMessageLen is too-large", () => {
+  const collector = createUrCollector({ types: ["bytes"], maxMessageLen: 10 });
+  assert.equal(collector.receive(vectors.singlePartUr.ur).status, "too-large");
+  assert.equal(collector.state().status, "idle");
+});
+
+test("the default part cap is 1000", () => {
+  const part = (seqLen) => toUr({ seqNum: 1, seqLen, messageLen: seqLen, checksum: 0, data: new Uint8Array(1) }, "bytes");
+  assert.equal(createUrCollector({ types: ["bytes"] }).receive(part(1001)).status, "too-large");
+  assert.equal(createUrCollector({ types: ["bytes"] }).receive(part(1000)).status, "progress");
+});
