@@ -387,3 +387,48 @@ test("a release build ships neither the QR WASM module nor the QR worker source"
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+
+for (const action of ["timeout", "stop"]) {
+  test(`${action} retires an unresponsive worker without promising a scrub`, async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    class UnresponsiveWorker extends FakeWorker {
+      postMessage(message, transfer) {
+        // Actual transfer semantics, but deliberately no processing or scrub ack.
+        super.postMessage(structuredClone(message, { transfer }), []);
+      }
+    }
+    const decoder = fakeDecoder({ Worker: UnresponsiveWorker, timeoutMs: 4000, scrubMs: 250 });
+    try {
+      const frame = new Uint8Array(21 * 21).fill(99);
+      const pending = decoder.decode(frame, 21, 21);
+      const rejected = assert.rejects(pending, { code: action === "timeout" ? "TIMEOUT" : "STOPPED" });
+      const worker = FakeWorker.instances[0], request = worker.sent("decode")[0];
+      assert.equal(frame.byteLength, 0, "the page has relinquished frame ownership");
+      if (action === "timeout") t.mock.timers.tick(4000);
+      else decoder.stop();
+      await rejected;
+      assert.equal(worker.sent("scrub").length, 1);
+      assert.equal(worker.terminated, false);
+      t.mock.timers.tick(249);
+      assert.equal(worker.terminated, false);
+      t.mock.timers.tick(1);
+      assert.equal(worker.terminated, true);
+      assert.ok(new Uint8Array(request.gray).every(v => v === 99),
+        "termination is not proof that a queued scrub ran on the transferred frame");
+      const late = new Uint8Array([65]).buffer;
+      worker.emit({ type: "decoded", run: request.run, code: 1, payload: late });
+      assert.equal(new Uint8Array(late)[0], 0, "late payload is rejected and wiped");
+      if (action === "timeout") {
+        const next = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+        const fresh = FakeWorker.instances[1], run = fresh.sent("decode")[0].run;
+        assert.notEqual(fresh, worker);
+        fresh.emit({ type: "decoded", run, code: -1, payload: null });
+        assert.deepEqual(await next, { code: -1, payload: null });
+      }
+    } finally {
+      decoder.stop();
+      t.mock.timers.tick(250);
+    }
+  });
+}

@@ -9,7 +9,9 @@ export class CameraCapture {
   stop() {
     this.epoch++;
     clearTimeout(this.timer);
-    this.stopDecode();
+    // Decoder retirement is best-effort; camera and caller-owned transcript
+    // cleanup must still run if it throws. The epoch rejects any late result.
+    try { this.stopDecode(); } catch { /* Continue cleanup without logging data. */ }
     for (const track of this.stream?.getTracks() || []) track.stop();
     this.stream = null;
     if (this.video) {

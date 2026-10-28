@@ -2,7 +2,7 @@
 
 Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
 Shared-decoder integration base checked 2026-10-28 UTC:
-530666a36ee66b57636d04e461a9da13042f8852, including merged shared-worker PR #1272.
+eeb5e2d32a4e5bc2cb21e21b52b1b846c445a072, including merged shared-worker PR #1272.
 
 ## Current flow
 
@@ -76,10 +76,15 @@ Serve on loopback or another secure local browser context. No runtime downloads.
 Capture now uses the shared quircs worker and `createQrDecoder` interface from
 merged PR #1272 (head 2c2c3088c5f1d3921877c3b80d4fd6931cb4e52e).
 The dependency is now part of the upstream base. The camera adapter only converts
-RGBA to grayscale and consumes/wipes returned UTF-8 payloads; it does not implement
+RGBA to grayscale and consumes/wipes returned UTF-8 payload bytes; it does not implement
 a competing worker. Camera stop, restart and disconnect retire decoding. Frames
 are at most 1280x960, one decode is in flight, and the shared worker applies its
-four-second deadline and scrub/termination lifecycle. Multiple different QR codes
+four-second deadline and scrub/termination lifecycle. Stop requests a scrub but
+terminates after 250 ms without an acknowledgement; a busy worker may terminate
+before wiping transferred frames or WASM memory. Termination is not proof of
+zeroing, and decoded immutable strings cannot be reliably erased. The adapter is
+reusable: decoding after stop creates a fresh shared decoder. Camera cleanup
+continues if decoder retirement throws. Multiple different QR codes
 in one frame are refused; point the camera at one code at a time. The worker's
 4096-byte decoded payload limit is below the transport parser's defensive ceiling.
 The prior decoder has been removed. UR2 notices remain in preview artifacts.

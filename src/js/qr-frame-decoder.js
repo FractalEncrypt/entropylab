@@ -3,6 +3,9 @@ import { QR_WASM_B64 } from "./qr-wasm-b64.js";
 
 // Camera pixel conversion only; worker ownership, deadlines and scrubbing are
 // provided by the shared decoder. No separate worker or decoder implementation.
+// stop() retires the current worker; a subsequent decode intentionally starts a
+// fresh one for the next message. Returned bytes are wiped, but decoded strings
+// are immutable and transferred frames rely on best-effort worker cleanup.
 export function createQrFrameDecoder({ createDecoder = createQrDecoder } = {}) {
   let decoder = null, generation = 0;
   return {

@@ -1,12 +1,14 @@
 // Page wrapper for the QR decoder worker (preview builds only). The worker
 // source and the WASM bytes are injected by the build; this module never
-// touches the DOM. P3 wires retireQrDecoders() into End Session and pagehide.
+// touches the DOM. Ceremony capture retires its decoder through CameraCapture
+// and the frame adapter; retireQrDecoders() remains available for global cleanup.
 //
-// Security contract: a frame is decoded only inside the terminable worker;
-// the frame and the worker's WASM buffers are zeroed after every decode, and
-// a frame refused here or in the worker is zeroed too; a
-// stale or malformed reply never resolves a decode; stop() scrubs the
-// worker's WASM memory before terminating it.
+// Security contract: frames are decoded only inside a terminable worker; normal
+// completion/refusal wipes accessible frame and WASM buffers, and stale or
+// malformed replies never resolve a decode. Retirement requests a scrub, then
+// terminates after an acknowledgement or a bounded fallback (250 ms by default).
+// A busy worker may be terminated before processing that request: transferred
+// frames and WASM memory are not guaranteed to have been zeroed.
 const MIN_DIM = 21;
 const MAX_DIM = 4096;
 const MAX_PIXELS = 4_194_304;

@@ -1016,6 +1016,10 @@ Inspector. First allow camera access and choose a camera, then scan
 the AEXB proof and the supplied signatures against the embedded PSBT. It never
 signs or broadcasts. Completion clears captured messages before showing a
 blocking PASS or STOP result; only verdict metadata remains until acknowledgement.
+Worker cleanup requests a memory scrub, with termination after 250 ms if no
+acknowledgement arrives. A busy worker may terminate before wiping transferred
+frames or WASM memory. Immutable decoded strings and browser/OS copies also
+remain outside reliable erasure guarantees.
 This does not prove host honesty or randomness secrecy. The user reports successful local SeedSigner and Kern multisig sessions;
 broader compatibility qualification remains pending; see `docs/QR_CAPTURE_PROTOTYPE.md` for limits.
 

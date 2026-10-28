@@ -705,8 +705,12 @@ RAM-only operation reduces retention but does not guarantee erasure.
 This remains an observer, not an enforcement boundary against a compromised host.
 Camera pixels use the shared quircs WASM decoder and its preview worker. Camera
 stop/restart, disconnect, Clear Capture and completion retire the worker through
-its scrub/terminate lifecycle; stale replies cannot enter a capture. Owned pixel
-and payload buffers are wiped, but browser/OS copies remain best-effort. The
+its scrub/terminate lifecycle; stale replies cannot enter a capture. Accessible
+pixel and returned payload buffers are wiped. Retirement requests a scrub, but
+terminates after 250 ms without an acknowledgement. A busy worker may be stopped
+before it scrubs transferred frames or WASM memory; termination does not prove
+zeroing. Immutable decoded strings and browser/OS copies cannot be reliably
+zeroed either. Camera cleanup continues even if decoder retirement throws. The
 Foundation Devices-derived UR fragment selection is separately licensed under
 `src/licenses/` and bundled only in previews.
 

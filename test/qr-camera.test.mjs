@@ -121,3 +121,25 @@ for (const failure of ["play", "decode", "disconnect"]) {
     c.stop();
   });
 }
+
+
+test("throwing decoder shutdown cannot prevent camera cleanup or deliver a late frame", async () => {
+  let throwOnStop = false, stopped = 0, resolve, delivered = 0;
+  const c = new CameraCapture({
+    getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }] }),
+    decode: () => new Promise(r => { resolve = r; }),
+    stopDecode: () => { if (throwOnStop) throw Error("shutdown failed"); },
+  });
+  const v = video();
+  await c.start(v, "", () => delivered++);
+  throwOnStop = true;
+  try { c.stop(); } catch { /* Assert cleanup independently of the thrown error. */ }
+  assert.equal(stopped, 1, "camera track must stop even when decoder retirement throws");
+  assert.equal(v.srcObject, null);
+  assert.equal(c.stream, null);
+  assert.equal(c.video, null);
+  assert.doesNotThrow(() => c.stop(), "Clear callers must be able to continue clearing transcripts");
+  resolve("late");
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(delivered, 0);
+});
