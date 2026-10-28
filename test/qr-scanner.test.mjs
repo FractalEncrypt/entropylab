@@ -308,3 +308,19 @@ test("scanImage decodes a bitmap and zeroes the canvas", async () => {
     globalThis.createImageBitmap = original;
   }
 });
+
+test("scanImage refuses a reply whose code is not the payload length", async () => {
+  const { decoder, scanner } = build();
+  const original = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async () => ({ width: 100, height: 100, close() {} });
+  try {
+    const pending = scanner.scanImage({ size: 100, type: "image/png" });
+    await tick();
+    const payload = new Uint8Array([5, 5, 5]);
+    decoder.pending[0].resolve({ code: 5, payload });
+    await assert.rejects(pending, (error) => error.code === "DECODE_FAILED");
+    assert.ok(payload.every((byte) => byte === 0), "the malformed payload is wiped");
+  } finally {
+    globalThis.createImageBitmap = original;
+  }
+});

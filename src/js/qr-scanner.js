@@ -363,7 +363,14 @@ export function createQrScanner({
         // costs nothing and does not depend on that.
         wipe(gray);
       }
-      return { code: reply?.code, payload: reply?.payload ?? null };
+      const code = reply?.code;
+      // The same rule as the camera path: a positive code is the payload's
+      // byte length, or the reply is malformed and nothing is returned.
+      if (Number.isInteger(code) && code > 0 && !(reply.payload instanceof Uint8Array && reply.payload.length === code)) {
+        wipe(reply.payload);
+        throw failure("DECODE_FAILED");
+      }
+      return { code, payload: reply?.payload ?? null };
     } finally {
       try {
         bitmap?.close?.();
