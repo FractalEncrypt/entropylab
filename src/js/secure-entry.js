@@ -32,9 +32,22 @@ const MAX_CAPACITY = 400;
 
 const isInteger = (value) => typeof value === "number" && Number.isInteger(value);
 
+// The module writes rev, count, wiped and owner on an entry; refuse one where
+// those writes would throw a raw TypeError halfway through an edit or install.
+const assertWritable = (entry) => {
+  if (!Object.isExtensible(entry)) fail("BAD_ENTRY", "A secure entry must be extensible.");
+  for (const field of ["rev", "count", "wiped"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(entry, field);
+    if (descriptor && descriptor.writable !== true) fail("BAD_ENTRY", "A secure entry's fields must be writable.");
+  }
+  const owner = Object.getOwnPropertyDescriptor(entry, "owner");
+  if (owner && owner.configurable !== true) fail("BAD_ENTRY", "A secure entry's owner must be configurable.");
+};
+
 const assertLive = (entry, kind) => {
   if (!entry || typeof entry !== "object" || entry.kind !== kind) fail("BAD_ENTRY", `Not a ${kind} entry.`);
   if (entry.wiped) fail("WIPED", "This secure entry has been wiped.");
+  assertWritable(entry);
 };
 
 const isPlainObject = (value) => {
@@ -63,6 +76,7 @@ const bumpOwner = (entry) => {
 // taken before the edit is refused instead of serializing stale bytes.
 export const touchEntry = (entry) => {
   if (!entry || typeof entry !== "object") fail("BAD_ENTRY", "Not a secure entry.");
+  assertWritable(entry);
   bumpRev(entry);
   bumpOwner(entry);
 };
@@ -72,7 +86,7 @@ export const touchEntry = (entry) => {
 const assertEntry = (entry, method) => {
   if (!entry || typeof entry !== "object" || entry.kind !== method) fail("BAD_ENTRY", `Not a ${method} entry.`);
   if (entry.wiped === true) fail("BAD_ENTRY", "This secure entry has been wiped.");
-  if (!Object.isExtensible(entry)) fail("BAD_ENTRY", "A secure entry must be extensible.");
+  assertWritable(entry);
   switch (method) {
     case "seed":
       if (!(entry.indices instanceof Uint16Array)) fail("BAD_ENTRY", "A seed entry needs Uint16 word indices.");
@@ -223,9 +237,24 @@ export const cardsCopy = (entry) => {
   return entry.cards.slice(0, entry.count);
 };
 
+// Zero every typed array an entry holds and clear its vault, without checking
+// the entry's shape.
+const zeroBuffers = (entry) => {
+  for (const field of ["indices", "rolls", "cards"]) {
+    const buffer = entry[field];
+    if (buffer && typeof buffer.fill === "function") buffer.fill(0);
+  }
+  if (entry.vault && typeof entry.vault.clear === "function") entry.vault.clear();
+};
+
 export const wipeEntry = (entry) => {
   if (!entry || typeof entry !== "object") fail("BAD_ENTRY", "Not a secure entry.");
-  if (entry.wiped) return;
+  // A wiped entry's buffers stay reachable (a key entry's vault can be refilled
+  // through entry.vault), so a repeat wipe clears them again.
+  if (entry.wiped) {
+    zeroBuffers(entry);
+    return;
+  }
   switch (entry.kind) {
     case "seed":
       if (!(entry.indices instanceof Uint16Array)) fail("BAD_ENTRY", "The seed entry has no word buffer.");
@@ -269,11 +298,7 @@ const scrub = (entry) => {
   } catch {
     try {
       if (entry && typeof entry === "object") {
-        for (const field of ["indices", "rolls", "cards"]) {
-          const buffer = entry[field];
-          if (buffer && typeof buffer.fill === "function") buffer.fill(0);
-        }
-        if (entry.vault && typeof entry.vault.clear === "function") entry.vault.clear();
+        zeroBuffers(entry);
         if ("count" in entry) entry.count = 0;
         entry.wiped = true;
       }
@@ -326,11 +351,14 @@ export const sessionSet = (session, keyId, method, entry) => {
   const hereId = installedId(session, entry);
   if (hereId !== null && hereId !== id) fail("BAD_ENTRY", "This entry is already installed under another id.");
   Object.defineProperty(entry, "owner", { value: session, writable: true, configurable: true });
+  // Install first, then wipe the entry it replaces: a wipe that cannot finish
+  // must not leave the key pointing at a half-wiped entry, or stop a
+  // commitTurnOn install loop part way.
   const previous = session.entries.get(id);
-  if (previous && previous !== entry) wipeEntry(previous);
   session.entries.set(id, entry);
   metaOf(session).set(id, { keyId: canonical, method });
   session.generation += 1;
+  if (previous && previous !== entry) scrub(previous);
 };
 
 export const sessionDeleteKey = (session, keyId) => {
@@ -502,7 +530,9 @@ export const commitTurnOff = (session, plan, mode) => {
     return texts;
   }
   if (mode === "clear") {
-    if (plan) plan.staged = [];
+    // A pending turn-on plan owns secrets that are not in the session yet:
+    // wipe them too. A turn-off plan only points at the live entries.
+    discardPlan(plan);
     sessionWipe(session);
     return [];
   }

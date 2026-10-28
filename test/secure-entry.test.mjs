@@ -222,6 +222,15 @@ test("wipeEntry zeroes every buffer and refuses later mutation", () => {
   wipeEntry(key);
   assert.equal(key.vault.length, 0);
   assert.equal(key.wiped, true);
+
+  // The vault is still reachable after the wipe; a refill is cleared by the
+  // next wipe instead of surviving behind the wiped flag.
+  key.vault.setText("refilled");
+  wipeEntry(key);
+  assert.equal(key.vault.length, 0, "a repeat wipe clears a refilled vault");
+  seed.indices[0] = 9;
+  wipeEntry(seed);
+  assert.equal(seed.indices[0], 0, "a repeat wipe zeroes the word buffer again");
 });
 
 test("wipeEntry refuses something that is not an entry", () => {
@@ -1000,4 +1009,71 @@ test("wiping a frozen entry zeroes its buffer and throws a coded BAD_ENTRY", () 
   Object.freeze(entry);
   assert.throws(() => wipeEntry(entry), (error) => error instanceof SecureEntryError && error.code === "BAD_ENTRY");
   assert.ok(buffer.every((value) => value === 0), "the word buffer is zeroed even though the entry is frozen");
+});
+
+test("commitTurnOff clear also wipes a pending turn-on plan's staged entries", () => {
+  const session = createSecureSession();
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "abandon" } }], {
+    seed: () => { const entry = seedEntry(12); seedSet(entry, 0, 9); return entry; },
+  });
+  assert.equal(plan.ok, true);
+  const staged = plan.staged[0].entry;
+  const buffer = staged.indices;
+  assert.deepEqual(commitTurnOff(session, plan, "clear"), []);
+  assert.ok(buffer.every((value) => value === 0), "the staged word buffer is zeroed");
+  assert.equal(staged.wiped, true);
+  assert.equal(plan.staged.length, 0);
+});
+
+test("commitTurnOff clear with a turn-off plan wipes the live entries once and returns no texts", () => {
+  const session = createSecureSession();
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 4);
+  sessionSet(session, 1, "seed", entry);
+  const plan = planTurnOff(session, { seed: () => "text" });
+  assert.deepEqual(commitTurnOff(session, plan, "clear"), []);
+  assert.ok(entry.indices.every((value) => value === 0));
+  assert.equal(session.entries.size, 0);
+});
+
+test("an entry whose owner cannot be redefined is refused with BAD_ENTRY before any install", () => {
+  const session = createSecureSession();
+  const odd = seedEntry(12);
+  Object.defineProperty(odd, "owner", { value: null, writable: false, configurable: false });
+  assert.throws(() => sessionSet(session, 1, "seed", odd), code("BAD_ENTRY"));
+  assert.equal(session.entries.size, 0);
+  const good = seedEntry(12);
+  const plan = planTurnOn(session, [{ keyId: 1, methods: { seed: "a" } }, { keyId: 2, methods: { seed: "b" } }], {
+    seed: (text) => (text === "a" ? good : odd),
+  });
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.blockers, [{ keyId: "2", method: "seed", reason: "invalid" }]);
+  discardPlan(plan);
+  assert.equal(session.entries.size, 0);
+});
+
+test("an entry with a read-only rev is refused with BAD_ENTRY before its buffer changes", () => {
+  const entry = seedEntry(12);
+  Object.defineProperty(entry, "rev", { value: 0, writable: false, configurable: true });
+  assert.throws(() => seedSet(entry, 0, 5), code("BAD_ENTRY"));
+  assert.equal(entry.indices[0], 0, "the word buffer is untouched");
+  assert.equal(entry.count, 0);
+  assert.throws(() => touchEntry(entry), code("BAD_ENTRY"));
+  const rolls = rollsEntry("base10", 10);
+  Object.defineProperty(rolls, "rev", { get: () => 0, configurable: true });
+  assert.throws(() => rollsPush(rolls, 3), code("BAD_ENTRY"));
+  assert.equal(rolls.rolls[0], 0);
+});
+
+test("replacing an entry installs the new one even when the old one cannot be marked wiped", () => {
+  const session = createSecureSession();
+  const old = seedEntry(12);
+  seedSet(old, 0, 6);
+  sessionSet(session, 1, "seed", old);
+  const oldBuffer = old.indices;
+  Object.freeze(old);
+  const replacement = seedEntry(12);
+  sessionSet(session, 1, "seed", replacement);
+  assert.equal(sessionGet(session, 1, "seed"), replacement);
+  assert.ok(oldBuffer.every((value) => value === 0), "the replaced word buffer is zeroed");
 });
