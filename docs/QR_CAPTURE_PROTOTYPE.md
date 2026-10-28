@@ -2,7 +2,8 @@
 
 Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
 Shared-decoder integration base checked 2026-10-28 UTC:
-eeb5e2d32a4e5bc2cb21e21b52b1b846c445a072, including merged shared-worker PR #1272.
+d28d544a42e8b8c6ff601cbfa14df0ab419203ee, including merged shared-worker PR #1272,
+shared UR collector #1273 and subsequent worker scrub hardening.
 
 ## Current flow
 
@@ -31,7 +32,7 @@ observer check. Capture order is unrestricted, not evidence of real exchange ord
 
 ## Architecture and limits
 
-- `aexb-capture.js`: DOM-free bounded UR/fountain assembly, canonical decoding,
+- `aexb-capture.js`: adapter over `createUrCollector` from `ur-fountain.js`, canonical decoding,
   session/stage binding and held-buffer wiping. `finish()` returns only verdict
   metadata and clears in a finally block on either completed outcome.
 - `aexb-transaction.js`: PSBT WASM parsing, script/key membership, recomputed
@@ -80,7 +81,8 @@ RGBA to grayscale and consumes/wipes returned UTF-8 payload bytes; it does not i
 a competing worker. Camera stop, restart and disconnect retire decoding. Frames
 are at most 1280x960, one decode is in flight, and the shared worker applies its
 four-second deadline and scrub/termination lifecycle. Stop requests a scrub but
-terminates after 250 ms without an acknowledgement; a busy worker may terminate
+waits up to four seconds when busy (250 ms when idle) for an acknowledgement;
+the shared decoder reports unsuccessful scrubbing. An unresponsive worker may terminate
 before wiping transferred frames or WASM memory. Termination is not proof of
 zeroing, and decoded immutable strings cannot be reliably erased. The adapter is
 reusable: decoding after stop creates a fresh shared decoder. Camera cleanup
@@ -88,8 +90,12 @@ continues if decoder retirement throws. Multiple different QR codes
 in one frame are refused; point the camera at one code at a time. The worker's
 4096-byte decoded payload limit is below the transport parser's defensive ceiling.
 The prior decoder has been removed. UR2 notices remain in preview artifacts.
-Normal builds exclude camera decoding. Fresh DeepSeek review and physical-device
-qualification of this worker integration are still required.
+Normal builds exclude camera decoding. The #1273 integration preserves the
+observer's limits and canonical envelope checks, removes its separate fountain
+assembler, and refuses nonzero fountain padding. Progress counts recovered
+fragments rather than the old assembler's independent equations. Fresh review
+and physical-device qualification of this new integration remain pending;
+earlier device results do not qualify these changed bytes.
 
 Public fixture hardware scans and the automatic-clear/result-dialog behavior
 were tested by the user, who also reports successful real Sparrow multisig
@@ -100,8 +106,9 @@ not broad compatibility or protocol qualification.
 The review packet beside this prototype contains source, patch, baseline,
 public fixtures, exact test evidence, issue draft and review prompt. Its current
 CODEX-REVIEW.txt distinguishes fresh checks from historical full-CI results and
-remaining review gates. PR #1262 exists as a draft; this shared-decoder
-integration has not been pushed.
+remaining review gates. PR #1262 is ready for review and depends on #1261;
+maintainers determine review and merge sequencing. This new shared-UR candidate
+requires its own validation and review evidence.
 
 ## Revision 9 review corrections
 

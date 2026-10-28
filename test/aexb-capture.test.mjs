@@ -63,6 +63,21 @@ test("interleaved message frames cannot contaminate an assembly", () => {
   c.clear();
   assert.equal(c.progress().received, 0);
 });
+
+test("nonzero fountain padding is refused even when message CRC is unchanged", async () => {
+  const { hodlBytewordsDecode, hodlBytewordsEncode, hodlUrPartParse } = await import("../src/js/psbt-ur.js");
+  const frames = message(3).medium_ur_parts;
+  const words = frames.at(-1).split("/");
+  const payload = hodlBytewordsDecode(words.at(-1));
+  const part = hodlUrPartParse(payload);
+  assert.ok(part.seqLen * part.data.length > part.messageLen, "fixture has padding");
+  payload[payload.length - 1] = 1;
+  const changed = words.slice(0, -1).join("/") + "/" + hodlBytewordsEncode(payload);
+  const c = new UrCapture();
+  for (const frame of frames.slice(0, -1)) c.receive(frame);
+  assert.throws(() => c.receive(changed), /MESSAGE_CHECKSUM/);
+  assert.equal(c.progress().received, 0);
+});
 test("session requires all 2/3/4 stages before full verdict, any capture order", () => {
   const c = new AexbCapture();
   assert.deepEqual(c.snapshot().stages, []);
@@ -216,12 +231,60 @@ test("clear overwrites all collector-owned message buffers before releasing them
   assert.equal(c.messages.size, 0);
 });
 test("clear overwrites incomplete UR rows before releasing them", () => {
-  const c = new UrCapture(); c.receive(message(3).medium_ur_parts[0]);
-  const retained = [...c.rows.values()].map(row => row.data);
+  // The shared collector's allocation tracker replaces the old assembler's
+  // public rows Map; keep the same retained-reference overwrite assertion.
+  const retained = [];
+  const c = new UrCapture({ track: retained }); c.receive(message(3).medium_ur_parts[0]);
   assert.ok(retained.length > 0);
   c.clear();
   assert.ok(retained.every(v => v.every(byte => byte === 0)));
   assert.deepEqual(c.progress(), {received:0,total:0,complete:false});
+});
+
+test("shared collector completion wipes fragments and caller owns the output", () => {
+  const retained = [], c = new UrCapture({ track: retained });
+  let result;
+  for (const frame of message(3).medium_ur_parts) result = c.receive(frame);
+  assert.deepEqual(result.bytes, bytes(message(3).package_hex));
+  assert.ok(retained.length > 0 && retained.every(b => b.every(v => v === 0)));
+  c.clear();
+  assert.deepEqual(result.bytes, bytes(message(3).package_hex));
+  result.bytes.fill(0);
+  assert.deepEqual(c.progress(), { received: 0, total: 0, complete: false });
+});
+
+test("shared collection preserves ceremony limits and canonical byte envelopes", async () => {
+  const { hodlUrPartCbor, hodlBytewordsEncode } = await import("../src/js/psbt-ur.js");
+  const frame = (count, length, size) => "ur:x-btc-anti-exfil/1-" + count + "/" +
+    hodlBytewordsEncode(hodlUrPartCbor(1, count, length, 0x12345678, new Uint8Array(size)));
+  for (const raw of [frame(2, 8194, 8193), frame(253, 2065601, 8192), frame(513, 513, 1)]) {
+    const retained = [], c = new UrCapture({ track: retained });
+    assert.ok(raw.length < 20000, "test reaches the inner limit");
+    assert.throws(() => c.receive(raw), /PART_LIMIT/);
+    assert.equal(retained.length, 0);
+  }
+  for (const [payload, error] of [
+    [Uint8Array.of(0x58, 1, 65), /NONCANONICAL/],
+    [Uint8Array.of(0x41, 65, 0), /TRAILING/],
+    [Uint8Array.of(0x42, 65), /LENGTH/],
+  ]) {
+    const c = new UrCapture();
+    assert.throws(() => c.receive("ur:x-btc-anti-exfil/" + hodlBytewordsEncode(payload)), error);
+    c.clear();
+  }
+});
+
+test("duplicate fragments do not inflate progress and conflict requires reset", async () => {
+  const { hodlBytewordsDecode, hodlBytewordsEncode } = await import("../src/js/psbt-ur.js");
+  const frames = message(3).medium_ur_parts;
+  const c = new UrCapture(), first = c.receive(frames[0]);
+  assert.deepEqual(c.receive(frames[0]), first);
+  const words = frames[0].split("/"), payload = hodlBytewordsDecode(words.at(-1));
+  payload[payload.length - 1] ^= 1;
+  assert.throws(() => c.receive(words.slice(0, -1).join("/") + "/" + hodlBytewordsEncode(payload)), /CONFLICT/);
+  assert.throws(() => c.receive(frames[1]), /CONFLICT/);
+  c.clear();
+  assert.deepEqual(c.receive(frames[0]), first);
 });
 
 test("synthetic transcript math cannot masquerade as embedded-PSBT validation", () => {

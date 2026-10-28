@@ -1,13 +1,12 @@
 // In-memory transport observer. Never signs, generates entropy, or persists data.
-import { hodlBytewordsDecode, hodlCrc32 } from "./psbt-ur.js";
-import { sha256 } from "./hashes.js";
+import { hodlBytewordsDecode } from "./psbt-ur.js";
+import { createUrCollector } from "./ur-fountain.js";
 import { aexbDecode, aexbVerify } from "./aexb.js";
 import { verifyAexbTransaction } from "./aexb-transaction.js";
 const MAX_BYTES = 2065600,
   MAX_PARTS = 512,
   MAX_FRAME = 20000;
 const equal = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const crc = (a) => new DataView(hodlCrc32(a).buffer).getUint32(0);
 function fail(code) {
   throw new Error(code);
 }
@@ -42,178 +41,73 @@ function reader(bytes) {
     },
   };
 }
-// Deterministic BCR fountain fragment selection, ported from Foundation Devices'
-// ur2 fountain_utils/random_sampler/xoshiro256 (2020), BSD-2-Clause-Patent.
-// See src/licenses/ur2.txt. This PRNG selects public transport fragments only.
-function indexes(seq, count, checksum) {
-  if (seq <= count) return [seq - 1];
-  const seed = new Uint8Array(8),
-    view = new DataView(seed.buffer);
-  view.setUint32(0, seq);
-  view.setUint32(4, checksum);
-  const digest = sha256(seed),
-    d = new DataView(digest.buffer, digest.byteOffset, digest.byteLength);
-  const s = [0, 8, 16, 24].map((i) => d.getBigUint64(i)),
-    mask = (1n << 64n) - 1n;
-  const rot = (v, n) => ((v << n) | (v >> (64n - n))) & mask;
-  const random = () => {
-    const out = (rot((s[1] * 5n) & mask, 7n) * 9n) & mask,
-      t = (s[1] << 17n) & mask;
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-    s[2] ^= t;
-    s[3] = rot(s[3], 45n);
-    return Number(out) / 18446744073709551616;
-  };
-  const weights = Array.from({ length: count }, (_, i) => 1 / (i + 1)),
-    total = weights.reduce((a, b) => a + b, 0);
-  const p = weights.map((x) => (x * count) / total),
-    small = [],
-    large = [],
-    prob = [],
-    alias = [];
-  for (let i = count - 1; i >= 0; i--) (p[i] < 1 ? small : large).push(i);
-  while (small.length && large.length) {
-    const a = small.pop(),
-      g = large.pop();
-    prob[a] = p[a];
-    alias[a] = g;
-    p[g] += p[a] - 1;
-    (p[g] < 1 ? small : large).push(g);
-  }
-  for (const i of [...small, ...large]) prob[i] = 1;
-  const r1 = random(),
-    r2 = random(),
-    i = Math.min(count - 1, Math.floor(count * r1)),
-    degree = (r2 < prob[i] ? i : alias[i]) + 1;
-  const remaining = Array.from({ length: count }, (_, i) => i),
-    chosen = [];
-  while (remaining.length)
-    chosen.push(
-      remaining.splice(
-        Math.min(remaining.length - 1, Math.floor(random() * remaining.length)),
-        1,
-      )[0],
-    );
-  return chosen.slice(0, degree);
-}
+// Transport assembly belongs to the shared collector. The adapter keeps the
+// ceremony's narrower wire grammar, limits and canonical CBOR byte envelope.
 export class UrCapture {
-  constructor() {
-    this.clear();
+  constructor({ track } = {}) {
+    this.collector = createUrCollector({
+      types: ["x-btc-anti-exfil"], maxMessageLen: MAX_BYTES,
+      maxSeqLen: MAX_PARTS, track,
+    });
   }
   clear() {
-    for (const r of this.rows?.values() || []) r.data.fill(0);
-    this.done?.fill(0);
-    this.rows = new Map();
-    this.meta = null;
-    this.done = null;
+    this.collector.reset();
   }
   progress() {
+    const state = this.collector.state();
     return {
-      received: this.rows.size,
-      total: this.meta?.count || 0,
-      complete: !!this.done,
+      received: state.known,
+      total: state.seqLen || 0,
+      complete: state.status === "complete",
     };
   }
   receive(raw) {
     if (typeof raw !== "string" || raw.length > MAX_FRAME) fail("FRAME_LIMIT");
-    const m = raw
-      .trim()
-      .toLowerCase()
-      .match(/^ur:([a-z0-9-]+)\/(?:(\d+)-(\d+)\/)?([a-z]+)$/);
+    const m = raw.trim().toLowerCase().match(/^ur:([a-z0-9-]+)\/(?:(\d+)-(\d+)\/)?([a-z]+)$/);
     if (!m) fail("INVALID_UR");
     if (m[1] !== "x-btc-anti-exfil") fail("UR_TYPE");
-    const temporary = [], retained = new Set();
-    const own = bytes => { temporary.push(bytes); return bytes; };
-    try {
-    const payload = own(hodlBytewordsDecode(m[4]));
-    if (!m[2]) {
-      if (this.meta) fail("MIXED_MESSAGE");
-      const r = reader(payload),
-        b = own(r.bstr());
-      r.end();
-      retained.add(b);
-      return { complete: true, bytes: b };
-    }
-    const seq = Number(m[2]),
-      count = Number(m[3]);
-    if (
-      !Number.isInteger(seq) ||
-      seq < 1 ||
-      seq > 0xffffffff ||
-      count < 1 ||
-      count > MAX_PARTS
-    )
-      fail("PART_LIMIT");
-    const r = reader(payload);
-    if (r.array() !== 5) fail("PART_FORMAT");
-    if (r.uint() !== seq || r.uint() !== count) fail("PART_SEQUENCE");
-    const length = r.uint(),
-      checksum = r.uint(),
-      data = own(r.bstr());
-    r.end();
-    if (
-      !length ||
-      length > MAX_BYTES ||
-      !data.length ||
-      data.length > 8192 ||
-      Math.ceil(length / data.length) !== count
-    )
-      fail("PART_LIMIT");
-    const meta = { count, length, checksum, size: data.length };
-    if (this.meta && Object.keys(meta).some((k) => meta[k] !== this.meta[k]))
-      fail("MIXED_MESSAGE");
-    if (this.done) return { complete: true, bytes: this.done.slice() };
-    let bits = 0n;
-    for (const i of indexes(seq, count, checksum)) bits |= 1n << BigInt(i);
-    // Bounded row-echelon elimination retains at most count rows, including mixed
-    // fountain frames. Inconsistent equations fail, rather than replacing rows.
-    for (let i = 0; i < count; i++)
-      if (bits & (1n << BigInt(i))) {
-        const row = this.rows.get(i);
-        if (row) {
-          bits ^= row.bits;
-          for (let j = 0; j < data.length; j++) data[j] ^= row.data[j];
-        } else {
-          this.meta = meta;
-          this.rows.set(i, { bits, data });
-          retained.add(data);
-          break;
-        }
+    // Preflight the ceremony-specific fragment cap and canonical wire encoding
+    // before the shared collector retains any assembly state.
+    if (m[2]) {
+      const seq = Number(m[2]), count = Number(m[3]);
+      if (!Number.isInteger(seq) || seq < 1 || seq > 0xffffffff || count < 1 || count > MAX_PARTS)
+        fail("PART_LIMIT");
+      const payload = hodlBytewordsDecode(m[4]);
+      let data;
+      try {
+        const r = reader(payload);
+        if (r.array() !== 5) fail("PART_FORMAT");
+        if (r.uint() !== seq || r.uint() !== count) fail("PART_SEQUENCE");
+        const length = r.uint();
+        r.uint(); // The shared collector checks the whole-message CRC.
+        data = r.bstr();
+        r.end();
+        if (!length || length > MAX_BYTES || !data.length || data.length > 8192 || Math.ceil(length / data.length) !== count)
+          fail("PART_LIMIT");
+      } finally {
+        payload.fill(0);
+        data?.fill(0);
       }
-    if (bits === 0n && data.some((x) => x)) fail("CONFLICTING_FRAME");
-    if (this.rows.size !== count) return this.progress();
-    const parts = new Array(count);
-    for (let i = count - 1; i >= 0; i--) {
-      const row = this.rows.get(i),
-        b = own(row.data.slice());
-      for (let j = i + 1; j < count; j++)
-        if (row.bits & (1n << BigInt(j)))
-          for (let k = 0; k < b.length; k++) b[k] ^= parts[j][k];
-      parts[i] = b;
     }
-    const full = own(new Uint8Array(count * meta.size));
-    parts.forEach((b, i) => {
-      full.set(b, i * meta.size);
-      b.fill(0);
-    });
-    const joined = own(full.slice(0, length));
-    full.fill(0);
-    if (crc(joined) !== checksum) {
-      this.clear();
-      fail("MESSAGE_CHECKSUM");
+    const result = this.collector.receive(raw);
+    if (result.status === "progress" || result.status === "duplicate") return this.progress();
+    if (result.status !== "complete") {
+      const errors = { mismatch: "MIXED_MESSAGE", conflict: "CONFLICTING_FRAME",
+        invalid: "MESSAGE_CHECKSUM", "too-large": "PART_LIMIT", "wrong-type": "UR_TYPE" };
+      fail(errors[result.status] || "INVALID_UR");
     }
-    const cbor = reader(joined),
-      bytes = own(cbor.bstr());
-    cbor.end();
-    joined.fill(0);
-    this.done = bytes;
-    retained.add(bytes);
-    return { complete: true, bytes: bytes.slice() };
+    let bytes;
+    try {
+      const r = reader(result.message);
+      bytes = r.bstr();
+      r.end();
+      return { complete: true, bytes };
+    } catch (error) {
+      bytes?.fill(0);
+      throw error;
     } finally {
-      for (const bytes of temporary) if (!retained.has(bytes)) bytes.fill(0);
+      // Completed output belongs to the caller; the collector retains no copy.
+      result.message.fill(0);
     }
   }
 }

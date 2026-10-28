@@ -635,9 +635,11 @@ Inspector. First allow camera access and choose a camera, then scan
 the AEXB proof and the supplied signatures against the embedded PSBT. It never
 signs or broadcasts. Completion clears captured messages before showing a
 blocking PASS or STOP result; only verdict metadata remains until acknowledgement.
-Worker cleanup requests a memory scrub, with termination after 250 ms if no
-acknowledgement arrives. A busy worker may terminate before wiping transferred
-frames or WASM memory. Immutable decoded strings and browser/OS copies also
+Animated UR assembly uses the shared collector from #1273 with the observer's
+existing bounds and canonical envelope checks. Worker cleanup requests a memory
+scrub and waits up to four seconds for a busy worker (250 ms when idle).
+An unresponsive worker may terminate before wiping transferred frames or WASM
+memory; the shared decoder reports unsuccessful scrubbing. Immutable decoded strings and browser/OS copies also
 remain outside reliable erasure guarantees.
 This does not prove host honesty or randomness secrecy. The user reports successful local SeedSigner and Kern multisig sessions;
 broader compatibility qualification remains pending; see `docs/QR_CAPTURE_PROTOTYPE.md` for limits.

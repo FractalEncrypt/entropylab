@@ -169,7 +169,7 @@ export function initNonceQrCapture({ translate, onClear }) {
       scanProgress(result.received, result.total);
       if (!result.complete) {
         progress.textContent = translate(
-          "QR assembly: {have} of {total} independent fragments",
+          "QR assembly: {have} of {total} recovered fragments",
           { have: result.received, total: result.total },
         );
         return;
