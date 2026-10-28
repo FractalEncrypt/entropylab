@@ -10399,35 +10399,8 @@ function hodlSetPsbtError(spec) {
   if (!error) return;
   error.textContent = !spec ? "" : spec.key ? hodlTText(spec.key, spec.vars) : spec.raw || "";
 }
-// The preview build's anti-exfil labels name AEXB as well as Jade and
-// BitBox02. They are set through hodlTText on every language switch (the
-// locale listener runs before the static sweep) and marked data-i18n-skip so
-// the sweep leaves them alone: it would otherwise restore the cached
-// Jade-only English original and translate that.
-function hodlApplyAexbPreviewLabels() {
-  const summary = document.querySelector("#nonce-jade-options > summary");
-  if (summary) {
-    summary.textContent = hodlTText("Anti-exfil transcript (Jade, BitBox02 or AEXB, optional)");
-    summary.setAttribute("data-i18n-skip", "");
-  }
-  const help = document.getElementById("psbt-ax-transcript-help");
-  if (help) {
-    help.textContent = hodlTText("Paste a Jade or BitBox02 host nonce and opening, or the AEXB/AEXT messages of one session as hex, stages 2 to 4. The format is detected automatically.");
-    help.setAttribute("data-i18n-skip", "");
-  }
-  const field = document.getElementById("psbt-ax-transcript");
-  if (field) {
-    field.setAttribute("aria-label", hodlTText("Anti-exfil transcript"));
-    field.setAttribute("placeholder", hodlTText("Host nonce and opening, or AEXB messages, as hex"));
-    field.setAttribute("data-i18n-skip", "");
-  }
-}
 
 function hodlRefreshPsbtLocale() {
-  // The preview labels name AEXB too, and the static sweep would restore the
-  // cached Jade-only English original: set them here, in the new language,
-  // before the sweep runs, and mark them so it leaves them alone.
-  if (typeof PREVIEW !== "undefined" && PREVIEW) hodlApplyAexbPreviewLabels();
   hodlPaintPsbtSession();
   hodlPaintPsbtKeyNotes();
   if (hodlPsbtErrorSpec) hodlSetPsbtError(hodlPsbtErrorSpec);
@@ -11665,7 +11638,6 @@ var PREVIEW = typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREV
 function hodlInitPsbt() {
   let go = document.getElementById("psbt-go");
   if (!go) return;
-  if (PREVIEW) hodlApplyAexbPreviewLabels();
   go.onclick = () => {
     hodlRunPsbt();
     hodlRefreshStationKeyPickers();
@@ -13837,22 +13809,18 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   // neither shows it nor verifies anti-exfil, so it must not read it: the
   // transcript steers signatures away from the unsupported-check count, and a
   // field on another tab would otherwise lift the Inspector's nonce verdict.
-  // Release builds (and slices that load this function alone) keep the exact
-  // Jade-only call; only a preview build takes the unified reader.
-  let preview = typeof PREVIEW !== "undefined" && PREVIEW;
+  // The reader detects the format: a Jade or BitBox02 host nonce and opening,
+  // or the AEXB/AEXT messages of one session.
   let transcriptKind = "jade", transcriptWarningCode = null, aexbResult = null, aexbSignatures = null;
   if (view !== "inspect") try {
     let raw = (options?.transcript ?? document.getElementById("psbt-ax-transcript")?.value) || "";
-    if (!preview) transcript = hodlParseAntiExfil(raw);
-    else {
-      const read = hodlReadNonceTranscript(raw, true);
-      transcript = read.transcript;
-      transcriptKind = read.kind || "jade";
-      transcriptWarningCode = read.warningCode || null;
-      aexbResult = read.aexb || null;
-      aexbSignatures = read.aexbSignatures || null;
-      if (read.error) transcriptError = read.error;
-    }
+    const read = hodlReadNonceTranscript(raw, true);
+    transcript = read.transcript;
+    transcriptKind = read.kind || "jade";
+    transcriptWarningCode = read.warningCode || null;
+    aexbResult = read.aexb || null;
+    aexbSignatures = read.aexbSignatures || null;
+    if (read.error) transcriptError = read.error;
   } catch (exception) {
     transcriptError = exception.message || String(exception);
   }
@@ -14084,8 +14052,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
         }) : null,
         message = hodlT("Need the matching key in this session to check RFC 6979 and low-r grind."),
         className = "muted";
-      // Set only by the AEXB branch below, so a release render (or a slice
-      // loaded without PREVIEW) never emits the test hook.
+      // Set only by the AEXB branch below.
       let aexbVerdict = null;
       let suffixForPolicy = signature.raw.length >= 2 ? signature.sighash : null,
         sighashProblems = hodlSighashProblems(declaredSighash, suffixForPolicy);
@@ -14332,7 +14299,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
   }
   let nonceHtml = [];
   if (view !== "nonce") nonceHtml.push("<p class='label'>" + hodlT("ECDSA nonce check") + "</p>");
-  if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT(preview ? "Anti-exfil transcript not used:" : "Jade anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
+  if (transcriptError) nonceHtml.push("<p class='psbt-warn'><strong>" + hodlT("Anti-exfil transcript not used:") + "</strong> " + hodlEscapeHtml(transcriptError) + "</p>");
   if (transcriptWarningCode === "jade-or-bitbox02") nonceHtml.push("<p class='edge-note'>" + hodlT("This reads as a Jade host nonce ρ or a BitBox02 host nonce. Both are checked the same way. From a BitBox02, paste the host nonce, not its SHA-256 commitment.") + "</p>");
   if (aexbResult) {
     // Green only when every ECDSA signature in this PSBT reached the slot
@@ -14396,7 +14363,7 @@ function hodlRenderPsbt(psbt, nonceSourceTag = new Uint8Array(), nonceCheckedAt 
     if (rfcMismatched > 0) rfc6979Note += " " + hodlTText("{n} did not match.", { n: rfcMismatched });
   }
   if (rfc6979Note) nonceHtml.push("<p class='edge-note is-muted' data-rfc6979-coverage>" + hodlEscapeHtml(rfc6979Note) + "</p>");
-  nonceHtml.push("<p class='field-note'>" + hodlT("RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Jade anti-exfil is secp256k1-zkp sign-to-contract and needs the USB host nonce plus signer opening; QR / sign_psbt Jade does not run it yet. BitBox anti-klepto is a different construction. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.") + "</p>");
+  nonceHtml.push("<p class='field-note'>" + hodlT("RFC 6979 comparison currently covers SegWit v0 P2WPKH and P2WSH signatures using SIGHASH_ALL, including Bitcoin Core-style low-r grinding; a signature on a script containing OP_CODESEPARATOR is reported as unverifiable instead of compared. Anti-exfil reads a Jade or BitBox02 host nonce plus the signer opening (secp256k1-zkp sign-to-contract), or the AEXB/AEXT messages of one session; QR / sign_psbt Jade does not run it yet. Nonce reuse detection compares r values for the same secp256k1 point, including signatures carried by finalized scriptSig/witness fields, compressed and uncompressed encodings, and recoverable non-strict DER; the same r value claimed under two different public keys is flagged as a mislabeled field rather than skipped. A clean verdict is not issued when a signature cannot be inspected. Inscription detection reads OP_FALSE OP_IF \"ord\" envelopes in tap-leaf scripts and finalized witnesses; it does not number sats. Output ownership is derived from the session key: accounts 0–2, 50 receive + 50 change, all four script types. It does not talk to the chain.") + "</p>");
   // ECDSA r values and BIP340 R values are never compared with each other,
   // so each family needs two comparable signatures of its own: one of each
   // is not a clean result (DeepSeek's red-team of #1051, F1).
@@ -15702,6 +15669,35 @@ function hodlWipeActiveKey() {
   // too, and the passphrase bytes are zeroed rather than left to GC.
   hodlReleaseKeyConsumers(state.id);
   hodlZeroKeyPassphrase(state);
+  // Empty the secret fields in place before the form re-renders for the fresh
+  // key: the nodes it drops would otherwise keep their text, and its Undo
+  // history, until garbage collection. Assignment drops that history.
+  ["dice", "hex", "bin", "base4", "base8", "base32", "base64", "seed", "seed-numbers", "key", "cards", "direct-cards"].forEach((id) => {
+    let el = document.getElementById(id);
+    if (!el) return;
+    el.value = "";
+    // The dice field keeps its previous text for diffing; drop that copy too.
+    if (el.dataset) delete el.dataset.previousValue;
+    delete el.hodlDiceBeforeInput;
+  });
+  // The copies that repeat the typed or derived text, the same set the
+  // pagehide sweep clears: the mirrors (highlights, the word grid, last-word
+  // options, the brain-wallet hex), then the dealt-cards strip, the worked
+  // calculations, the fairness panel and the progress lines.
+  document.querySelectorAll(".dice-input-highlight, .dice-word-grid, #last-words, #brain-lab-hex").forEach((mirror) => {
+    mirror.textContent = "";
+  });
+  for (let id of ["dealt-cards", "dice-manual-calculations", "cards-manual-calculations", "number-base-calculations", "dice-fairness", "dice-meta", "cards-meta", "entropy-meta", "seed-meta", "seed-number-meta", "private-key-meta"]) {
+    let panel = document.getElementById(id);
+    if (panel) panel.textContent = "";
+  }
+  // The BIP39 passphrase field holds the text itself in BIP39-word mode; the
+  // vault's own clear() empties it in step with the vault.
+  if (typeof hodlPassphraseVaultField !== "undefined" && hodlPassphraseVaultField) hodlPassphraseVaultField.clear();
+  else {
+    let pass = document.getElementById("pass");
+    if (pass) pass.value = "";
+  }
   hodlKeys[hodlActiveKey] = state.isLab ? hodlNewLabState() : hodlNewKeyState(state.name, state.id, state.number);
   hodlRestoreKey();
   // Restoring the fresh state re-renders the form; dropping the still-filled
@@ -16681,6 +16677,12 @@ function hodlWipeActiveMsig() {
   hodlInvalidateDerivation();
   if (hodlActiveMsig < 0 || !hodlMsigs[hodlActiveMsig]) return;
   let state = hodlMsigs[hodlActiveMsig];
+  // Empty the cosigner key fields in place before the station re-renders: the
+  // nodes it drops would otherwise keep their text, and its Undo history,
+  // until garbage collection (measured in CI's browser run).
+  document.querySelectorAll('[id^="msig-x-"], #msig-descriptor').forEach((el) => {
+    if ("value" in el) el.value = "";
+  });
   hodlMsigs[hodlActiveMsig] = state.isLab ? hodlNewMsigLabState() : hodlNewMsigState(state.name, state.id, state.number);
   hodlRestoreMsig();
   hodlJournalLog("clear", `multisig-${state.number}`, "msig");
