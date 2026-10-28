@@ -58,11 +58,13 @@ const COMPACT_SEEDQR = [0xf5, 0x5c, 0xf5, 0x87, 0xf2, 0x54, 0x3d, 0x01, 0x09, 0x
 const workerSource = await buildQrWorkerSource();
 
 // The shipped worker string runs under node:worker_threads behind a minimal
-// `self` shim, as test/lightning-worker.test.mjs does.
-const SHIM = `
+// `self` shim, as test/lightning-worker.test.mjs does. With `echo`, the shim
+// sets the worker's test flag so it posts each zeroed frame back.
+const shim = (echo) => `
   const { parentPort } = require("node:worker_threads");
   globalThis.self = {
     onmessage: null,
+    __entropyLabQrEcho: ${echo},
     postMessage(message, transfer) { parentPort.postMessage(message, transfer); },
   };
   parentPort.on("message", (data) => { if (self.onmessage) self.onmessage({ data }); });
@@ -70,10 +72,10 @@ const SHIM = `
 
 const once = (worker) => new Promise((resolve) => worker.once("message", resolve));
 
-const startWorker = async () => {
-  const worker = new Worker(SHIM + workerSource, { eval: true });
+const startWorker = async ({ echo = false, wasm = wasmBytes } = {}) => {
+  const worker = new Worker(shim(echo) + workerSource, { eval: true });
   const ready = once(worker);
-  const bytes = wasmBytes.slice();
+  const bytes = wasm.slice();
   worker.postMessage({ type: "init", wasm: bytes.buffer }, [bytes.buffer]);
   assert.deepEqual(await ready, { type: "ready" });
   return worker;
@@ -85,18 +87,38 @@ const decodeFrame = (worker, frame, echo = false) => {
   return new Promise((resolve) => {
     const onMessage = (message) => {
       messages.push(message);
-      if (message.type === "decoded" && (!echo || messages.some((m) => m.type === "gray"))) {
+      if ((message.type === "decoded" || message.type === "error") && (!echo || messages.some((m) => m.type === "gray"))) {
         worker.off("message", onMessage);
         resolve(messages);
       }
     };
     worker.on("message", onMessage);
     worker.postMessage(
-      { type: "decode", run: 1, width: frame.width, height: frame.height, gray: gray.buffer, echo },
+      { type: "decode", run: 1, width: frame.width, height: frame.height, gray: gray.buffer },
       [gray.buffer],
     );
   });
 };
+
+// A module with the decoder's exports whose qr_alloc traps, as the Rust
+// module does when an allocation fails (it aborts on out-of-memory).
+const TRAPPING_WASM = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  // types: (i32) -> i32, (i32, i32) -> (), (i32 x5) -> i32
+  0x01, 0x14, 0x03, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x02, 0x7f, 0x7f, 0x00,
+  0x60, 0x05, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x01, 0x7f,
+  // three functions, one page of memory
+  0x03, 0x04, 0x03, 0x00, 0x01, 0x02,
+  0x05, 0x03, 0x01, 0x00, 0x01,
+  // exports: memory, qr_alloc, qr_free, qr_decode
+  0x07, 0x2b, 0x04,
+  0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00,
+  0x08, 0x71, 0x72, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00,
+  0x07, 0x71, 0x72, 0x5f, 0x66, 0x72, 0x65, 0x65, 0x00, 0x01,
+  0x09, 0x71, 0x72, 0x5f, 0x64, 0x65, 0x63, 0x6f, 0x64, 0x65, 0x00, 0x02,
+  // code: qr_alloc is `unreachable`, qr_free does nothing, qr_decode returns 0
+  0x0a, 0x0d, 0x03, 0x03, 0x00, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x04, 0x00, 0x41, 0x00, 0x0b,
+]);
 
 test("the worker decodes a 16-byte CompactSeedQR exactly", async () => {
   const worker = await startWorker();
@@ -145,12 +167,42 @@ test("the worker reports a blank frame as not found", async () => {
 });
 
 test("the worker zeroes the received frame after a decode", async () => {
-  const worker = await startWorker();
+  const worker = await startWorker({ echo: true });
   try {
     const messages = await decodeFrame(worker, render(COMPACT_SEEDQR), true);
     const gray = messages.find((m) => m.type === "gray");
     assert.ok(gray, "the worker posts the zeroed frame back");
     assert.ok(new Uint8Array(gray.gray).every((byte) => byte === 0));
+  } finally {
+    worker.terminate();
+  }
+});
+
+test("a decode message cannot turn the frame echo on", async () => {
+  const worker = await startWorker();
+  try {
+    const frame = render(COMPACT_SEEDQR);
+    const gray = frame.pixels.slice();
+    const reply = once(worker);
+    worker.postMessage({ type: "decode", run: 1, width: frame.width, height: frame.height, gray: gray.buffer, echo: true }, [gray.buffer]);
+    assert.equal((await reply).type, "decoded", "the first reply is the result, not the frame");
+  } finally {
+    worker.terminate();
+  }
+});
+
+test("a WASM trap during a decode zeroes the frame, replies DECODE_FAILED and drops the instance", async () => {
+  assert.ok(WebAssembly.validate(TRAPPING_WASM), "the trapping test module is valid WASM");
+  const worker = await startWorker({ echo: true, wasm: TRAPPING_WASM });
+  try {
+    const frame = render(COMPACT_SEEDQR);
+    const messages = await decodeFrame(worker, frame, true);
+    const gray = messages.find((m) => m.type === "gray");
+    assert.ok(gray, "the worker posts the frame back");
+    assert.ok(new Uint8Array(gray.gray).every((byte) => byte === 0), "the frame is zeroed after the trap");
+    assert.equal(messages.find((m) => m.type === "error")?.error.code, "DECODE_FAILED");
+    const [again] = await decodeFrame(worker, frame);
+    assert.equal(again.error?.code, "BAD_MESSAGE", "the dropped instance decodes nothing more");
   } finally {
     worker.terminate();
   }
@@ -270,13 +322,63 @@ test("a frame that is not width*height bytes is refused with BAD_ARGS", async ()
   }
 });
 
+test("every frame the wrapper refuses is zeroed", async () => {
+  const decoder = fakeDecoder();
+  const filled = (length) => new Uint8Array(length).fill(7);
+  try {
+    const short = filled(21 * 21 - 1);
+    await assert.rejects(decoder.decode(short, 21, 21), { code: "BAD_ARGS" });
+    const large = filled(16);
+    await assert.rejects(decoder.decode(large, 4097, 4097), { code: "TOO_LARGE" });
+    const first = decoder.decode(filled(21 * 21), 21, 21);
+    const busy = filled(21 * 21);
+    await assert.rejects(decoder.decode(busy, 21, 21), { code: "BUSY" });
+    const worker = FakeWorker.instances[0];
+    const [request] = worker.sent("decode");
+    worker.emit({ type: "decoded", run: request.run, code: 0, payload: null });
+    await first;
+    decoder.stop();
+    const stopped = filled(21 * 21);
+    await assert.rejects(decoder.decode(stopped, 21, 21), { code: "STOPPED" });
+    for (const [name, frame] of Object.entries({ short, large, busy, stopped })) {
+      assert.ok(frame.every((byte) => byte === 0), `the ${name} frame is zeroed`);
+    }
+  } finally {
+    decoder.stop();
+  }
+});
+
+test("an error reply retires the worker and the next decode starts a fresh one", async () => {
+  const decoder = fakeDecoder();
+  try {
+    const first = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+    const worker = FakeWorker.instances[0];
+    const [request] = worker.sent("decode");
+    worker.emit({ type: "error", run: request.run, error: { code: "DECODE_FAILED" } });
+    await assert.rejects(first, { code: "DECODE_FAILED" });
+    assert.equal(worker.sent("scrub").length, 1, "the failed worker is asked to scrub");
+    const second = decoder.decode(new Uint8Array(21 * 21), 21, 21);
+    assert.equal(FakeWorker.instances.length, 2, "a fresh worker takes the next decode");
+    const fresh = FakeWorker.instances[1];
+    const [next] = fresh.sent("decode");
+    fresh.emit({ type: "decoded", run: next.run, code: 0, payload: null });
+    assert.deepEqual(await second, { code: 0, payload: null });
+  } finally {
+    decoder.stop();
+  }
+});
+
 test("a release build ships neither the QR WASM module nor the QR worker source", () => {
   const out = mkdtempSync(join(tmpdir(), "entropylab-release-"));
   try {
     execFileSync(process.execPath, [join(root, "scripts/build.mjs"), "--out", out], { cwd: root, stdio: "pipe" });
     const page = readFileSync(join(out, "entropylab.html"), "utf8");
-    assert.ok(!page.includes("QR_WASM_B64"), "the release build carries no QR WASM module");
-    assert.ok(!page.includes("__QR_WORKER_SOURCE__"), "the release build carries no QR worker source");
+    // Fingerprints that survive minification: identifiers such as
+    // QR_WASM_B64 are renamed, but a slice of the base64 module and the
+    // decoder's export name (only the worker body calls qr_decode) are not.
+    assert.ok(workerSource.includes("qr_decode"), "the worker fingerprint is in the bundled worker");
+    assert.ok(!page.includes(QR_WASM_B64.slice(4096, 4160)), "the release build carries no QR WASM module");
+    assert.ok(!page.includes("qr_decode"), "the release build carries no QR worker source");
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
