@@ -15691,12 +15691,17 @@ function hodlWipeActiveKey() {
     if (el.dataset) delete el.dataset.previousValue;
     delete el.hodlDiceBeforeInput;
   });
-  // The mirrors that repeat the typed or derived text: the same set the
-  // pagehide sweep clears (highlights, the word grid, last-word options and
-  // the brain-wallet hex).
+  // The copies that repeat the typed or derived text, the same set the
+  // pagehide sweep clears: the mirrors (highlights, the word grid, last-word
+  // options, the brain-wallet hex), then the dealt-cards strip, the worked
+  // calculations, the fairness panel and the progress lines.
   document.querySelectorAll(".dice-input-highlight, .dice-word-grid, #last-words, #brain-lab-hex").forEach((mirror) => {
     mirror.textContent = "";
   });
+  for (let id of ["dealt-cards", "dice-manual-calculations", "cards-manual-calculations", "number-base-calculations", "dice-fairness", "dice-meta", "cards-meta", "entropy-meta", "seed-meta", "seed-number-meta", "private-key-meta"]) {
+    let panel = document.getElementById(id);
+    if (panel) panel.textContent = "";
+  }
   // The BIP39 passphrase field holds the text itself in BIP39-word mode; the
   // vault's own clear() empties it in step with the vault.
   if (typeof hodlPassphraseVaultField !== "undefined" && hodlPassphraseVaultField) hodlPassphraseVaultField.clear();

@@ -355,6 +355,14 @@ test("the Key Station Clear empties its secret fields in place before the form r
     assert.ok(body.includes(`"${id}"`), `hodlWipeActiveKey must empty #${id} in place`);
   }
   assert.ok(body.includes(".dice-input-highlight"), "hodlWipeActiveKey must empty the highlight mirrors, which repeat the typed text");
+  // The transcript panels: whatever the pagehide sweep empties, Clear empties too.
+  const sweep = fnBody("hodlInitSecretFieldAutoClear").match(/for \(let id of \[([^\]]+)\]\) \{\s*let panel/);
+  assert.ok(sweep, "the pagehide sweep's transcript-panel list was not found");
+  const panelIds = [...sweep[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(panelIds.length >= 5, "the pagehide sweep's transcript-panel list looks truncated");
+  for (const id of panelIds) {
+    assert.ok(body.includes(`"${id}"`), `hodlWipeActiveKey must empty #${id}, which the pagehide sweep empties`);
+  }
   assert.ok(body.includes("delete el.dataset.previousValue"), "hodlWipeActiveKey must drop the dice field's previous-text copy");
   assert.ok(body.includes("hodlPassphraseVaultField.clear()") && body.includes("getElementById(\"pass\")"), "hodlWipeActiveKey must empty the BIP39 passphrase field");
 });

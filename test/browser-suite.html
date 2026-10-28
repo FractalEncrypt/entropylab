@@ -8388,6 +8388,9 @@
       // check after Clear would pass without proving anything.
       document.execCommand("undo");
       if (field.value !== before) {
+        // Undo did not take the text back out: put the field back as it was,
+        // so the skipped row leaves nothing for later tests.
+        field.value = before;
         skippedFields.push(fieldId);
         continue;
       }
