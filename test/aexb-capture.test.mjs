@@ -23,6 +23,19 @@ const fountain = JSON.parse(
 const bytes = (hex) => Uint8Array.from(Buffer.from(hex, "hex"));
 const transcript = c => [...c.messages.values()].map(e=>Buffer.from(e.bytes).toString("hex")).join("\n");
 const message = (stage) => fixture.messages.find((m) => m.stage === stage);
+test("finish clears retained buffers when slot-count lookup throws", () => {
+  const c = new AexbCapture();
+  for (const stage of [2,3,4]) c.accept(bytes(message(stage).package_hex));
+  const retained = [...c.messages.values()].flatMap(({bytes,decoded}) => [bytes,
+    ...Object.values(decoded).filter(v => v instanceof Uint8Array),
+    ...decoded.slots.flatMap(slot => Object.values(slot).filter(v => v instanceof Uint8Array))]);
+  assert.ok(retained.some(b => b.some(v => v !== 0)));
+  // Fault injection at the metadata lookup, not a malformed-wire claim.
+  c.messages.get = () => { throw Error("slot-count lookup failed"); };
+  assert.deepEqual(c.finish(), {ok:false,reason:"VERIFICATION_UNAVAILABLE",checkedSlots:0,totalSlots:0});
+  assert.ok(retained.every(b => b.every(v => v === 0)));
+  assert.deepEqual(c.snapshot(), {stages:[],verdict:null});
+});
 // Inject an unexpected verifier exception after decoding, without weakening
 // the real decoder's point validation. Completion must still wipe all stages.
 for (const order of [[2,3,4],[2,4,3],[3,2,4],[3,4,2],[4,2,3],[4,3,2]])

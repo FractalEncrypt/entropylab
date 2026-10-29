@@ -3259,8 +3259,8 @@ label.field.journal-format-control { min-width: 0; margin-top: 0; }
 .capture-stages > span { border: 1px solid var(--border); border-radius: var(--radius-panel); padding: var(--inset-button); font-size: var(--text-label); }
 .capture-stages > span[data-captured="true"] { border-color: var(--ok-bright); background: color-mix(in oklab, var(--ok-bright) 18%, var(--surface)); }
 
-/* Shared disabled native selectors follow disabled-button treatment. */
-select:disabled { color: var(--muted); opacity: .52; cursor: not-allowed; }
+/* The preview camera selector follows disabled-button treatment. */
+#nonce-qr-camera:disabled { color: var(--muted); opacity: .52; cursor: not-allowed; }
 /* Verify card (preview): OpenTimestamps result panel. */
 #ots-result:not([hidden]) {
   display: grid;

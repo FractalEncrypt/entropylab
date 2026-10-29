@@ -1,9 +1,9 @@
 # Local Nonce Inspector QR prototype
 
 Experimental preview-only observer. AI implementation: OpenAI Codex (GPT-6).
-Shared-decoder integration base checked 2026-10-28 UTC:
-d28d544a42e8b8c6ff601cbfa14df0ab419203ee, including merged shared-worker PR #1272,
-shared UR collector #1273 and subsequent worker scrub hardening.
+Integration base checked 2026-10-29 UTC:
+d0d9841592f27a137bda3773e38dfaa593e6d1a7, including shared-worker PR #1272,
+shared UR collector #1273, worker scrub hardening and Key Station scanner #1281.
 
 ## Current flow
 
@@ -13,7 +13,13 @@ STOP and wipes the transcript. The decoder already rejects off-curve openings;
 the exception regression uses explicit fault injection, not a claimed malformed
 point exploit. Shared decoder result `-4` is a normal skipped frame. A malformed
 transport frame resets only the in-progress assembly; completed stages survive,
-and the status asks the user to rescan the whole missing message.
+and the status asks the user to rescan the whole missing message. Invalid frames,
+Stop and camera errors reset the discarded assembly's progress indicators too.
+The completion cleanup guard includes the slot-count lookup; if that lookup
+fails, no verified slot count is available and the failure reports zero.
+The `-4` case is defensive API handling, not an observed failure at the current
+1280-by-960 capture limit. Camera-control CSS is scoped to the preview control;
+unused observer CSS still exists in release builds, while observer JS is excluded.
 
 1. Allow Camera Access (blue). The permission probe lists cameras, stops its
    tracks, and never decodes/records frames. Browser-prompt focus loss does not

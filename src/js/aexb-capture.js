@@ -188,8 +188,9 @@ export class AexbCapture {
   }
   finish() {
     if (this.messages.size !== 3) return null;
-    const totalSlots = this.messages.get(4).decoded.slots.length;
+    let totalSlots = 0;
     try {
+      totalSlots = this.messages.get(4).decoded.slots.length;
       const proof = this.snapshot().verdict;
       if (!proof.ok) return { ok: false, reason: proof.reason || proof.slots?.find(slot => !slot.ok)?.reason || "VERIFICATION_FAILED", checkedSlots: 0, totalSlots };
       return { ...this.checkTransaction(), totalSlots };

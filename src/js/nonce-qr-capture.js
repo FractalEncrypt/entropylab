@@ -194,9 +194,10 @@ export function initNonceQrCapture({ translate, onClear }) {
       // Do not render decoder errors: some include attacker-controlled payloads.
       pause();
       transport.clear();
+      scanProgress();
       paint();
       say(
-          "This QR was not added: it is invalid or conflicts with the current capture. Completed messages were kept, but partial QR fragments for the current message were discarded. Rescan the whole missing message from the same exchange. If you are switching exchanges or demo scenarios, Clear Capture first.",
+        "This QR was not added: it is invalid or conflicts with the current capture. Completed messages were kept, but partial QR fragments for the current message were discarded. Rescan the whole missing message from the same exchange. If you are switching exchanges or demo scenarios, Clear Capture first.",
       );
     }
   };
@@ -267,6 +268,7 @@ export function initNonceQrCapture({ translate, onClear }) {
         !(await camera.start(video, select.value, receive, (error) => {
           pause();
           transport.clear();
+          scanProgress();
           say(error?.code === "CAMERA_DISCONNECTED"
             ? "Camera disconnected. Captured stages were kept. Reconnect the camera and scan this message again."
             : "Camera stopped. Captured stages were kept. Retry or choose another camera.");
@@ -292,6 +294,7 @@ export function initNonceQrCapture({ translate, onClear }) {
   stop.onclick = () => {
     pause();
     transport.clear();
+    scanProgress();
     paint();
     say("Camera stopped. Captured stages remain in memory.");
   };

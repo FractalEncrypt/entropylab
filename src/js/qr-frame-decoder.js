@@ -36,7 +36,7 @@ export function createQrFrameDecoder({ createDecoder = createQrDecoder } = {}) {
         const result = await decoder.decode(gray, width, height);
         payload = result.payload;
         if (epoch !== generation) return null;
-          if (result.code === -1 || result.code === -2 || result.code === -3 || result.code === -4) return null;
+        if (result.code === -1 || result.code === -2 || result.code === -3 || result.code === -4) return null;
         if (!Number.isInteger(result.code) || result.code <= 0 || result.code > 4096 ||
             !(payload instanceof Uint8Array) || payload.length !== result.code)
           throw new Error("INVALID_QR_RESULT");
