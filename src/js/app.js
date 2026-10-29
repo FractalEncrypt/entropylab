@@ -6762,10 +6762,18 @@ function hodlSetSeedLength(words) {
   hodlUpdateSeedLengthControl();
   hodlQueueMasterFingerprintPreview(0);
 }
+// The Key Station's scan panel is a preview-only extra: release builds define
+// no flag, so the host is never rendered and the module is never imported.
+var hodlKeyScan = null, hodlKeyScanModule = null, hodlKeyScanImport = null;
+function hodlKeyScanHostMarkup() {
+  return typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__ ? '<div id="key-scan-host"></div>' : "";
+}
 function hodlRenderKeyForm() {
   // The form and its on-screen keyboards are replaced: the listeners they
   // added outside the form go with them (#546 B3).
   hodlReleaseFormListeners();
+  try { hodlKeyScan?.destroy(); } catch {}
+  hodlKeyScan = null;
   let config = hodlSeedConfig(), keyboardHost = document.getElementById("passphrase-keyboard-host"), toggleHost = document.getElementById("passphrase-keyboard-toggle-host");
   if (keyboardHost) {
     keyboardHost.hidden = true;
@@ -7166,7 +7174,7 @@ function hodlRenderKeyForm() {
     <p class="label" id="private-key-input-label">${hodlT("Private key or recovery passphrase")}</p>
     ${hodlSeedMetaRowMarkup("private-key-meta", true, hodlPrivateKeyKeyboardToggleMarkup())}
     ${hodlBrainWalletTrimToggleMarkup()}
-    <div class="dice-input-shell private-key-input-shell"><pre class="dice-input-highlight" id="private-key-highlight" translate="no" aria-hidden="true"></pre><textarea id="key" placeholder="${hodlTAttr("5… / K… / L…")}" aria-labelledby="private-key-input-label" aria-describedby="private-key-meta" autocomplete="off" spellcheck="false" autocapitalize="off"></textarea></div><div class="passphrase-keyboard-host" id="private-keyboard-host" hidden></div></div>`;
+    <div class="dice-input-shell private-key-input-shell"><pre class="dice-input-highlight" id="private-key-highlight" translate="no" aria-hidden="true"></pre><textarea id="key" placeholder="${hodlTAttr("5… / K… / L…")}" aria-labelledby="private-key-input-label" aria-describedby="private-key-meta" autocomplete="off" spellcheck="false" autocapitalize="off"></textarea></div>${hodlKeyScanHostMarkup()}<div class="passphrase-keyboard-host" id="private-keyboard-host" hidden></div></div>`;
   hodlBindKeyFields();
   hodlRenderPassphraseKeyboard();
 }
@@ -7386,6 +7394,40 @@ function hodlRenderPrivateKeyInputState(input) {
   }
   return analysis;
 }
+// A scan only ever delivers a WIF (the classifier checked it), so the field
+// takes it as one whatever key type is selected: in Brain wallet mode the
+// text would otherwise be hashed as a passphrase (#1291 gate).
+function hodlKeyScanSelectWif() {
+  let radio = document.querySelector('input[name="kk"][value="wif"]');
+  if (!radio) throw new Error("The WIF key type is missing.");
+  if (radio.checked) return;
+  radio.checked = true;
+  radio.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function hodlBindKeyScan() {
+  // The slice harness loads this with no scan host: return before anything
+  // else, and never read the preview flag bare.
+  let host = document.getElementById("key-scan-host");
+  let key = document.getElementById("key");
+  if (!host || !key) return;
+  if (typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__) {
+    if (!hodlKeyScanImport) {
+      hodlKeyScanImport = import("./qr-key-scan.js").then((module) => {
+        hodlKeyScanModule = module;
+        return module;
+      }).catch(() => null);
+    }
+    hodlKeyScanImport.then((module) => {
+      if (!module || hodlKeyScan || !host.isConnected || host.childNodes.length) return;
+      hodlKeyScan = module.mountKeyScan(host, {
+        keyField: key,
+        translate: hodlTText,
+        beforeWrite: hodlKeyScanSelectWif,
+        privateValue: (value, revealed) => hodlPrivateValue(value, "mono private-field-value", revealed),
+      });
+    }).catch(() => {});
+  }
+}
 function hodlBindKeyFields() {
   // Its listener from the last bind goes before this bind adds its own.
   hodlReleaseFormListeners("key-fields");
@@ -7493,6 +7535,7 @@ function hodlBindKeyFields() {
     };
     apply();
   }
+  hodlBindKeyScan();
 }
 function hodlSelectedEntropy(targetWords = hodlTargetWordCount) {
   let format = hodlNormalizeEntropyFormat(hodlEntropyFormat), value = document.getElementById(format)?.value.trim() || "";
@@ -21572,6 +21615,11 @@ function hodlInitSecretFieldAutoClear() {
     } catch {} finally {
       delete psbtEditorWipe.dataset.journalSilent;
     }
+    try { hodlKeyScan?.destroy(); } catch {}
+    hodlKeyScan = null;
+    try { hodlKeyScanModule?.retireQrDecoders(); } catch {}
+    // The form outlives the wipe: give it a fresh, closed panel.
+    try { hodlBindKeyScan(); } catch {}
     hodlSyncWorkspaceCounts();
   };
   addEventListener("pagehide", clearSecretFields);
