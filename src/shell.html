@@ -51,7 +51,7 @@
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="ln-card" aria-label="Lightning"><span class="workspace-tab-full">Lightning</span><span class="workspace-tab-short">LN</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="core-card" aria-label="Core Wallet"><span class="workspace-tab-full">Core Wallet</span><span class="workspace-tab-short">Core</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="bip85-card" aria-label="BIP-85 Child" title="BIP-85 Child"><span class="workspace-tab-full">BIP-85</span><span class="workspace-tab-short">BIP-85</span></button>
-        <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="sp-card" aria-label="Privacy"><span class="workspace-tab-full">Privacy</span><span class="workspace-tab-short">Privacy</span></button>
+        <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="sp-card bip47-card" aria-label="Privacy"><span class="workspace-tab-full">Privacy</span><span class="workspace-tab-short">Privacy</span></button>
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="vanity-card" aria-label="Vanity Address" title="Vanity Address"><span class="workspace-tab-full">Vanity</span><span class="workspace-tab-short">Vanity</span></button>
         <!-- preview -->
         <button type="button" class="workspace-tab" role="tab" aria-selected="false" aria-controls="verify-card" aria-label="Verify"><span class="workspace-tab-full">Verify</span><span class="workspace-tab-short">Verify</span></button>
@@ -515,7 +515,6 @@ words, pick one of the checksum words.</span></span>
       </div>
       <div id="msig-out"></div>
     </div>
-    <!-- preview -->
     <div class="key-manager no-print" id="privacy-manager" hidden>
       <div class="key-tab-strip">
         <div class="key-tabs" id="privacy-tool-tabs" role="tablist" aria-label="Privacy stations">
@@ -524,7 +523,6 @@ words, pick one of the checksum words.</span></span>
         </div>
       </div>
     </div>
-    <!-- /preview -->
     <div class="tool-intro edge-note is-info" id="sp-tool-intro" hidden>
         <h2>Silent Payments, offline</h2>
         <p class="muted tool-intro-note" data-i18n-rich>Get an <code>sp1q…</code> address to reuse. Print the URI and DNS text if you want to publish it. Make a sender output or check pasted outputs against your scan key. No chain. No network.</p>
@@ -532,7 +530,6 @@ words, pick one of the checksum words.</span></span>
       <div class="key-manager no-print" id="sp-manager" hidden>
         <div class="key-tab-strip"><div class="key-tabs" id="sp-tabs" role="tablist" aria-label="Silent Payments"></div><div class="add-item-control"><button class="add-key" id="add-sp" type="button" aria-label="Open SP Station to derive another address" aria-describedby="add-sp-tooltip">+</button><span class="add-item-tooltip" id="add-sp-tooltip" role="tooltip">Open SP Station</span></div><div class="add-item-control"><button class="add-key remove-key" id="delete-sp" type="button" aria-label="Delete current silent payment address" aria-describedby="delete-sp-tooltip" disabled>−</button><span class="add-item-tooltip" id="delete-sp-tooltip" role="tooltip">Delete this silent payment address</span></div></div>
       </div>
-    <!-- preview -->
     <div class="card no-print tool-card" id="bip47-card" role="tabpanel" hidden>
       <div data-bip47-section="intro">
         <p class="edge-note is-info">A payment code lets a compatible wallet derive payment addresses for you. This station calculates them and checks pasted data offline. It never builds, signs or broadcasts transactions, and it does not check the blockchain.</p>
@@ -617,7 +614,6 @@ words, pick one of the checksum words.</span></span>
         <div id="bip47-notify-out" aria-live="polite"></div>
       </details>
     </div>
-    <!-- /preview -->
       <div class="card no-print tool-card" id="sp-card" role="tabpanel" hidden>
       <div id="sp-bench">
       <p class="edge-note is-public">Session keys remain in this page only and are never intentionally stored or sent. Memory clearing is best-effort because browsers may retain internal copies; close the page before reconnecting the computer.</p>
