@@ -7612,7 +7612,7 @@ function hodlCanDeriveCurrentKey() {
     }
     if (hodlKeyMode === "hex") return hodlSelectedEntropy().ok;
     if (hodlKeyMode === "seed") {
-      if (hodlSecureSeedActive()) return hodlSecureSeedReady();
+      if (hodlSecureSeedApplies()) return hodlSecureSeedReady();
       let selected = hodlSelectedSeedInput(hodlTargetWordCount), value = selected.value;
       if (!value) return false;
       if (selected.extended) {
@@ -7760,7 +7760,7 @@ function hodlFingerprintSource() {
       return entropy.ok ? { entropy: entropy.bytes } : null;
     }
     if (hodlKeyMode === "seed") {
-      if (hodlSecureSeedActive()) {
+      if (hodlSecureSeedApplies()) {
         let indices = hodlSecureSeedIndices();
         return indices ? { indices } : null;
       }
@@ -8028,7 +8028,7 @@ async function hodlCalculateKey(progress, action = "derive", options = {}) {
       hodlThrowIfFailed(entropy);
       result = await hodlEntropyWalletWithProgress(entropy, passphrase, chain, count, account, addressStart, progress, purpose, coinType, hardening, branchStart, branchRange, derivationPlan);
     } else if (hodlKeyMode === "seed") {
-      if (hodlSecureSeedActive()) {
+      if (hodlSecureSeedApplies()) {
         // Secure entry: the words are indices in the session, never text.
         let indices = hodlSecureSeedIndices();
         if (!indices) throw hodlError("Invalid seed phrase");
@@ -12373,14 +12373,32 @@ function hodlSecureSeedReady() {
   return true;
 }
 // True when the key holds any securely entered word. Only seeds can be entered
-// securely so far; later methods extend this.
+// securely so far; later methods extend this. A read that fails counts as
+// holding words, so the callers that guard against losing them stay closed.
 function hodlSecureEntryHasData(keyId) {
   if (keyId == null) return false;
   try {
     return (sessionGet(hodlSecureSession, keyId, "seed")?.count ?? 0) > 0;
   } catch {
-    return false;
+    return true;
   }
+}
+// Secure entry decides a seed key's words only when they were entered with it:
+// a key holding secure words, or one with nothing typed yet. A seed that came
+// in as text while the switch was on (a Journal import, Review inputs, a
+// vanity update) keeps the text path, so it still derives.
+function hodlSecureSeedApplies() {
+  if (!hodlSecureSeedActive()) return false;
+  let state = hodlKeys[hodlActiveKey];
+  if (hodlSecureEntryHasData(state?.id)) return true;
+  let typed = document.getElementById("seed")?.value ?? state?.fields?.seed ?? "";
+  return !String(typed).trim();
+}
+// Journal cannot hold securely entered words yet (a later backup format will):
+// a backup taken now would keep such a key without its recovery words.
+function hodlSecureEntryBackupRefusal() {
+  if (!hodlKeys.some((state) => hodlSecureEntryHasData(state.id))) return null;
+  return new Error(hodlTText("Journal cannot back up words entered with Secure entry yet. Turn Secure entry off and convert them to text, or clear those keys, then try again."));
 }
 function hodlInitPsbt() {
   let go = document.getElementById("psbt-go");
@@ -18715,6 +18733,8 @@ async function hodlKeyManagerDownload() {
   let generation = hodlJournalGeneration;
   try {
     if (!hodlJournalUnlocked()) throw new Error("Create or open a journal first.");
+    let secureRefusal = hodlSecureEntryBackupRefusal();
+    if (secureRefusal) throw secureRefusal;
     let states = hodlKeyManagerStates();
     if (!states.length && !hodlKeyManagerIgnored.length) throw new Error("Derive or import a key before exporting key inputs.");
     let content = serializeKeyVault(states.map(hodlKeyManagerEntry), hodlKeyManagerIgnored.map(hodlKeyManagerEntry));
@@ -20045,6 +20065,8 @@ async function hodlJournalUnlock() {
 }
 function hodlJournalCollectBackup() {
   if (hodlActiveDerivation || hodlJournalKeyDerivation) throw new Error(hodlTText("Wait for derivation to finish before downloading a complete backup."));
+  let secureRefusal = hodlSecureEntryBackupRefusal();
+  if (secureRefusal) throw secureRefusal;
   if (hodlWorkspace === "calc") hodlCaptureKey();
   let field = document.getElementById("journal-notes-text");
   if (field) hodlJournalStoreNotesText(field);

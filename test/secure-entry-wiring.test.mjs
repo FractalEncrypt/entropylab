@@ -262,9 +262,17 @@ test("the wiring hooks are in the right order", () => {
   assert.ok(calcStart >= 0);
   const seedBranch = app.indexOf("} else if (hodlKeyMode === \"seed\") {", calcStart);
   assert.ok(seedBranch >= 0);
-  const secureActive = app.indexOf("hodlSecureSeedActive()", seedBranch);
+  const secureActive = app.indexOf("hodlSecureSeedApplies()", seedBranch);
   const selectedSeed = app.indexOf("hodlSelectedSeedInput(", seedBranch);
   assert.ok(secureActive >= 0 && selectedSeed > secureActive);
+
+  for (const name of ["async function hodlKeyManagerDownload() {", "function hodlJournalCollectBackup() {"]) {
+    const start = app.indexOf(name);
+    assert.ok(start >= 0, name);
+    const refusal = app.indexOf("hodlSecureEntryBackupRefusal()", start);
+    const serialize = app.indexOf("serializeKeyVault(", start);
+    assert.ok(refusal > start && serialize > refusal, name);
+  }
 
   for (const line of app.split("\n")) {
     if (line.includes("hodlSecureEntryOn")) assert.doesNotMatch(line, /setItem/);
@@ -317,7 +325,8 @@ test("hodlMnemonicWalletWithProgress rejects bad secure indices and zeroes them"
       hodlError: (key) => new Error(key),
     },
   });
-  const bad = new Uint16Array(12).fill(wordlist.indexOf("abandon"));
+  const bad = new Uint16Array(12).fill(wordlist.indexOf("ability"));
+  assert.throws(() => entropyFromWordIndices(Uint16Array.from(bad)));
   await assert.rejects(
     () => mod.hodlMnemonicWalletWithProgress({ indices: bad }, "TREZOR", "mainnet", 1, undefined, 0, 0, undefined, 84, 0, {}, 0, 2, null),
     /Invalid seed phrase/,
@@ -325,7 +334,7 @@ test("hodlMnemonicWalletWithProgress rejects bad secure indices and zeroes them"
   assert.equal(seedCalls, 0);
   assert.deepEqual([...bad], new Array(12).fill(0));
 
-  const short = new Uint16Array(11);
+  const short = new Uint16Array(11).fill(wordlist.indexOf("able"));
   await assert.rejects(
     () => mod.hodlMnemonicWalletWithProgress({ indices: short }, "TREZOR", "mainnet", 1, undefined, 0, 0, undefined, 84, 0, {}, 0, 2, null),
     /Invalid seed phrase/,
@@ -411,6 +420,7 @@ test("hodlSecureSeedIndices and hodlSecureSeedReady gate on a complete valid see
 
   seedSet(entry, 11, about);
   const indices = mod.hodlSecureSeedIndices();
+  assert.ok(indices instanceof Uint16Array);
   assert.deepEqual([...indices], [...entry.indices]);
   indices.fill(0);
   assert.equal(entry.indices[0], abandon);
@@ -457,6 +467,65 @@ test("hodlFingerprintSource uses secure indices and never reads the text field",
   const source = mod.hodlFingerprintSource();
   assert.deepEqual([...source.indices], [...entry.indices]);
   assert.equal(selectedCalls, 0);
+});
+
+test("hodlSecureSeedApplies keeps text that arrived while the switch was on", async () => {
+  const session = createSecureSession();
+  let seedField = null;
+  const mod = await loadAppFunctions(["hodlSecureSeedApplies"], {
+    stubs: {
+      ...realSecureEntryStubs,
+      hodlKeyMode: "seed", hodlSeedMethod: "words", hodlTargetWordCount: 12,
+      document: { getElementById: (id) => (id === "seed" ? seedField : null) },
+    },
+    settable: ["hodlSecureEntryOn", "hodlKeys", "hodlActiveKey", "hodlSecureSession"],
+  });
+  const key = { id: 1, fields: { seed: "" } };
+  mod.__set.hodlSecureSession(session);
+  mod.__set.hodlKeys([key]);
+  mod.__set.hodlActiveKey(0);
+
+  mod.__set.hodlSecureEntryOn(false);
+  assert.equal(mod.hodlSecureSeedApplies(), false);
+  mod.__set.hodlSecureEntryOn(true);
+  // Nothing typed and no secure words: the picker's key.
+  assert.equal(mod.hodlSecureSeedApplies(), true);
+  // A seed that came in as text (an import) keeps the text path.
+  key.fields.seed = "abandon ability";
+  assert.equal(mod.hodlSecureSeedApplies(), false);
+  key.fields.seed = "";
+  seedField = { value: "abandon" };
+  assert.equal(mod.hodlSecureSeedApplies(), false);
+  // Secure words decide, whatever text is around.
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 1);
+  sessionSet(session, 1, "seed", entry);
+  assert.equal(mod.hodlSecureSeedApplies(), true);
+});
+
+test("both Journal backups refuse while a key holds secure words", async () => {
+  const session = createSecureSession();
+  const mod = await loadAppFunctions(["hodlSecureEntryBackupRefusal"], {
+    stubs: { ...realSecureEntryStubs, hodlTText: (text) => text },
+    settable: ["hodlKeys", "hodlSecureSession"],
+  });
+  mod.__set.hodlSecureSession(session);
+  mod.__set.hodlKeys([{ id: 1 }, { id: 2 }]);
+  assert.equal(mod.hodlSecureEntryBackupRefusal(), null);
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 1);
+  sessionSet(session, 2, "seed", entry);
+  const refusal = mod.hodlSecureEntryBackupRefusal();
+  assert.ok(refusal instanceof Error);
+  assert.ok(refusal.message.length > 0);
+
+  // A session read that fails counts as holding words.
+  const failing = await loadAppFunctions(["hodlSecureEntryBackupRefusal"], {
+    stubs: { ...realSecureEntryStubs, hodlTText: (text) => text, sessionGet: () => { throw new Error("broken"); } },
+    settable: ["hodlKeys"],
+  });
+  failing.__set.hodlKeys([{ id: 1 }]);
+  assert.ok(failing.hodlSecureEntryBackupRefusal() instanceof Error);
 });
 
 test("hodlSecureEntryHasData sees any securely entered word", async () => {
