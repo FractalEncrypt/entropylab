@@ -436,6 +436,10 @@ export function mountKeyScan(host, {
     try { scanner?.stop(); } catch {}
   });
   photoButton.addEventListener("click", () => {
+    // The camera stops before the file picker opens, so no frame decode is
+    // still running when the photo arrives (the decoder would refuse it with
+    // BUSY). Resume is offered if the picker is cancelled.
+    try { scanner?.stop(); } catch {}
     try { photoInput.click(); } catch {}
   });
   cancelButton.addEventListener("click", onCancel);
