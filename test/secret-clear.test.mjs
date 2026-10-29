@@ -54,6 +54,9 @@ function createContext(sandbox) {
     hodlLowEntropyConfirm: null, hodlFingerprintCollisionConfirm: null,
     hodlKeyManagerCancelDerivation() {},
     hodlSyncWorkspaceCounts() {},
+    // Secure entry stays off here; its wiring is covered in secure-entry-wiring.test.mjs.
+    hodlSecureSeedActive: () => false, hodlSecureEntryHasData: () => false, hodlSecureEntryDropKey() {},
+    hodlSecureSeedApplies: () => false, hodlSecureEntryBackupRefusal: () => null, hodlSecureKeyOf: () => null, hodlSecureEntryHeld: () => false,
     // Session state hodlReleaseKeyConsumers reads; a key drop releases any
     // consumer bound to it (PSBT, BIP-85, Silent Payments, vanity).
     hodlPsbtSource: "", hodlBip85Source: "", hodlSpSource: "", hodlSpVerifyMatches: null,
