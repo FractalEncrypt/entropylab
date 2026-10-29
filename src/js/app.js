@@ -12411,10 +12411,16 @@ function hodlSecureSeedApplies() {
   let typed = document.getElementById("seed")?.value ?? state?.fields?.seed ?? "";
   return !String(typed).trim();
 }
+// True when the key holds securely entered words, or was derived from words
+// held that way: a derived key keeps no copy of them (they stay with the
+// editor that held them), so Journal must refuse it as it refuses the editor.
+function hodlSecureEntryHeld(state) {
+  return Boolean(state?.secureSource) || hodlSecureEntryHasData(hodlSecureKeyOf(state));
+}
 // Journal cannot hold securely entered words yet (a later backup format will):
 // a backup taken now would keep such a key without its recovery words.
 function hodlSecureEntryBackupRefusal() {
-  if (!hodlKeys.some((state) => hodlSecureEntryHasData(hodlSecureKeyOf(state)))) return null;
+  if (!hodlKeys.some((state) => hodlSecureEntryHeld(state))) return null;
   return new Error(hodlTText("Journal cannot back up words entered with Secure entry yet. Turn Secure entry off and convert them to text, or clear those keys, then try again."));
 }
 function hodlInitPsbt() {
@@ -16010,7 +16016,7 @@ function hodlKeyManagerDetachFromStation(state) {
   if (index < 0) return;
   // Journal cannot hold securely entered words yet (a later backup format
   // will), so a key with any stays in the Key Station rather than lose them.
-  if (hodlSecureEntryHasData(hodlSecureKeyOf(state))) {
+  if (hodlSecureEntryHeld(state)) {
     hodlKeyManagerStatus(hodlTText("This key has words entered with Secure entry, which Journal cannot keep yet. Turn Secure entry off or clear the key first."), true);
     return;
   }
@@ -16104,6 +16110,9 @@ function hodlCloneDerivedKey(source, existing) {
     createdScript: source.createdScript,
     createdPath: source.createdPath,
     error: source.error,
+    // GLM on #1294: a key derived from secure words carries no copy of them,
+    // so it is marked for the Journal refusals (hodlSecureEntryHeld).
+    secureSource: Boolean(source.secureSource) || hodlSecureEntryHasData(hodlSecureKeyOf(source)),
     fields: { ...source.fields, ...(source.fields?.privateKeys ? { privateKeys: { ...source.fields.privateKeys } } : {}), pass: hodlStoredPassphraseBytes(source.fields?.pass) }
   });
   return state;
@@ -16283,7 +16292,7 @@ function hodlFillLabFromKey(source) {
   let labIndex = hodlKeys.findIndex((state) => state.isLab);
   let existing = labIndex >= 0 ? hodlKeys[labIndex] : hodlNewLabState();
   let lab = hodlCloneDerivedKey(source, existing);
-  Object.assign(lab, { isLab: true, editSourceId: hodlKeys.includes(source) ? source.id : null, name: "Key Station", result: null, importedKeyId: null, importedName: null, importedNetworkChoice: null, error: "", reveal: false, createdScript: "", createdPath: "" });
+  Object.assign(lab, { isLab: true, secureSource: false, editSourceId: hodlKeys.includes(source) ? source.id : null, name: "Key Station", result: null, importedKeyId: null, importedName: null, importedNetworkChoice: null, error: "", reveal: false, createdScript: "", createdPath: "" });
   if (labIndex < 0) {
     hodlKeys.unshift(lab);
     labIndex = 0;

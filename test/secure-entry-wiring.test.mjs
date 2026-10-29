@@ -637,6 +637,33 @@ test("detach refuses a key with securely entered words", async () => {
   assert.equal(entry.count, 1);
 });
 
+test("a key derived from secure words is marked, and Journal refuses it", async () => {
+  const session = createSecureSession();
+  const mod = await loadAppFunctions(["hodlCloneDerivedKey", "hodlSecureEntryHeld", "hodlSecureEntryBackupRefusal", "hodlSecureKeyOf"], {
+    stubs: { ...realSecureEntryStubs, hodlTText: (text) => text, hodlStoredPassphraseBytes: (value) => value, hodlNewKeyState: () => ({ id: 9, fields: {} }) },
+    settable: ["hodlKeys", "hodlSecureSession"],
+  });
+  mod.__set.hodlSecureSession(session);
+  const lab = { id: 0, isLab: true, mode: "seed", seedMethod: "words", fields: { seed: "" }, result: { masterFingerprint: "abcd1234" } };
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 3);
+  sessionSet(session, mod.hodlSecureKeyOf(lab, true), "seed", entry);
+
+  const derived = mod.hodlCloneDerivedKey(lab);
+  assert.equal(derived.secureSource, true);
+  assert.equal(mod.hodlSecureKeyOf(derived), null, "the derived key holds no copy of the words");
+  assert.equal(mod.hodlSecureEntryHeld(derived), true);
+  // A plain editor's key is not marked.
+  assert.equal(mod.hodlCloneDerivedKey({ id: 0, isLab: true, fields: { seed: "abandon" } }).secureSource, false);
+  // The backups refuse while the derived key is in the station, even with the
+  // editor's words gone.
+  sessionDeleteKey(session, mod.hodlSecureKeyOf(lab));
+  mod.__set.hodlKeys([{ id: 0, isLab: true, fields: {} }, derived]);
+  assert.ok(mod.hodlSecureEntryBackupRefusal() instanceof Error);
+  mod.__set.hodlKeys([{ id: 0, isLab: true, fields: {} }]);
+  assert.equal(mod.hodlSecureEntryBackupRefusal(), null);
+});
+
 test("deleting a key with Journal open goes through the detach refusal", async () => {
   // With Journal open the delete is a detach, which refuses a key holding
   // secure words (the test above); the delete itself drops and splices nothing.
