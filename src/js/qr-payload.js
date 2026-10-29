@@ -25,6 +25,7 @@ const BASE58_BYTES = (() => {
 const strictTextDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const isDigit = (byte) => byte >= 0x30 && byte <= 0x39;
+const isPrintableAscii = (byte) => byte >= 0x20 && byte <= 0x7e;
 const isBase58 = (byte) => byte < 128 && BASE58_BYTES[byte] === 1;
 
 const wipe = (buffer) => {
@@ -89,10 +90,11 @@ const classifyStandard = (bytes) => {
 
 const classifyCompact = (bytes) => {
   if (!COMPACT_LENGTHS.has(bytes.length)) return null;
-  // A payload of only ASCII digits is refused here (fail closed): it reads
-  // as a digit string, and taking it as entropy would guess between two
-  // formats. All-digit entropy is vanishingly rare (about (10/256)^16).
-  if (allBytes(bytes, isDigit)) return null;
+  // A payload made only of printable ASCII (digits, hex, a password, a
+  // label) is text, not raw entropy: refusing it fails closed rather than
+  // reading text as a seed. Random 16-byte entropy is all printable with a
+  // probability of about (95/256)^16, under one in seven million.
+  if (allBytes(bytes, isPrintableAscii)) return null;
   return { format: "compact-seedqr", words: bytes.length === 16 ? 12 : 24, indices: indicesFromEntropy(bytes) };
 };
 

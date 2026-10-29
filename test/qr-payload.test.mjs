@@ -127,6 +127,16 @@ test("16 ASCII digits are not read as CompactSeedQR entropy", () => {
   assert.equal(classifyQrPayload(bytesOf("1234567890123456")).format, "unknown");
 });
 
+test("16 or 32 bytes of printable text are not read as CompactSeedQR entropy", () => {
+  // Hex text, a password or a label (gate on b3f2e6a: MiniMax, DeepSeek red team).
+  assert.equal(classifyQrPayload(bytesOf("0123456789abcdef0123456789abcdef")).format, "unknown");
+  assert.equal(classifyQrPayload(bytesOf("correct horse ba")).format, "unknown");
+  // A single non-printable byte is enough for raw entropy.
+  const binary = bytesOf("correct horse ba");
+  binary[7] = 0x80;
+  assert.equal(classifyQrPayload(binary).format, "compact-seedqr");
+});
+
 test("a compressed mainnet WIF is classified", () => {
   const text = wifFor(KEY_ONE);
   const result = classifyQrPayload(bytesOf(text));
