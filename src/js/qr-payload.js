@@ -89,7 +89,9 @@ const classifyStandard = (bytes) => {
 
 const classifyCompact = (bytes) => {
   if (!COMPACT_LENGTHS.has(bytes.length)) return null;
-  // A 16/32-digit string is a Standard SeedQR prefix, not entropy.
+  // A payload of only ASCII digits is refused here (fail closed): it reads
+  // as a digit string, and taking it as entropy would guess between two
+  // formats. All-digit entropy is vanishingly rare (about (10/256)^16).
   if (allBytes(bytes, isDigit)) return null;
   return { format: "compact-seedqr", words: bytes.length === 16 ? 12 : 24, indices: indicesFromEntropy(bytes) };
 };

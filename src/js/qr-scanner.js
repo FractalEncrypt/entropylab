@@ -154,6 +154,8 @@ export function createQrScanner({
       }
       return;
     }
+    // No other reply carries a scan: any payload that came with one is wiped.
+    wipe(reply?.payload);
     if (code === -3) {
       status("two-codes");
       schedule(current);
@@ -173,10 +175,9 @@ export function createQrScanner({
       schedule(current);
       return;
     }
-    if (code === "STOPPED") {
-      teardown();
-      return;
-    }
+    // fail() runs only for a live session (stop() ends it first and stays
+    // silent), so STOPPED here means the decoder was retired underneath a
+    // running scan: report it rather than leave the caller on "scanning".
     teardown();
     status("error", code);
   };
@@ -364,13 +365,19 @@ export function createQrScanner({
         wipe(gray);
       }
       const code = reply?.code;
-      // The same rule as the camera path: a positive code is the payload's
-      // byte length, or the reply is malformed and nothing is returned.
-      if (Number.isInteger(code) && code > 0 && !(reply.payload instanceof Uint8Array && reply.payload.length === code)) {
-        wipe(reply.payload);
-        throw failure("DECODE_FAILED");
+      // The same rules as the camera path: a positive code is the payload's
+      // byte length; -1 to -4 are "no single code" results and carry nothing;
+      // any other reply is malformed. Only a scan ever returns bytes.
+      if (Number.isInteger(code) && code > 0) {
+        if (!(reply.payload instanceof Uint8Array && reply.payload.length === code)) {
+          wipe(reply?.payload);
+          throw failure("DECODE_FAILED");
+        }
+        return { code, payload: reply.payload };
       }
-      return { code, payload: reply?.payload ?? null };
+      wipe(reply?.payload);
+      if (code === -1 || code === -2 || code === -3 || code === -4) return { code, payload: null };
+      throw failure("DECODE_FAILED");
     } finally {
       try {
         bitmap?.close?.();

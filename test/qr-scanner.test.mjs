@@ -324,3 +324,52 @@ test("scanImage refuses a reply whose code is not the payload length", async () 
     globalThis.createImageBitmap = original;
   }
 });
+
+test("scanImage returns no bytes for a no-code reply and refuses an unknown one", async () => {
+  const original = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async () => ({ width: 100, height: 100, close() {} });
+  try {
+    const first = build();
+    const noCode = first.scanner.scanImage({ size: 100, type: "image/png" });
+    await tick();
+    const stray = new Uint8Array([4, 4]);
+    first.decoder.pending[0].resolve({ code: -1, payload: stray });
+    const result = await noCode;
+    assert.equal(result.code, -1);
+    assert.equal(result.payload, null, "a no-code reply carries no bytes");
+    assert.ok(stray.every((byte) => byte === 0), "a stray payload is wiped");
+
+    const second = build();
+    const unknown = second.scanner.scanImage({ size: 100, type: "image/png" });
+    await tick();
+    second.decoder.pending[0].resolve({ code: -5, payload: new Uint8Array([1]) });
+    await assert.rejects(unknown, (error) => error.code === "DECODE_FAILED");
+  } finally {
+    globalThis.createImageBitmap = original;
+  }
+});
+
+test("a reply that arrives after stop() is discarded and its payload wiped", async () => {
+  const { media, frames, decoder, results, scanner } = build();
+  scanner.start();
+  media.pending[0].resolve(makeStream());
+  await tick();
+  frames.run();
+  scanner.stop();
+  const late = new Uint8Array([7, 7, 7]);
+  decoder.pending[0].resolve({ code: 3, payload: late });
+  await tick();
+  assert.equal(results.length, 0, "a late scan never reaches onResult");
+  assert.ok(late.every((byte) => byte === 0), "its payload is wiped");
+});
+
+test("a decoder retired under a running scan reports an error", async () => {
+  const { media, frames, decoder, statuses, scanner } = build();
+  scanner.start();
+  media.pending[0].resolve(makeStream());
+  await tick();
+  frames.run();
+  decoder.pending[0].reject(Object.assign(new Error("STOPPED"), { code: "STOPPED" }));
+  await tick();
+  assert.deepEqual(statuses.slice(-1), ["error"], "the caller is not left on scanning");
+});

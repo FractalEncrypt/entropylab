@@ -102,6 +102,9 @@ test("a Standard SeedQR group over 2047 is unknown", () => {
 test("a Standard SeedQR with the wrong digit count is unknown", () => {
   const digits = "0000".repeat(11);
   assert.equal(classifyQrPayload(bytesOf(digits)).format, "unknown");
+  // SeedQR defines 12 and 24 words only: a 60-digit (15-word) payload is
+  // refused by its length, before any checksum.
+  assert.equal(classifyQrPayload(bytesOf("0000".repeat(15))).format, "unknown");
 });
 
 test("16 zero bytes are a 12-word CompactSeedQR", () => {
