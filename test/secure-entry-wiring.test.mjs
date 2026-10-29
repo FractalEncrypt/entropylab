@@ -243,19 +243,19 @@ test("the wiring hooks are in the right order", () => {
   const detachStart = app.indexOf("function hodlKeyManagerDetachFromStation(state) {");
   assert.ok(detachStart >= 0);
   const detachRelease = app.indexOf("hodlReleaseKeyConsumers(state.id);", detachStart);
-  const detachDrop = app.indexOf("hodlSecureEntryDropKey(state.id);", detachStart);
+  const detachDrop = app.indexOf("hodlSecureEntryDropKey(hodlSecureKeyOf(state));", detachStart);
   assert.ok(detachRelease >= 0 && detachDrop > detachRelease);
 
   const deleteStart = app.indexOf("let deletedIndex = hodlActiveKey, deletedState = state;");
   assert.ok(deleteStart >= 0);
   const deleteRelease = app.indexOf("hodlReleaseKeyConsumers(deletedState.id);", deleteStart);
-  const deleteDrop = app.indexOf("hodlSecureEntryDropKey(deletedState.id);", deleteStart);
+  const deleteDrop = app.indexOf("hodlSecureEntryDropKey(hodlSecureKeyOf(deletedState));", deleteStart);
   assert.ok(deleteRelease >= 0 && deleteDrop > deleteRelease);
 
   const wipeStart = app.indexOf("function hodlWipeActiveKey() {");
   assert.ok(wipeStart >= 0);
   const wipeRelease = app.indexOf("hodlReleaseKeyConsumers(state.id);", wipeStart);
-  const wipeDrop = app.indexOf("hodlSecureEntryDropKey(state.id);", wipeStart);
+  const wipeDrop = app.indexOf("hodlSecureEntryDropKey(hodlSecureKeyOf(state));", wipeStart);
   assert.ok(wipeRelease >= 0 && wipeDrop > wipeRelease);
 
   const calcStart = app.indexOf("async function hodlCalculateKey(progress, action = \"derive\", options = {}) {");
@@ -345,13 +345,15 @@ test("hodlMnemonicWalletWithProgress rejects bad secure indices and zeroes them"
 
 test("hodlSecureSeedEntry applies only to seed words and creates on demand", async () => {
   const session = createSecureSession();
-  const load = (overrides) => loadAppFunctions(["hodlSecureSeedEntry"], {
+  const load = (overrides) => loadAppFunctions(["hodlSecureSeedEntry", "hodlSecureKeyOf"], {
     stubs: { ...realSecureEntryStubs, hodlKeyMode: "seed", hodlSeedMethod: "words", hodlTargetWordCount: 12, ...overrides },
     settable: ["hodlSecureEntryOn", "hodlKeys", "hodlActiveKey", "hodlSecureSession"],
   });
+  const prepared = { key: null };
   const prepare = (mod) => {
+    prepared.key = { id: 1 };
     mod.__set.hodlSecureSession(session);
-    mod.__set.hodlKeys([{ id: 1 }]);
+    mod.__set.hodlKeys([prepared.key]);
     mod.__set.hodlActiveKey(0);
   };
 
@@ -376,22 +378,31 @@ test("hodlSecureSeedEntry applies only to seed words and creates on demand", asy
   const entry = on.hodlSecureSeedEntry(true);
   assert.equal(entry.length, 12);
   assert.equal(entry.count, 0);
-  assert.equal(sessionGet(session, 1, "seed"), entry);
+  const owner = on.hodlSecureKeyOf(prepared.key);
+  assert.equal(typeof owner, "string");
+  assert.equal(sessionGet(session, owner, "seed"), entry);
 
   // An empty entry of another length is replaced on create.
   const empty24 = seedEntry(24);
-  sessionSet(session, 1, "seed", empty24);
+  sessionSet(session, owner, "seed", empty24);
   const replaced = on.hodlSecureSeedEntry(true);
   assert.notEqual(replaced, empty24);
   assert.equal(replaced.length, 12);
-  assert.equal(sessionGet(session, 1, "seed"), replaced);
+  assert.equal(sessionGet(session, owner, "seed"), replaced);
 
   // An entry that already holds a word is kept.
   const held = seedEntry(24);
   seedSet(held, 0, 0);
-  sessionSet(session, 1, "seed", held);
+  sessionSet(session, owner, "seed", held);
   assert.equal(on.hodlSecureSeedEntry(true), held);
-  assert.equal(sessionGet(session, 1, "seed"), held);
+  assert.equal(sessionGet(session, owner, "seed"), held);
+
+  // A copy of the key state (the Journal filling the editor) keeps the id but
+  // never the words.
+  const copy = { ...prepared.key };
+  on.__set.hodlKeys([copy]);
+  assert.equal(on.hodlSecureKeyOf(copy), null);
+  assert.equal(on.hodlSecureSeedEntry(), null);
 });
 
 test("hodlSecureSeedIndices and hodlSecureSeedReady gate on a complete valid seed", async () => {
@@ -472,7 +483,7 @@ test("hodlFingerprintSource uses secure indices and never reads the text field",
 test("hodlSecureSeedApplies keeps text that arrived while the switch was on", async () => {
   const session = createSecureSession();
   let seedField = null;
-  const mod = await loadAppFunctions(["hodlSecureSeedApplies"], {
+  const mod = await loadAppFunctions(["hodlSecureSeedApplies", "hodlSecureKeyOf"], {
     stubs: {
       ...realSecureEntryStubs,
       hodlKeyMode: "seed", hodlSeedMethod: "words", hodlTargetWordCount: 12,
@@ -499,32 +510,43 @@ test("hodlSecureSeedApplies keeps text that arrived while the switch was on", as
   // Secure words decide, whatever text is around.
   const entry = seedEntry(12);
   seedSet(entry, 0, 1);
-  sessionSet(session, 1, "seed", entry);
+  sessionSet(session, mod.hodlSecureKeyOf(key, true), "seed", entry);
   assert.equal(mod.hodlSecureSeedApplies(), true);
+  // GLM/Kimi: the Journal fills the editor with a copy that keeps its id; the
+  // copy's imported text is what derives, never the original's secure words.
+  const filled = { ...key, fields: { seed: "zoo zoo" } };
+  mod.__set.hodlKeys([filled]);
+  seedField = { value: "zoo zoo" };
+  assert.equal(mod.hodlSecureSeedApplies(), false);
+  // The original (a parked draft) still owns its words.
+  assert.equal(sessionGet(session, mod.hodlSecureKeyOf(key), "seed"), entry);
 });
 
 test("both Journal backups refuse while a key holds secure words", async () => {
   const session = createSecureSession();
-  const mod = await loadAppFunctions(["hodlSecureEntryBackupRefusal"], {
+  const mod = await loadAppFunctions(["hodlSecureEntryBackupRefusal", "hodlSecureKeyOf"], {
     stubs: { ...realSecureEntryStubs, hodlTText: (text) => text },
     settable: ["hodlKeys", "hodlSecureSession"],
   });
+  const second = { id: 2 };
   mod.__set.hodlSecureSession(session);
-  mod.__set.hodlKeys([{ id: 1 }, { id: 2 }]);
+  mod.__set.hodlKeys([{ id: 1 }, second]);
   assert.equal(mod.hodlSecureEntryBackupRefusal(), null);
   const entry = seedEntry(12);
   seedSet(entry, 0, 1);
-  sessionSet(session, 2, "seed", entry);
+  sessionSet(session, mod.hodlSecureKeyOf(second, true), "seed", entry);
   const refusal = mod.hodlSecureEntryBackupRefusal();
   assert.ok(refusal instanceof Error);
   assert.ok(refusal.message.length > 0);
 
   // A session read that fails counts as holding words.
-  const failing = await loadAppFunctions(["hodlSecureEntryBackupRefusal"], {
+  const failing = await loadAppFunctions(["hodlSecureEntryBackupRefusal", "hodlSecureKeyOf"], {
     stubs: { ...realSecureEntryStubs, hodlTText: (text) => text, sessionGet: () => { throw new Error("broken"); } },
     settable: ["hodlKeys"],
   });
-  failing.__set.hodlKeys([{ id: 1 }]);
+  const broken = { id: 1 };
+  failing.hodlSecureKeyOf(broken, true);
+  failing.__set.hodlKeys([broken]);
   assert.ok(failing.hodlSecureEntryBackupRefusal() instanceof Error);
 });
 
@@ -551,7 +573,7 @@ test("hodlSecureEntryHasData sees any securely entered word", async () => {
 
 test("hodlKeyStateNeedsClear sees securely entered words", async () => {
   const session = createSecureSession();
-  const mod = await loadAppFunctions(["hodlKeyStateNeedsClear"], {
+  const mod = await loadAppFunctions(["hodlKeyStateNeedsClear", "hodlSecureKeyOf"], {
     stubs: {
       ...realSecureEntryStubs,
       hodlPrivateKeyValues: () => ({ wif: "" }),
@@ -566,8 +588,10 @@ test("hodlKeyStateNeedsClear sees securely entered words", async () => {
 
   const entry = seedEntry(12);
   seedSet(entry, 0, 0);
-  sessionSet(session, 1, "seed", entry);
+  sessionSet(session, mod.hodlSecureKeyOf(state, true), "seed", entry);
   assert.equal(mod.hodlKeyStateNeedsClear(state), true);
+  // Another state with the same id holds nothing.
+  assert.equal(mod.hodlKeyStateNeedsClear({ ...state }), false);
 });
 
 test("detach refuses a key with securely entered words", async () => {
@@ -576,7 +600,7 @@ test("detach refuses a key with securely entered words", async () => {
   const keys = [state];
   const statusCalls = [];
   let captureCalls = 0, releaseCalls = 0;
-  const mod = await loadAppFunctions(["hodlKeyManagerDetachFromStation"], {
+  const mod = await loadAppFunctions(["hodlKeyManagerDetachFromStation", "hodlSecureKeyOf"], {
     stubs: {
       ...realSecureEntryStubs,
       keyVaultIdentity: () => "identity",
@@ -600,7 +624,8 @@ test("detach refuses a key with securely entered words", async () => {
 
   const entry = seedEntry(12);
   seedSet(entry, 0, 0);
-  sessionSet(session, 1, "seed", entry);
+  const owner = mod.hodlSecureKeyOf(state, true);
+  sessionSet(session, owner, "seed", entry);
 
   mod.hodlKeyManagerDetachFromStation(state);
   assert.equal(statusCalls.length, 1);
@@ -608,6 +633,63 @@ test("detach refuses a key with securely entered words", async () => {
   assert.equal(captureCalls, 0);
   assert.equal(releaseCalls, 0);
   assert.deepEqual(keys, [state]);
-  assert.equal(sessionGet(session, 1, "seed"), entry);
+  assert.equal(sessionGet(session, owner, "seed"), entry);
   assert.equal(entry.count, 1);
+});
+
+test("deleting a key with Journal open goes through the detach refusal", async () => {
+  // With Journal open the delete is a detach, which refuses a key holding
+  // secure words (the test above); the delete itself drops and splices nothing.
+  const state = { id: 1, number: 1, fields: {} };
+  const keys = [state];
+  const detached = [];
+  let dropCalls = 0;
+  const mod = await loadAppFunctions(["hodlDeleteActiveKey"], {
+    stubs: {
+      ...realSecureEntryStubs,
+      hodlSyncKeyDeleteButton: () => {},
+      hodlSyncKeyAddButton: () => {},
+      hodlInvalidateDerivation: () => {},
+      hodlJournalUnlocked: () => true,
+      hodlKeyManagerDetachFromStation: (target) => { detached.push(target); },
+      hodlSecureEntryDropKey: () => { dropCalls++; },
+      hodlZeroKeyPassphrase: () => { throw new Error("delete path used"); },
+      hodlReleaseKeyConsumers: () => { throw new Error("delete path used"); },
+      hodlRenderKeyTabs: () => {},
+      hodlRestoreKey: () => {},
+      hodlDisposeDroppedWallets: () => {},
+      hodlJournalLog: () => {},
+      hodlElement: () => null,
+      hodlNewLabState: () => ({ isLab: true }),
+      hodlNextKeyNumber: 1,
+    },
+    settable: ["hodlKeys", "hodlActiveKey"],
+  });
+  mod.__set.hodlKeys(keys);
+  mod.__set.hodlActiveKey(0);
+  mod.hodlDeleteActiveKey();
+  assert.deepEqual(detached, [state]);
+  assert.equal(dropCalls, 0);
+  assert.deepEqual(keys, [state]);
+});
+test("discarding a key's inputs drops only that state's secure words", async () => {
+  const session = createSecureSession();
+  const mod = await loadAppFunctions(["hodlKeyManagerDiscardInputs", "hodlSecureKeyOf"], {
+    stubs: { ...realSecureEntryStubs, hodlZeroKeyPassphrase: () => {}, hodlWipeUnsharedWalletRows: () => {} },
+    settable: ["hodlSecureSession"],
+  });
+  mod.__set.hodlSecureSession(session);
+  const draft = { id: 0, fields: { seed: "" } }, temporary = { ...draft };
+  const entry = seedEntry(12);
+  seedSet(entry, 0, 9);
+  const owner = mod.hodlSecureKeyOf(draft, true);
+  sessionSet(session, owner, "seed", entry);
+  // The batch discards its temporary copy: the parked draft keeps its words.
+  mod.hodlKeyManagerDiscardInputs(temporary);
+  assert.equal(sessionGet(session, owner, "seed"), entry);
+  assert.equal(entry.indices[0], 9);
+  // Discarding the draft itself takes its words.
+  mod.hodlKeyManagerDiscardInputs(draft);
+  assert.equal(sessionGet(session, owner, "seed"), null);
+  assert.equal(entry.indices[0], 0);
 });
