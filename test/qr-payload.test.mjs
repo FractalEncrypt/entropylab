@@ -127,14 +127,22 @@ test("16 ASCII digits are not read as CompactSeedQR entropy", () => {
   assert.equal(classifyQrPayload(bytesOf("1234567890123456")).format, "unknown");
 });
 
-test("16 or 32 bytes of printable text are not read as CompactSeedQR entropy", () => {
-  // Hex text, a password or a label (gate on b3f2e6a: MiniMax, DeepSeek red team).
+test("16 or 32 bytes of text are not read as CompactSeedQR entropy", () => {
+  // Hex text, a password or a label (gates on b3f2e6a and ba2a83d: MiniMax,
+  // DeepSeek red team), in any language.
   assert.equal(classifyQrPayload(bytesOf("0123456789abcdef0123456789abcdef")).format, "unknown");
   assert.equal(classifyQrPayload(bytesOf("correct horse ba")).format, "unknown");
-  // A single non-printable byte is enough for raw entropy.
+  const accented = new TextEncoder().encode("contraseña 1234");
+  assert.equal(accented.length, 16);
+  assert.equal(classifyQrPayload(accented).format, "unknown");
+  // Bytes that are not valid UTF-8 text are raw entropy.
   const binary = bytesOf("correct horse ba");
   binary[7] = 0x80;
   assert.equal(classifyQrPayload(binary).format, "compact-seedqr");
+  // So is text with a control character in it.
+  const controlled = bytesOf("correct horse ba");
+  controlled[3] = 0x01;
+  assert.equal(classifyQrPayload(controlled).format, "compact-seedqr");
 });
 
 test("a compressed mainnet WIF is classified", () => {

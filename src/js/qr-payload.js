@@ -25,7 +25,6 @@ const BASE58_BYTES = (() => {
 const strictTextDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const isDigit = (byte) => byte >= 0x30 && byte <= 0x39;
-const isPrintableAscii = (byte) => byte >= 0x20 && byte <= 0x7e;
 const isBase58 = (byte) => byte < 128 && BASE58_BYTES[byte] === 1;
 
 const wipe = (buffer) => {
@@ -88,13 +87,27 @@ const classifyStandard = (bytes) => {
   return { format: "standard-seedqr", words: count, indices };
 };
 
+// Valid UTF-8 with no control characters is text (digits, hex, a password, a
+// label in any language), not raw entropy.
+const isText = (bytes) => {
+  let text;
+  try {
+    text = strictTextDecoder.decode(bytes);
+  } catch {
+    return false;
+  }
+  for (const character of text) {
+    const code = character.codePointAt(0);
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return false;
+  }
+  return true;
+};
+
 const classifyCompact = (bytes) => {
   if (!COMPACT_LENGTHS.has(bytes.length)) return null;
-  // A payload made only of printable ASCII (digits, hex, a password, a
-  // label) is text, not raw entropy: refusing it fails closed rather than
-  // reading text as a seed. Random 16-byte entropy is all printable with a
-  // probability of about (95/256)^16, under one in seven million.
-  if (allBytes(bytes, isPrintableAscii)) return null;
+  // Text is refused (fail closed) rather than read as a seed. Random 16-byte
+  // entropy is valid control-free UTF-8 well under one time in a million.
+  if (isText(bytes)) return null;
   return { format: "compact-seedqr", words: bytes.length === 16 ? 12 : 24, indices: indicesFromEntropy(bytes) };
 };
 
