@@ -1,1 +1,1 @@
-eb0396dd92fa0f7d6ab25f33c7594e1420dd063bc614c6f710da9fca964d86fd  entropylab.html
+ec2889af97f2ee2cef7fda2435195e5902049e7baca8c7b50671db5d63f373e5  entropylab.html
