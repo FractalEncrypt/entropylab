@@ -337,8 +337,9 @@ export function mountSeedPicker(host, {
 
   const onPrefixKeydown = (event) => {
     if (event.key !== "Enter") return;
-    event.preventDefault();
+    // An Enter that confirms an IME composition belongs to the IME.
     if (event.isComposing) return;
+    event.preventDefault();
     const query = String(prefixField.value ?? "").trim().toLowerCase();
     if (!query) return;
     const found = [];
@@ -469,8 +470,9 @@ export function mountSeedPicker(host, {
 
   const onReplaceKeydown = (event) => {
     if (event.key !== "Enter") return;
-    event.preventDefault();
+    // An Enter that confirms an IME composition belongs to the IME.
     if (event.isComposing) return;
+    event.preventDefault();
     const query = String(replaceField.value ?? "").trim().toLowerCase();
     if (!query) return;
     const found = [];
@@ -594,6 +596,9 @@ export function mountSeedPicker(host, {
     try { doc.removeEventListener("visibilitychange", onVisibility); } catch {}
     showBox.checked = false;
     try { renderReviewWord(); } catch {}
+    // A unique match button's text is the word itself.
+    try { matches.replaceChildren(); } catch {}
+    try { resetReviewStaging(); } catch {}
     stagedIndex = null;
     prefixField.value = "";
     replaceField.value = "";

@@ -210,7 +210,8 @@ test("Enter during composition does nothing", () => {
   const field = findById(ctx.host, "seed-picker-prefix");
   field.value = "abandon";
   field.dispatchEvent({ type: "input" });
-  assert.equal(pressEnter(field, { isComposing: true }), 1);
+  // The IME gets the key: nothing is picked and the default is left alone.
+  assert.equal(pressEnter(field, { isComposing: true }), 0);
   assert.equal(ctx.entry.count, 0);
 });
 
@@ -482,6 +483,23 @@ test("a paste that fails part way puts the previous words back", () => {
   assert.equal(ctx.entry.count, count);
   assert.deepEqual(Array.from(ctx.entry.indices), before);
   assert.equal(textarea.value, "");
+});
+
+test("destroy drops the match buttons, whose text can be the word", () => {
+  const ctx = setup();
+  enterWord(ctx, "abandon");
+  findById(ctx.host, "seed-picker-chips").childNodes[0].dispatchEvent({ type: "click" });
+  const replaceField = findById(ctx.host, "seed-picker-replace-prefix");
+  replaceField.value = "zebra";
+  replaceField.dispatchEvent({ type: "input" });
+  findById(ctx.host, "seed-picker-review-cancel").dispatchEvent({ type: "click" });
+  const field = findById(ctx.host, "seed-picker-prefix");
+  field.value = "zoo";
+  field.dispatchEvent({ type: "input" });
+  const matches = findById(ctx.host, "seed-picker-matches");
+  assert.equal(occurrences(markupOf(matches), "zoo"), 1);
+  ctx.picker.destroy();
+  assert.ok(!markupOf(matches).includes("zoo"), "the detached match list kept the word");
 });
 
 test("destroy drops a shown word before emptying the host", () => {
