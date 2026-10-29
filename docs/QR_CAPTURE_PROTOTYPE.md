@@ -7,6 +7,14 @@ shared UR collector #1273 and subsequent worker scrub hardening.
 
 ## Current flow
 
+Proof-verifier exceptions are converted to `VERIFICATION_UNAVAILABLE` in the
+shared snapshot path, including acceptance and UI reads. Completion then reports
+STOP and wipes the transcript. The decoder already rejects off-curve openings;
+the exception regression uses explicit fault injection, not a claimed malformed
+point exploit. Shared decoder result `-4` is a normal skipped frame. A malformed
+transport frame resets only the in-progress assembly; completed stages survive,
+and the status asks the user to rescan the whole missing message.
+
 1. Allow Camera Access (blue). The permission probe lists cameras, stops its
    tracks, and never decodes/records frames. Browser-prompt focus loss does not
    cancel a pending probe on a visible page; hiding the page, Clear or End still

@@ -23,6 +23,47 @@ const fountain = JSON.parse(
 const bytes = (hex) => Uint8Array.from(Buffer.from(hex, "hex"));
 const transcript = c => [...c.messages.values()].map(e=>Buffer.from(e.bytes).toString("hex")).join("\n");
 const message = (stage) => fixture.messages.find((m) => m.stage === stage);
+// Inject an unexpected verifier exception after decoding, without weakening
+// the real decoder's point validation. Completion must still wipe all stages.
+for (const order of [[2,3,4],[2,4,3],[3,2,4],[3,4,2],[4,2,3],[4,3,2]])
+  test(`verifier exception fails safely and finish wipes all stages: ${order}`, () => {
+    const c = new AexbCapture();
+    const set = c.messages.set.bind(c.messages);
+    c.messages.set = (stage, entry) => {
+      if (stage === 4) Object.defineProperty(entry.decoded, "signatures", {
+        get() { throw new Error("injected verifier failure"); },
+      });
+      return set(stage, entry);
+    };
+    const inputs = order.map(stage => bytes(message(stage).package_hex));
+    for (const input of inputs) assert.doesNotThrow(() => c.accept(input));
+    assert.equal(c.snapshot().verdict.ok, false);
+    assert.equal(c.snapshot().verdict.reason, "VERIFICATION_UNAVAILABLE");
+    assert.doesNotThrow(() => c.accept(inputs[2]), "duplicate must not rethrow");
+    assert.equal(c.checkTransaction(), null);
+    const totalSlots = c.messages.get(4).decoded.slots.length;
+    const retained = [...c.messages.values()].flatMap(({bytes,decoded}) => [bytes,
+      ...Object.values(decoded).filter(v => v instanceof Uint8Array),
+      ...decoded.slots.flatMap(slot => Object.values(slot).filter(v => v instanceof Uint8Array))]);
+    assert.ok(retained.some(b => b.some(v => v !== 0)));
+    assert.deepEqual(c.finish(), {ok:false,reason:"VERIFICATION_UNAVAILABLE",checkedSlots:0,totalSlots});
+    assert.ok(retained.every(b => b.every(v => v === 0)));
+    assert.deepEqual(c.snapshot(), {stages:[],verdict:null});
+    assert.equal(c.finish(), null);
+  });
+test("off-curve opening is rejected before capture", () => {
+  for (const stage of [2,3,4]) {
+    const input = bytes(message(stage).package_hex);
+    const opening = aexbDecode(input).slots[0].opening;
+    const offset = Buffer.from(input).indexOf(opening);
+    assert.ok(offset >= 0);
+    input.fill(0, offset, offset + 33);
+    input[offset] = 2; // x=0 is not a secp256k1 point.
+    const c = new AexbCapture();
+    assert.throws(() => c.accept(input), /invalid signer opening/);
+    assert.deepEqual(c.snapshot(), {stages:[],verdict:null});
+  }
+});
 // DeepSeek revision18 F1: accept fixed-width CRC32 even below 65536 without
 // relaxing canonical metadata, byte-string envelopes or final CRC checks.
 // Independent oracle: Python zlib.crc32(bytes.fromhex('474145585400b6c7'))

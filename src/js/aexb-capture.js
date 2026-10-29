@@ -174,10 +174,17 @@ export class AexbCapture {
   snapshot() {
     const stages = [...this.messages.keys()].sort(),
       get = (s) => this.messages.get(s)?.decoded;
-    return {
-      stages,
-      verdict: stages.length === 3 ? aexbVerify(get(4), get(3), get(2)) : null,
-    };
+    let verdict = null;
+    if (stages.length === 3) {
+      try {
+        verdict = aexbVerify(get(4), get(3), get(2));
+      } catch {
+        // accept() and UI reads also verify. Let finish() clear the transcript
+        // and the UI show STOP even when verification cannot complete.
+        verdict = { ok: false, reason: "VERIFICATION_UNAVAILABLE" };
+      }
+    }
+    return { stages, verdict };
   }
   finish() {
     if (this.messages.size !== 3) return null;

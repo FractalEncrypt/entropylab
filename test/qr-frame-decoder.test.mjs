@@ -49,12 +49,25 @@ for (const code of [-1, -2, -3, -4, 0, 4097, 1.5, 2]) {
     const adapter = createQrFrameDecoder({ createDecoder: () => ({
       decode: async () => ({ code, payload }), stop() {},
     }) });
-    if ([-1, -2, -3].includes(code)) assert.equal(await adapter.decode(frame(), 21, 21), null);
+    if ([-1, -2, -3, -4].includes(code)) assert.equal(await adapter.decode(frame(), 21, 21), null);
     else await assert.rejects(adapter.decode(frame(), 21, 21));
     assert.equal(payload[0], 0);
     adapter.stop();
   });
 }
+
+test("too-large QR result allows the next frame on the same decoder", async () => {
+  let calls = 0, created = 0;
+  const adapter = createQrFrameDecoder({ createDecoder: () => {
+    created++;
+    return { decode: async () => ++calls === 1 ? {code:-4,payload:null} :
+      {code:1,payload:new Uint8Array([65])}, stop() {} };
+  } });
+  assert.equal(await adapter.decode(frame(), 21, 21), null);
+  assert.equal(await adapter.decode(frame(), 21, 21), "A");
+  assert.equal(created, 1);
+  adapter.stop();
+});
 
 test("transferred frame buffers and worker rejection are handled without masking errors", async () => {
   const rgba = frame();

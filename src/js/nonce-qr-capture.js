@@ -196,7 +196,7 @@ export function initNonceQrCapture({ translate, onClear }) {
       transport.clear();
       paint();
       say(
-        "This QR was not added: it is invalid or conflicts with the current capture. Your captured messages were kept. Scan the missing message from the same exchange. If you are switching exchanges or demo scenarios, Clear Capture first.",
+          "This QR was not added: it is invalid or conflicts with the current capture. Completed messages were kept, but partial QR fragments for the current message were discarded. Rescan the whole missing message from the same exchange. If you are switching exchanges or demo scenarios, Clear Capture first.",
       );
     }
   };
