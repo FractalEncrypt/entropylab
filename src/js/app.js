@@ -9427,14 +9427,14 @@ function hodlBip47WipeMem() {
 function hodlBip47LoadKey(text, passphrase) {
   hodlBip47WipeKeys();
   let value = String(text || "").trim();
-  if (!value) throw new Error("Paste a BIP39 seed phrase or a BIP32 root xprv/tprv.");
+  if (!value) throw hodlError("Paste a BIP39 seed phrase or a BIP32 root xprv/tprv.");
   if (/^[xt]prv[1-9A-HJ-NP-Za-km-z]+$/.test(value.replace(/\s/g, ""))) {
     let parsed = hodlParseExtendedKey(value.replace(/\s/g, ""));
-    if (!parsed.isPrivate) throw new Error("Watch-only extended keys cannot derive BIP-47 payment codes.");
+    if (!parsed.isPrivate) throw hodlError("Watch-only extended keys cannot derive BIP-47 payment codes.");
     if (parsed.node.depth !== 0) {
       // A refused account key is still private material: wipe it here.
       try { parsed.node.wipePrivateData(); } catch {}
-      throw new Error("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
+      throw hodlError("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
     }
     hodlBip47Hd = parsed.node;
     hodlBip47Source = "manual";
@@ -9460,7 +9460,7 @@ function hodlBip47LoadKey(text, passphrase) {
 }
 
 function hodlBip47UseKey(state) {
-  if (!state || !state.result) throw new Error("Derive a key in Key Station first, then return to the BIP-47 station.");
+  if (!state || !state.result) throw hodlError("Derive a key in Key Station first, then return to the BIP-47 station.");
   let result = state.result;
   hodlBip47WipeKeys();
   if (result.kind === "hd" && hodlResultHasSeed(result)) {
@@ -9471,10 +9471,10 @@ function hodlBip47UseKey(state) {
     // copy is this station's own, so a refused one is wiped here.
     if (root?.depth !== 0) {
       try { root?.wipePrivateData(); } catch {}
-      throw new Error("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
+      throw hodlError("BIP-47 needs a BIP32 root private key (depth 0), not an account xprv.");
     }
     hodlBip47Hd = root;
-  } else throw new Error("BIP-47 needs a seed or root xprv. Account-level and single keys cannot derive m/47'.");
+  } else throw hodlError("BIP-47 needs a seed or root xprv. Account-level and single keys cannot derive m/47'.");
   hodlBip47Source = "key:" + state.id;
 }
 
@@ -9508,7 +9508,7 @@ function hodlBip47EnsureHd() {
     }
     hodlRefreshStationKeyPickers();
   }
-  if (!hodlNodeHasPrivateKey(hodlBip47Hd)) throw new Error("Choose a compatible existing key, or enter a BIP39 seed or root xprv.");
+  if (!hodlNodeHasPrivateKey(hodlBip47Hd)) throw hodlError("Choose a compatible existing key, or enter a BIP39 seed or root xprv.");
 }
 
 function hodlRunBip47() {
@@ -9815,7 +9815,9 @@ function hodlBip47FillNotifyInputs() {
   if (text) {
     try { tx = parseRawTx(hodlBip47HexToBytes(text)); } catch { tx = null; }
   }
-  select.innerHTML = '<option value="" disabled selected></option>' + (tx ? hodlBip47NotifyInputsHtml(tx.inputs) : "");
+  // A notification transaction has a few inputs; a crafted paste with
+  // thousands would freeze the page building options, so none are listed.
+  select.innerHTML = '<option value="" disabled selected></option>' + (tx && tx.inputs.length <= 1000 ? hodlBip47NotifyInputsHtml(tx.inputs) : "");
   select.value = "";
 }
 
@@ -13353,7 +13355,7 @@ function hodlSpCoinType() {
 function hodlSpLoadKey(text, passphrase) {
   hodlSpWipeKeys();
   let value = String(text || "").trim();
-  if (!value) throw new Error("Paste a BIP39 seed phrase or a BIP32 root xprv/tprv.");
+  if (!value) throw hodlError("Paste a BIP39 seed phrase or a BIP32 root xprv/tprv.");
   if (/^[xt]prv[1-9A-HJ-NP-Za-km-z]+$/.test(value.replace(/\s/g, ""))) {
     let parsed = hodlParseExtendedKey(value.replace(/\s/g, ""));
     if (!parsed.isPrivate) throw new Error("Watch-only extended keys cannot derive BIP-352 scan/spend paths.");
@@ -13424,7 +13426,7 @@ function hodlSpEnsureHd() {
     }
     hodlRefreshStationKeyPickers();
   }
-  if (!hodlNodeHasPrivateKey(hodlSpHd)) throw new Error("Choose a compatible existing key, or enter a BIP39 seed or root xprv.");
+  if (!hodlNodeHasPrivateKey(hodlSpHd)) throw hodlError("Choose a compatible existing key, or enter a BIP39 seed or root xprv.");
   hodlPaintSpSession(hodlSpNote);
 }
 function hodlSpDeriveSessionKeys() {
@@ -21035,7 +21037,8 @@ function hodlInitWorkspace() {
   addEventListener("resize", hodlSyncWorkspaceOverflow);
   new ResizeObserver(hodlSyncWorkspaceOverflow).observe(strip);
   hodlInitPsbtToolTabs();
-  if (PREVIEW) hodlInitPrivacyToolTabs();
+  // The station switcher ships in release builds since 2026-10-28.
+  hodlInitPrivacyToolTabs();
   if (typeof hodlInitBip47 === "function") hodlInitBip47();
   hodlInitJournalToolTabs();
   hodlInitJournalNotebook();

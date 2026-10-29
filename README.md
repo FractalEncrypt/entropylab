@@ -250,6 +250,15 @@ an explicit error before those pairs are allocated.
   DNS TXT to paste on a domain you control; paste that URI back on Send.
   Hybrid URIs with an ordinary Bitcoin fallback address still use Silent
   Payments; the results identify the fallback address as not used.
+- Privacy tab, BIP-47 payment codes station: derives your payment code and
+  notification address (m/47'/coin'/0') from a seed or root xprv, decodes a
+  contact's code with no private key, lists the pair addresses to pay or
+  receive (10 at a time, real indexes, skipped indexes listed), and checks a
+  pasted notification transaction offline (designated input found
+  automatically; a manual override is marked unverified). A receive key is
+  shown only on request; anyone who paid you there could rebuild your BIP-47
+  account key from it, so it must never be shared. Nothing is signed or
+  broadcast.
   This is a calculator: it does not scan the chain or resolve names.
 - Grinds vanity addresses for a Key Station key or a compatible BIP-85 child
   (Vanity tab), picked through the same chip picker as BIP-85 and Silent
