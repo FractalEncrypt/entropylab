@@ -83,12 +83,16 @@ export function initNonceQrCapture({ translate, onClear }) {
     if (scanLabel.textContent !== label) scanLabel.textContent = label;
   };
   const syncControls = () => {
-    const complete = !!snapshot().verdict;
+    const state = snapshot(), complete = !!state.verdict;
+    const nextStage = [2, 3, 4].find(stage => !state.stages.includes(stage));
     access.disabled = busy || complete;
     access.className = !accessGranted && !access.disabled ? "btn blue" : "btn secondary";
     access.textContent = translate(accessGranted ? "Refresh cameras" : "Allow Camera Access");
     start.disabled = !accessGranted || busy || complete;
     start.className = start.disabled ? "btn secondary" : "btn blue";
+    start.textContent = nextStage
+      ? translate("Scan Message {stage}", { stage: nextStage })
+      : translate("Capture complete");
     stop.disabled = !busy;
     select.disabled = !accessGranted || busy || complete;
     clearButton.className = complete ? "btn blue" : "btn secondary";
@@ -232,7 +236,7 @@ export function initNonceQrCapture({ translate, onClear }) {
       if (current !== generation) return;
       listCameras(devices, selected || stream.getVideoTracks()[0]?.getSettings().deviceId);
       accessGranted = true;
-      say("Camera access is ready. Choose your camera, then click Scan next message when the QR is displayed.");
+      say("Camera access is ready. Choose your camera, then click the Scan button when the QR is displayed.");
     } catch {
       if (current === generation) {
         accessGranted = false;
@@ -326,7 +330,7 @@ export function initNonceQrCapture({ translate, onClear }) {
     if (!wasBusy) return;
     paint();
     if (wasProbe) say("Camera access was cancelled because the page was hidden. Click Allow Camera Access to retry.");
-    else if (!completedResult) say("Camera paused when the page lost focus or was hidden. Captured messages were kept; click Scan next message to resume. Partial QR fragments were discarded. Use Clear Capture to discard the unfinished session.");
+    else if (!completedResult) say("Camera paused when the page lost focus or was hidden. Captured messages were kept; click the Scan button to resume. Partial QR fragments were discarded. Use Clear Capture to discard the unfinished session.");
   };
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) concealPause();
