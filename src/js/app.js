@@ -154,6 +154,7 @@ import { bip47AccountNode as hodlBip47AccountNode, bip47AccountPath as hodlBip47
 import { bip47OwnHtml as hodlBip47OwnHtml, bip47ContactHtml as hodlBip47ContactHtml, bip47ErrorHtml as hodlBip47ErrorHtml, bip47RowsHtml as hodlBip47RowsHtml, bip47NotifyInputsHtml as hodlBip47NotifyInputsHtml, bip47NotifyHtml as hodlBip47NotifyHtml, bip47NotifyErrorHtml as hodlBip47NotifyErrorHtml } from "./bip47-ui.js";
 import { PassphraseVault, bindVaultField } from "./passphrase-vault.js";
 import { endSession as hodlEndSession, initEndSessionConfirm } from "./end-session.js";
+import { createSecureSession, sessionWipe, sessionDeleteKey, SUPPORTED_METHODS as hodlSecureSupported } from "./secure-entry.js";
 import { initTextServiceOptOuts, initTranslationWarning } from "./text-services.js";
 import { initSecurityLog } from "./security-log.js";
 import { initConcealOnLeave } from "./conceal-on-leave.js";
@@ -6370,6 +6371,8 @@ function hodlGlobalSyncBitBoxValue(bits, targetWords = hodlTargetWordCount) {
   return tokens.map((token, index) => `${index && index % 6 === 0 ? " " : ""}${token}`).join("");
 }
 function hodlApplyGlobalSync(bits, sourceId = hodlGlobalSyncSourceId()) {
+  // Sync writes words and hex into text fields.
+  if (hodlSecureEntryOn) return false;
   let state = hodlKeys[hodlActiveKey];
   if (!state) return false;
   let config = hodlSeedConfig(state.targetWords), source = String(bits ?? "").slice(0, config.bits), sourceValue = String(hodlGlobalSyncCurrentValue()), fields = state.fields, privateKeys = hodlPrivateKeyValues(fields), mnemonic = hodlGlobalSyncMnemonic(source, config.words), words = mnemonic ? mnemonic.split(" ") : hodlGlobalSyncWordIndices(source, config.partialWords).map((index) => hodlBip39Wordlist[index]);
@@ -6406,6 +6409,7 @@ function hodlApplyGlobalSync(bits, sourceId = hodlGlobalSyncSourceId()) {
   return true;
 }
 function hodlGlobalSyncFromCurrentInput() {
+  if (hodlSecureEntryOn) { hodlRenderGlobalSyncControl(); return false; }
   let state = hodlKeys[hodlActiveKey];
   if (!state?.globalSync) {
     hodlRenderGlobalSyncControl();
@@ -12279,6 +12283,26 @@ function hodlPsbtShowMore(event) {
 // Preview builds define __ENTROPYLAB_PREVIEW__; release builds leave it
 // undeclared, so the typeof guard keeps them working.
 var PREVIEW = typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__;
+// Secure entry (secure-entry.js): one session-wide switch, never persisted,
+// off on every load. Its entries live in hodlSecureSession, keyed by key id.
+var hodlSecureEntryOn = false, hodlSecureSession = createSecureSession();
+// Offered only in preview builds and only once a method can be entered
+// securely; this round supports none, so the switch is never shown.
+function hodlSecureEntryAvailable() {
+  return Boolean(PREVIEW) && Object.values(hodlSecureSupported).some(Boolean);
+}
+// Ends secure entry for the session: the switch goes off and every entry and
+// pending plan is wiped. Leaving the page and End Session (which dispatches
+// pagehide) both run it.
+function hodlSecureEntryEnd() {
+  hodlSecureEntryOn = false;
+  try { sessionWipe(hodlSecureSession); } catch {}
+}
+// A key that leaves the station takes its secure entries with it.
+function hodlSecureEntryDropKey(keyId) {
+  if (keyId == null) return;
+  try { sessionDeleteKey(hodlSecureSession, keyId); } catch {}
+}
 function hodlInitPsbt() {
   let go = document.getElementById("psbt-go");
   if (!go) return;
@@ -15873,6 +15897,9 @@ function hodlKeyManagerDetachFromStation(state) {
   let capacityError = retainInputs && hodlKeyManagerCapacityError();
   if (capacityError) { hodlKeyManagerStatus(capacityError, true); return; }
   hodlReleaseKeyConsumers(state.id);
+  // Key Manager cannot hold secure entries yet, so a later PR must block this
+  // path while the key has any. A failed wipe must not abort the detach.
+  try { hodlSecureEntryDropKey(state.id); } catch {}
   hodlKeys.splice(index, 1);
   if (retainInputs && !hodlKeyManagerPending.some((candidate) => keyVaultIdentity(candidate) === identity)) {
     if (!state.result) state.needsDerivation = true;
@@ -16994,6 +17021,8 @@ function hodlDeleteActiveKey() {
   let deletedIndex = hodlActiveKey, deletedState = state;
   hodlZeroKeyPassphrase(deletedState);
   hodlReleaseKeyConsumers(deletedState.id);
+  // A failed wipe must not abort the delete.
+  try { hodlSecureEntryDropKey(deletedState.id); } catch {}
   hodlKeys.splice(deletedIndex, 1);
   hodlNextKeyNumber = hodlKeys.length ? hodlKeys.reduce((latest, state) => Math.max(latest, state.number), 0) + 1 : deletedState.number;
   if (!hodlKeys.length) {
@@ -21620,6 +21649,7 @@ function hodlInitSecretFieldAutoClear() {
     try { hodlKeyScanModule?.retireQrDecoders(); } catch {}
     // The form outlives the wipe: give it a fresh, closed panel.
     try { hodlBindKeyScan(); } catch {}
+    try { hodlSecureEntryEnd(); } catch {}
     hodlSyncWorkspaceCounts();
   };
   addEventListener("pagehide", clearSecretFields);
