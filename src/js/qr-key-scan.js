@@ -41,11 +41,17 @@ const PHOTO_ERROR_TEXT = {
   UNSUPPORTED_TYPE: "Use a PNG, JPEG, WebP or BMP image.",
   UNREADABLE: "This image could not be read.",
 };
+const PHOTO_ERROR_STATE = {
+  TOO_LARGE: "too-large",
+  UNSUPPORTED_TYPE: "unsupported-type",
+  UNREADABLE: "unreadable",
+};
 
 export function mountKeyScan(host, {
   keyField,
   translate = (text) => text,
   privateValue = () => "",
+  beforeWrite = () => {},
   createDecoder = createQrDecoder,
   createScanner = createQrScanner,
   classify = classifyQrPayload,
@@ -157,7 +163,8 @@ export function mountKeyScan(host, {
 
   // A refusal or a photo result leaves the camera stopped (a result stops it,
   // and the photo path stops it first), so Resume is offered to scan again.
-  const setStatus = (value) => {
+  const setStatus = (code, value) => {
+    statusLine.setAttribute("data-scan-state", code);
     statusLine.textContent = value;
     cameraRunning = false;
     cameraResumable = true;
@@ -166,6 +173,7 @@ export function mountKeyScan(host, {
 
   const showStatus = (code) => {
     const key = Object.prototype.hasOwnProperty.call(STATUS_TEXT, code) ? code : "error";
+    statusLine.setAttribute("data-scan-state", key);
     statusLine.textContent = say(STATUS_TEXT[key]);
     if (key === "unsupported" || key === "no-camera") cameraUsable = false;
     else if (key === "scanning") cameraUsable = true;
@@ -269,6 +277,15 @@ export function mountKeyScan(host, {
       showStatus("error");
       return;
     }
+    // The caller may need to put the field in the right mode first: a WIF
+    // written into Brain wallet mode would be hashed as a passphrase. A
+    // refusal there leaves the field and the confirmation untouched.
+    try {
+      beforeWrite();
+    } catch {
+      showStatus("error");
+      return;
+    }
     try {
       keyField.value = value;
       keyField.dispatchEvent(event);
@@ -308,6 +325,7 @@ export function mountKeyScan(host, {
       text = result.text;
       revealed = false;
       buildConfirm();
+      statusLine.setAttribute("data-scan-state", "wif");
       statusLine.textContent = say(STATUS_TEXT.wif);
       cameraRunning = false;
       cameraResumable = false;
@@ -323,10 +341,10 @@ export function mountKeyScan(host, {
       try { result.indices.fill(0); } catch {}
     }
     if (result.format === "standard-seedqr" || result.format === "compact-seedqr" || result.format === "words") {
-      setStatus(say(SEED_REFUSAL));
+      setStatus("seed", say(SEED_REFUSAL));
       return;
     }
-    setStatus(say(NOT_A_KEY_REFUSAL));
+    setStatus("not-a-key", say(NOT_A_KEY_REFUSAL));
   };
 
   const onStatus = (code) => {
@@ -375,7 +393,7 @@ export function mountKeyScan(host, {
     } catch (error) {
       if (token !== op || destroyed) return;
       const code = error && error.code;
-      if (Object.prototype.hasOwnProperty.call(PHOTO_ERROR_TEXT, code)) setStatus(say(PHOTO_ERROR_TEXT[code]));
+      if (Object.prototype.hasOwnProperty.call(PHOTO_ERROR_TEXT, code)) setStatus(PHOTO_ERROR_STATE[code], say(PHOTO_ERROR_TEXT[code]));
       else showStatus("error");
       return;
     }
@@ -391,7 +409,7 @@ export function mountKeyScan(host, {
     }
     try { reply?.payload?.fill?.(0); } catch {}
     // A photo with two codes gets the approved two-codes refusal, not "none".
-    setStatus(say(code === -3 ? STATUS_TEXT["two-codes"] : NO_CODE_IN_PHOTO));
+    setStatus(code === -3 ? "two-codes" : "no-code", say(code === -3 ? STATUS_TEXT["two-codes"] : NO_CODE_IN_PHOTO));
   };
 
   const onConceal = () => {

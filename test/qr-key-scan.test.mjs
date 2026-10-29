@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mountKeyScan, retireQrDecoders } from "../src/js/qr-key-scan.js";
 import { classifyQrPayload } from "../src/js/qr-payload.js";
+import { loadAppFunctions } from "./app-slice-harness.mjs";
 
 // The published compressed mainnet WIF for private key 1.
 const WIF = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn";
@@ -200,8 +201,9 @@ const setup = (options = {}) => {
   const created = { decoders: 0, scanners: 0, decoderArgs: null, scannerArgs: null };
   const panel = mountKeyScan(host, {
     keyField,
-    translate: (text) => text,
+    translate: options.translate || ((text) => text),
     privateValue: (value, revealed) => (revealed ? value : "•".repeat(value.length)),
+    beforeWrite: options.beforeWrite,
     createDecoder: (args) => {
       created.decoders += 1;
       created.decoderArgs = args;
@@ -223,6 +225,8 @@ const setup = (options = {}) => {
 const openPanel = (ctx) => {
   findById(ctx.host, "key-scan-open").dispatchEvent({ type: "click" });
 };
+
+const stateOf = (ctx) => findById(ctx.host, "key-scan-status").getAttribute("data-scan-state");
 
 test("opening the panel starts one scanner and the button follows it", () => {
   const ctx = setup();
@@ -249,7 +253,9 @@ test("a WIF scan is concealed until Show key and its bytes are zeroed", () => {
   const payload = bytesOf(WIF);
   ctx.created.scannerArgs.onResult(payload);
   assert.ok(payload.every((byte) => byte === 0), "the payload was not zeroed");
-  assert.match(markupOf(ctx.host), /WIF private key\. Scanning cannot tell where a QR came from\./);
+  assert.equal(stateOf(ctx), "wif");
+  assert.equal(findById(ctx.host, "key-scan-confirm").hidden, false);
+  assert.match(markupOf(findById(ctx.host, "key-scan-confirm-intro")), /cannot tell where a QR came from/);
   assert.equal(markupOf(ctx.host).includes(WIF), false, "the key was in the DOM while concealed");
   assert.equal(ctx.keyField.value, "");
   findById(ctx.host, "key-scan-reveal").dispatchEvent({ type: "click" });
@@ -267,6 +273,34 @@ test("Continue fills the key field with one paste-like input event", () => {
   assert.equal(ctx.events[0].bubbles, true);
   assert.equal(ctx.events[0].inputType, "insertFromPaste");
   assert.equal(markupOf(ctx.host).includes(WIF), false, "the key stayed in the DOM");
+});
+
+test("beforeWrite runs before the field is written", () => {
+  const seen = [];
+  let ctx = null;
+  ctx = setup({ beforeWrite: () => seen.push(ctx.keyField.value) });
+  ctx.keyField.value = "old";
+  openPanel(ctx);
+  ctx.created.scannerArgs.onResult(bytesOf(WIF));
+  findById(ctx.host, "key-scan-continue").dispatchEvent({ type: "click" });
+  assert.deepEqual(seen, ["old"]);
+  assert.equal(ctx.keyField.value, WIF);
+  assert.equal(ctx.events.length, 1);
+  assert.equal(ctx.events[0].inputType, "insertFromPaste");
+});
+
+test("a throwing beforeWrite leaves the field and the confirmation alone", () => {
+  const ctx = setup({ beforeWrite: () => { throw new Error("no WIF radio"); } });
+  ctx.keyField.value = "old";
+  openPanel(ctx);
+  ctx.created.scannerArgs.onResult(bytesOf(WIF));
+  findById(ctx.host, "key-scan-continue").dispatchEvent({ type: "click" });
+  assert.equal(ctx.keyField.value, "old");
+  assert.equal(ctx.events.length, 0);
+  assert.equal(findById(ctx.host, "key-scan-confirm").hidden, false);
+  assert.equal(stateOf(ctx), "error");
+  findById(ctx.host, "key-scan-discard").dispatchEvent({ type: "click" });
+  assert.equal(findById(ctx.host, "key-scan-confirm").hidden, true);
 });
 
 test("Discard scan leaves the key field untouched", () => {
@@ -291,7 +325,8 @@ test("a seed QR is refused and its indices are zeroed", () => {
   ctx.created.scannerArgs.onResult(bytesOf(SEEDQR));
   assert.equal(captured.format, "standard-seedqr");
   assert.ok(captured.indices.every((index) => index === 0), "the seed indices were not zeroed");
-  assert.match(markupOf(ctx.host), /This QR contains a seed\. Only WIF private keys can be scanned here\. Nothing was loaded\./);
+  assert.equal(stateOf(ctx), "seed");
+  assert.match(markupOf(ctx.host), /Nothing was loaded/);
   assert.equal(ctx.keyField.value, "");
   assert.equal(findById(ctx.host, "key-scan-resume").hidden, false, "Resume is offered to scan again");
 });
@@ -300,7 +335,8 @@ test("bytes that are not a key are refused without being echoed", () => {
   const ctx = setup();
   openPanel(ctx);
   ctx.created.scannerArgs.onResult(bytesOf("SECRETBYTES"));
-  assert.match(markupOf(ctx.host), /This QR does not hold a WIF private key\. Nothing was loaded\./);
+  assert.equal(stateOf(ctx), "not-a-key");
+  assert.match(markupOf(ctx.host), /Nothing was loaded/);
   assert.equal(markupOf(ctx.host).includes("SECRETBYTES"), false);
   assert.equal(ctx.keyField.value, "");
 });
@@ -309,7 +345,8 @@ test("two codes are refused while the scan goes on", () => {
   const ctx = setup();
   openPanel(ctx);
   ctx.created.scannerArgs.onStatus("two-codes");
-  assert.match(markupOf(ctx.host), /Two different QR codes are in view, so the scan was refused\. Nothing was loaded\./);
+  assert.equal(stateOf(ctx), "two-codes");
+  assert.match(markupOf(ctx.host), /Nothing was loaded/);
   assert.equal(findById(ctx.host, "key-scan-resume").hidden, true);
 });
 
@@ -317,7 +354,7 @@ test("a timeout offers Resume, which starts the camera again", () => {
   const ctx = setup();
   openPanel(ctx);
   ctx.created.scannerArgs.onStatus("timeout");
-  assert.match(markupOf(ctx.host), /No QR code was found, so the camera stopped\./);
+  assert.equal(stateOf(ctx), "timeout");
   const resume = findById(ctx.host, "key-scan-resume");
   assert.equal(resume.hidden, false);
   resume.dispatchEvent({ type: "click" });
@@ -337,25 +374,27 @@ test("a photo stops the camera first and maps every refusal", async () => {
 
   const tooLarge = await scanPhoto(async () => { throw Object.assign(new Error("x"), { code: "TOO_LARGE" }); });
   assert.deepEqual(tooLarge.scanner.calls.log.slice(-2), ["stop", "scanImage"]);
-  assert.match(markupOf(tooLarge.host), /This image is too large\. The limit is 10 MB\./);
+  assert.equal(stateOf(tooLarge), "too-large");
 
   const unsupported = await scanPhoto(async () => { throw Object.assign(new Error("x"), { code: "UNSUPPORTED_TYPE" }); });
-  assert.match(markupOf(unsupported.host), /Use a PNG, JPEG, WebP or BMP image\./);
+  assert.equal(stateOf(unsupported), "unsupported-type");
 
   const unreadable = await scanPhoto(async () => { throw Object.assign(new Error("x"), { code: "UNREADABLE" }); });
-  assert.match(markupOf(unreadable.host), /This image could not be read\./);
+  assert.equal(stateOf(unreadable), "unreadable");
 
   const busy = await scanPhoto(async () => { throw Object.assign(new Error("x"), { code: "BUSY" }); });
-  assert.match(markupOf(busy.host), /The scan failed\. Nothing was loaded\./);
+  assert.equal(stateOf(busy), "error");
+  assert.match(markupOf(busy.host), /Nothing was loaded/);
 
   const none = await scanPhoto(async () => ({ code: -1, payload: null }));
-  assert.match(markupOf(none.host), /No QR code was found in this photo\./);
+  assert.equal(stateOf(none), "no-code");
 
   const twoCodes = await scanPhoto(async () => ({ code: -3, payload: null }));
-  assert.match(markupOf(twoCodes.host), /Two different QR codes are in view, so the scan was refused\./);
+  assert.equal(stateOf(twoCodes), "two-codes");
+  assert.match(markupOf(twoCodes.host), /Nothing was loaded/);
 
   const found = await scanPhoto(async () => ({ code: 1, payload: bytesOf(WIF) }));
-  assert.match(markupOf(found.host), /WIF private key\. Scanning cannot tell where a QR came from\./);
+  assert.equal(stateOf(found), "wif");
 });
 
 test("conceal re-hides a shown key and keeps the scan", () => {
@@ -439,7 +478,7 @@ test("a WIF result hides acquisition controls and announces success", () => {
   for (const id of ["key-scan-video", "key-scan-stop", "key-scan-resume", "key-scan-photo-open", "key-scan-photo-note", "key-scan-cancel"]) {
     assert.equal(findById(ctx.host, id).hidden, true, `${id} was not hidden`);
   }
-  assert.match(markupOf(ctx.host), /WIF private key scanned\. Review it before continuing\./);
+  assert.equal(stateOf(ctx), "wif");
   assert.equal(markupOf(ctx.host).includes(WIF), false);
 });
 
@@ -536,7 +575,7 @@ test("Resume camera is offered only where the camera can work", () => {
   openPanel(refusedAfterUnsupported);
   refusedAfterUnsupported.created.scannerArgs.onStatus("unsupported");
   refusedAfterUnsupported.created.scannerArgs.onResult(bytesOf("not-a-key"));
-  assert.match(markupOf(refusedAfterUnsupported.host), /does not hold a WIF private key/);
+  assert.equal(stateOf(refusedAfterUnsupported), "not-a-key");
   assert.equal(findById(refusedAfterUnsupported.host, "key-scan-resume").hidden, true);
 });
 
@@ -567,6 +606,7 @@ test("the photo button is described by the photo note", () => {
   const note = findById(ctx.host, "key-scan-photo-note");
   assert.ok(note, "the photo note has no id");
   assert.equal(photo.getAttribute("aria-describedby"), note.id);
+  assert.match(markupOf(note), /copy of the secret/);
 });
 
 test("the panel reads status, video, actions, note, confirmation", () => {
@@ -583,7 +623,63 @@ test("a denied camera explains the browser permission and the photo fallback", (
   const ctx = setup();
   openPanel(ctx);
   ctx.created.scannerArgs.onStatus("denied");
-  assert.match(markupOf(ctx.host), /Camera access was blocked\. Check this browser's camera permissions, or scan a photo instead\./);
+  assert.equal(stateOf(ctx), "denied");
+  assert.equal(findById(ctx.host, "key-scan-resume").hidden, false);
+  assert.equal(findById(ctx.host, "key-scan-photo-open").hidden, false);
+});
+
+test("every visible string goes through translate", () => {
+  const ctx = setup({ translate: (text) => "⟦" + text + "⟧" });
+  const wrapped = (id) => {
+    const text = findById(ctx.host, id).textContent;
+    return text.startsWith("⟦") && text.endsWith("⟧");
+  };
+  for (const id of ["key-scan-open", "key-scan-stop", "key-scan-resume", "key-scan-photo-open", "key-scan-cancel", "key-scan-photo-note"]) {
+    assert.ok(wrapped(id), `${id} was not translated`);
+  }
+  openPanel(ctx);
+  assert.ok(wrapped("key-scan-status"), "the status line was not translated");
+  ctx.created.scannerArgs.onResult(bytesOf(WIF));
+  assert.ok(wrapped("key-scan-status"), "the WIF status was not translated");
+  for (const id of ["key-scan-confirm-intro", "key-scan-reveal", "key-scan-continue", "key-scan-discard"]) {
+    assert.ok(wrapped(id), `${id} was not translated`);
+  }
+});
+
+test("hodlKeyScanSelectWif checks the WIF radio and fires one change", async () => {
+  const { hodlKeyScanSelectWif } = await loadAppFunctions(["hodlKeyScanSelectWif"]);
+  const realDocument = globalThis.document;
+  const makeRadio = (checked) => {
+    const events = [];
+    return {
+      checked,
+      events,
+      dispatchEvent(event) {
+        events.push(event);
+        return true;
+      },
+    };
+  };
+  try {
+    const unchecked = makeRadio(false);
+    globalThis.document = { querySelector: () => unchecked };
+    hodlKeyScanSelectWif();
+    assert.equal(unchecked.checked, true);
+    assert.equal(unchecked.events.length, 1);
+    assert.equal(unchecked.events[0].type, "change");
+    assert.equal(unchecked.events[0].bubbles, true);
+
+    const checked = makeRadio(true);
+    globalThis.document = { querySelector: () => checked };
+    hodlKeyScanSelectWif();
+    assert.equal(checked.checked, true);
+    assert.equal(checked.events.length, 0);
+
+    globalThis.document = { querySelector: () => null };
+    assert.throws(() => hodlKeyScanSelectWif(), /WIF key type is missing/);
+  } finally {
+    globalThis.document = realDocument;
+  }
 });
 
 test("the app wires the scan panel behind the preview flag", () => {
@@ -598,6 +694,8 @@ test("the app wires the scan panel behind the preview flag", () => {
   const body = app.slice(start, app.indexOf("\n}\n", start));
   assert.match(body, /if \(typeof __ENTROPYLAB_PREVIEW__ !== "undefined" && __ENTROPYLAB_PREVIEW__\) \{/);
   assert.ok(body.indexOf('import("./qr-key-scan.js")') > body.indexOf("typeof __ENTROPYLAB_PREVIEW__"), "the import is outside the preview guard");
+  // A scan is written as a WIF whatever key type is selected (#1291 gate).
+  assert.match(body, /beforeWrite: hodlKeyScanSelectWif,/);
   // The wipes drop the panel and retire its decoder.
   const wipeStart = app.indexOf("let clearSecretFields = () => {");
   assert.ok(wipeStart >= 0, "clearSecretFields is missing");
@@ -605,4 +703,9 @@ test("the app wires the scan panel behind the preview flag", () => {
   assert.match(wipe, /try \{ hodlKeyScan\?\.destroy\(\); \} catch \{\}/);
   assert.match(wipe, /hodlKeyScan = null;/);
   assert.match(wipe, /try \{ hodlKeyScanModule\?\.retireQrDecoders\(\); \} catch \{\}/);
+  // The wipe re-mounts the panel after retiring the decoders.
+  const destroyAt = wipe.indexOf("hodlKeyScan?.destroy()");
+  const retireAt = wipe.indexOf("hodlKeyScanModule?.retireQrDecoders()");
+  const remountAt = wipe.indexOf("hodlBindKeyScan();");
+  assert.ok(destroyAt >= 0 && retireAt > destroyAt && remountAt > retireAt, "the wipe does not re-mount the panel after retiring the decoders");
 });

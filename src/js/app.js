@@ -7394,6 +7394,16 @@ function hodlRenderPrivateKeyInputState(input) {
   }
   return analysis;
 }
+// A scan only ever delivers a WIF (the classifier checked it), so the field
+// takes it as one whatever key type is selected: in Brain wallet mode the
+// text would otherwise be hashed as a passphrase (#1291 gate).
+function hodlKeyScanSelectWif() {
+  let radio = document.querySelector('input[name="kk"][value="wif"]');
+  if (!radio) throw new Error("The WIF key type is missing.");
+  if (radio.checked) return;
+  radio.checked = true;
+  radio.dispatchEvent(new Event("change", { bubbles: true }));
+}
 function hodlBindKeyScan() {
   // The slice harness loads this with no scan host: return before anything
   // else, and never read the preview flag bare.
@@ -7412,6 +7422,7 @@ function hodlBindKeyScan() {
       hodlKeyScan = module.mountKeyScan(host, {
         keyField: key,
         translate: hodlTText,
+        beforeWrite: hodlKeyScanSelectWif,
         privateValue: (value, revealed) => hodlPrivateValue(value, "mono private-field-value", revealed),
       });
     }).catch(() => {});
@@ -21607,6 +21618,8 @@ function hodlInitSecretFieldAutoClear() {
     try { hodlKeyScan?.destroy(); } catch {}
     hodlKeyScan = null;
     try { hodlKeyScanModule?.retireQrDecoders(); } catch {}
+    // The form outlives the wipe: give it a fresh, closed panel.
+    try { hodlBindKeyScan(); } catch {}
     hodlSyncWorkspaceCounts();
   };
   addEventListener("pagehide", clearSecretFields);
