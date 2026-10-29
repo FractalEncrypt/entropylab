@@ -397,6 +397,19 @@ test("a photo stops the camera first and maps every refusal", async () => {
   assert.equal(stateOf(found), "wif");
 });
 
+test("Scan a photo stops the camera before the file picker opens", () => {
+  const ctx = setup();
+  openPanel(ctx);
+  const stops = ctx.scanner.calls.stop;
+  let pickerOpened = 0;
+  findById(ctx.host, "key-scan-photo").click = () => { pickerOpened += 1; };
+  findById(ctx.host, "key-scan-photo-open").dispatchEvent({ type: "click" });
+  assert.equal(ctx.scanner.calls.stop, stops + 1);
+  assert.equal(pickerOpened, 1);
+  assert.equal(ctx.scanner.calls.images.length, 0);
+  assert.equal(findById(ctx.host, "key-scan-photo-open").hidden, false);
+});
+
 test("conceal re-hides a shown key and keeps the scan", () => {
   const ctx = setup();
   openPanel(ctx);
