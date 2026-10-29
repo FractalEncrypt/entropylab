@@ -6,7 +6,9 @@
 // Security contract: the picker never keeps a word string beyond the moment it
 // is shown, never speaks a word, zeroes every temporary index and entropy
 // buffer, and clears every field on conceal and destroy without ever wiping
-// the caller's entry.
+// the caller's entry. The one exception is an explicit paste: the pasted text
+// is a string, which the page cannot erase, and the note under the picker says
+// so. The caller destroys a picker before mounting another on the same entry.
 
 const CHIP_DOTS = "••••";
 const WORD_DOTS = "••••••";
@@ -128,6 +130,7 @@ export function mountSeedPicker(host, {
   replaceLabel.appendChild(replaceText);
   replaceLabel.appendChild(replaceField);
   const replaceCount = make("p", { class: "field-note", id: "seed-picker-replace-count", role: "status", "aria-live": "polite" });
+  const replaceNarrow = make("p", { class: "field-note", id: "seed-picker-replace-narrow", hidden: true, text: say(TEXT.narrow) });
   const replaceMatches = make("div", { class: "row", id: "seed-picker-replace-matches" });
   const replaceButton = make("button", { type: "button", class: "btn primary", id: "seed-picker-replace", disabled: "", text: say(TEXT.replace) });
   const reviewCancel = make("button", { type: "button", class: "btn secondary", id: "seed-picker-review-cancel", text: say(TEXT.cancel) });
@@ -144,6 +147,7 @@ export function mountSeedPicker(host, {
   review.appendChild(reviewNote);
   review.appendChild(replaceLabel);
   review.appendChild(replaceCount);
+  review.appendChild(replaceNarrow);
   review.appendChild(replaceMatches);
   review.appendChild(reviewActions);
 
@@ -361,17 +365,24 @@ export function mountSeedPicker(host, {
     stagedIndex = null;
     replaceField.value = "";
     replaceCount.textContent = "";
+    replaceNarrow.hidden = true;
     replaceMatches.replaceChildren();
     replaceButton.setAttribute("disabled", "");
   };
 
   const renderReviewWord = () => {
     reviewWord.replaceChildren();
-    if (!showBox.checked) {
+    if (!showBox.checked || entry.wiped || reviewPosition >= entry.count) {
       reviewWord.textContent = WORD_DOTS;
       return;
     }
-    const word = wordlist[entry.indices[reviewPosition]];
+    const indices = seedIndices(entry);
+    let word;
+    try {
+      word = wordlist[indices[reviewPosition]];
+    } finally {
+      indices.fill(0);
+    }
     if (typeof word !== "string") {
       reviewWord.textContent = WORD_DOTS;
       return;
@@ -387,7 +398,7 @@ export function mountSeedPicker(host, {
   };
 
   const openReview = (position) => {
-    if (destroyed || entry.count === 0) return;
+    if (destroyed || entry.wiped || entry.count === 0) return;
     closePaste();
     reviewing = true;
     reviewPosition = Math.max(0, Math.min(entry.count - 1, position));
@@ -450,7 +461,10 @@ export function mountSeedPicker(host, {
   };
 
   const onReplaceInput = () => {
-    renderMatches(replaceField.value, replaceMatches, replaceCount, null, stageWord);
+    // A word staged from the previous text is not what the field shows now.
+    stagedIndex = null;
+    replaceButton.setAttribute("disabled", "");
+    renderMatches(replaceField.value, replaceMatches, replaceCount, replaceNarrow, stageWord);
   };
 
   const onReplaceKeydown = (event) => {
@@ -497,9 +511,20 @@ export function mountSeedPicker(host, {
           indices[i] = index;
         }
         if (valid) {
-          while (entry.count > 0) seedUndo(entry);
-          for (let i = 0; i < indices.length; i += 1) seedSet(entry, i, indices[i]);
-          ok = true;
+          const before = seedIndices(entry);
+          try {
+            while (entry.count > 0) seedUndo(entry);
+            for (let i = 0; i < indices.length; i += 1) seedSet(entry, i, indices[i]);
+            ok = true;
+          } catch {
+            // Put the previous words back, so "Nothing was changed" holds.
+            try {
+              while (entry.count > 0) seedUndo(entry);
+              for (let i = 0; i < before.length; i += 1) seedSet(entry, i, before[i]);
+            } catch {}
+          } finally {
+            before.fill(0);
+          }
         }
       }
     } catch {
@@ -531,13 +556,12 @@ export function mountSeedPicker(host, {
     showBox.checked = false;
     renderReviewWord();
     prefixField.value = "";
-    replaceField.value = "";
     pasteField.value = "";
     matches.replaceChildren();
-    replaceMatches.replaceChildren();
     countLine.textContent = "";
-    replaceCount.textContent = "";
     narrowLine.hidden = true;
+    // Clears the replacement field and disarms a staged word with it.
+    resetReviewStaging();
   };
 
   const onVisibility = () => {
@@ -568,6 +592,9 @@ export function mountSeedPicker(host, {
     destroyed = true;
     try { doc.removeEventListener("hodl:conceal", onConceal); } catch {}
     try { doc.removeEventListener("visibilitychange", onVisibility); } catch {}
+    showBox.checked = false;
+    try { renderReviewWord(); } catch {}
+    stagedIndex = null;
     prefixField.value = "";
     replaceField.value = "";
     pasteField.value = "";
