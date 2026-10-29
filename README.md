@@ -251,7 +251,8 @@ an explicit error before those pairs are allocated.
   Hybrid URIs with an ordinary Bitcoin fallback address still use Silent
   Payments; the results identify the fallback address as not used.
 - Privacy tab, BIP-47 payment codes station: derives your payment code and
-  notification address (m/47'/coin'/0') from a seed or root xprv, decodes a
+  notification address from the BIP-47 account (m/47'/coin'/0') of a seed or
+  root xprv, decodes a
   contact's code with no private key, lists the pair addresses to pay or
   receive (10 at a time, real indexes, skipped indexes listed), and checks a
   pasted notification transaction offline (designated input found

@@ -129,6 +129,22 @@ test("the BIP-47 station joins the privacy tool list from its own init", () => {
   assert.ok(init.indexOf('if (!document.getElementById("bip47-card")) return;') < init.indexOf("hodlPrivacyTools.push"), "only after the card is found");
 });
 
+test("only the Privacy stations were unhidden: Verify stays preview-only", () => {
+  // Red team (#1286 gate): pin the boundary that remains.
+  const release = applyPreviewBlocks(shell, false);
+  assert.doesNotMatch(release, /id="verify-card"|aria-controls="verify-card"/, "the Verify workspace stays out of release builds");
+  assert.match(applyPreviewBlocks(shell, true), /id="verify-card"/);
+});
+
+test("the BIP-47 station's thrown messages are translated, and its input picker is capped", () => {
+  const start = appSource.indexOf("function hodlBip47LoadKey(");
+  const section = appSource.slice(start, appSource.indexOf("function hodlInitBip47() {"));
+  assert.ok(start > 0 && section.length > 0, "the BIP-47 key functions are missing");
+  assert.doesNotMatch(section, /new Error\("/, "every BIP-47 message goes through hodlError");
+  // A crafted paste with thousands of inputs must not build one option each.
+  assert.match(fnSource("hodlBip47FillNotifyInputs"), /tx && tx\.inputs\.length <= 1000 \?/);
+});
+
 test("the station tabs are wired in every build", () => {
   const callSites = appSource.split("\n").filter((line) => line.includes("hodlInitPrivacyToolTabs()") && !line.trimStart().startsWith("function "));
   assert.equal(callSites.length, 1, "hodlInitPrivacyToolTabs is called exactly once");
@@ -207,7 +223,8 @@ test("the Silent Payments workspace tab is named Privacy", () => {
   assert.ok(entry, "the sp workspace tab entry is missing");
   assert.equal(entry[1], "Privacy");
   assert.equal(entry[2], "Privacy");
-  const tab = /<button[^>]*class="workspace-tab"[^>]*aria-controls="sp-card"[^>]*>([\s\S]*?)<\/button>/.exec(shell);
+  // The tab controls both Privacy station cards (Kimi K3, #1286 gate).
+  const tab = /<button[^>]*class="workspace-tab"[^>]*aria-controls="sp-card bip47-card"[^>]*>([\s\S]*?)<\/button>/.exec(shell);
   assert.ok(tab, "the sp workspace tab button is missing");
   assert.match(tab[0], /aria-label="Privacy"/);
   assert.match(tab[1], /<span class="workspace-tab-full">Privacy<\/span>/);

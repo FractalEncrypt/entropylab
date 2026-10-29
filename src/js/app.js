@@ -20999,10 +20999,11 @@ function hodlInitWorkspace() {
     button.dataset.workspace = id;
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(active));
-    // The panels the tab shows: one card, or for PSBT and Journal whichever
-    // of their stations is current.
+    // The panels the tab shows: one card, or for PSBT, Privacy and Journal
+    // whichever of their stations is current.
     button.setAttribute("aria-controls", {
       psbt: "psbt-card psbted-card nonce-card",
+      sp: "sp-card bip47-card",
       journal: "journal-card journal-notes-card journal-keymanager-card journal-session-card",
     }[id] ?? `${id}-card`);
     let fullLabel = document.createElement("span"), shortLabel = document.createElement("span");
